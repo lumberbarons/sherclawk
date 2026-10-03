@@ -9,7 +9,7 @@ Each finding carries a **Status** field: `open` until its *Done when* criterion 
 ---
 
 ### 1. [P2] The only TLS 1.2 write case cannot tell whether the data path ran
-**Status:** open
+**Status:** fixed
 **Location:** tests/test_tls_io.c:320-321 (fakes at :253-262)
 
 Fake `br_ssl_engine_sendapp_buf` returns a scratch buffer and `br_ssl_engine_sendapp_ack`/`br_ssl_engine_flush` discard their arguments; the case asserts only `MacTLS_Write(...) == 3 && send_acks == 1`. If the `memcpy(bbuf, data, len)` in the patched TLS 1.2 branch (staged certainly.c:940) were deleted, if `sendapp_ack` were called with `len - 1`, or if the flush call were removed, the test would still incorrectly pass — this is the only coverage of the fallback write path used after a server negotiates TLS 1.2, and the `recvapp_buf`/`recvapp_ack` fakes at :259-262 are never invoked by any read case.
