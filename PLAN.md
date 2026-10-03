@@ -33,7 +33,10 @@ loop and tools in the classic Mac application.
    implemented. General overwrite and automatic recovery remain unimplemented; larger-file read revisions are
    still observational.
 3. Capture a reproducible PowerPC Toolbox template and exact installed
-   MrC/PPCLink/Rez/SDK versions. Native MacRelix file-job worker: complete-file
+   MrC/PPCLink/Rez/SDK versions. The `templates/ppc-toolbox/` fixture is now
+   guest-verified for compiler failure, fresh rebuild, native launch and
+   actual ToolServer process identity. Native MacRelix file-job worker remains
+   next: complete-file
    publication, rename claim, stage/log/completion records, uncertain outcomes.
 4. `create_project`, `build_project`, and native `run_application`; associate
    outputs with successful builds and source revisions, and correlate runtime

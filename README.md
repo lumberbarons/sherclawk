@@ -7,7 +7,10 @@ window. [PLAN.md](PLAN.md) tracks the full coding-harness roadmap.
 
 The installed tools are `get_environment`, `list_files`, `read_text`,
 `search_text`, create-only `write_text`, create-only `create_folder`, and revision-guarded `edit_text`. Native build jobs
-and artifact launch come next. The model receives only these installed capabilities; the app executes tools
+and artifact launch come next. The [native PowerPC template](templates/ppc-toolbox/README.md)
+captures a guest-verified MrC/PPCLink/Rez recipe and installed versions;
+the MacRelix job worker remains planned.
+The model receives only these installed capabilities; the app executes tools
 with the File Manager and records their results before requesting a follow-up.
 
 ## Build and publish
@@ -198,6 +201,9 @@ model history is not silently dropped.
 | `tools/scroll-check.c` | Copied actual Toolbox scrollbar diagnostic |
 | `tools/guest-input.py` | Non-overlapping QMP typing and 250ms control clicks through the UTM helper |
 | `PLAN.md` | Artwork requirements and remaining coding-harness milestones |
+| `templates/ppc-toolbox/` | Native MPW PowerPC template and guest verification record |
+| `tools/materialize-native-template.py` | Create new MacRoman/CR template source and LF shell scripts |
+| `tools/native-process-check.c` | Native Process Manager diagnostic for executor paths |
 
 ```bash
 sherclawk/tools/check.sh
