@@ -9,6 +9,7 @@
 #include <string.h>
 static struct File { int used, dir; long parent, id; char name[32], bytes[20000]; long size, resource; FInfo info; } files[64];
 static long positions[64];
+static int dir_error, dir_leftover, dir_race;
 static int short_write, bad_read, bad_close, rename_race, rename_error, published, flush_error;
 static int journals, fail_journal, creates;
 static int editing, renames, fault_rename, change_after_stage, stage_bad_read, stage_short_read, busy, swapped_publish;
@@ -67,6 +68,15 @@ OSErr FSpCreate(const FSSpec *s, unsigned long creator, unsigned long type, shor
     memcpy(name,s->name+1,s->name[0]); name[s->name[0]]=0; i=add(s->parID,name,0);
     files[i].info.fdType=type; files[i].info.fdCreator=creator; creates++; return 0;
 }
+OSErr FSpDirCreate(const FSSpec *s, short script, long *id)
+{
+    char name[32]; int i; (void)script;
+    if(dir_race) { memcpy(name,s->name+1,s->name[0]); name[s->name[0]]=0; add(s->parID,name,0); }
+    if(find(s->parID,s->name)>=0) return dupFNErr;
+    memcpy(name,s->name+1,s->name[0]); name[s->name[0]]=0;
+    if(dir_error) { if(dir_leftover) add(s->parID,name,1); return ioErr; }
+    i=add(s->parID,name,1); *id=files[i].id; creates++; return 0;
+}
 OSErr FSpOpenDF(const FSSpec *s, short mode, short *ref)
 {
     int i=find(s->parID,s->name); if(i<0)return fnfErr;
@@ -108,10 +118,14 @@ static int journal(void *ctx, const char *event, const char *json)
 {
     JsonToken tokens[128]; (void)ctx;
     assert(json_parse(json,strlen(json),tokens,128)>0);
+    journals++; assert(strstr(json,"\"call_id\":\"write1\""));
+    if(!strcmp(call.name,"create_folder")) {
+        assert(journals==1 ? !strcmp(event,"mutation_intent") && !creates : !strcmp(event,"mutation_committed") && creates);
+        return fail_journal==journals ? -1 : 0;
+    }
     { char temp[768]; int mutation=json_member(json,tokens,0,"mutation");
       int n=json_string(json,tokens,json_member(json,tokens,mutation,"temporary_path"),temp,sizeof(temp));
       assert(n>=0);if((size_t)n>longest_temporary)longest_temporary=(size_t)n; }
-    journals++; assert(strstr(json,"\"call_id\":\"write1\""));
     if(journals==1) { assert(!strcmp(event,"mutation_intent"));assert(!creates); }
     if(journals==2) { assert(!strcmp(event,"mutation_staged"));assert(creates && !published); }
     if(journals==3) { assert(!strcmp(event,editing ? "mutation_backed_up" : "mutation_committed"));assert(published); }
@@ -122,6 +136,7 @@ static int journal(void *ctx, const char *event, const char *json)
 static void reset(void)
 {
     memset(files,0,sizeof(files)); add(1,"Retro68",1);
+    dir_error=dir_leftover=dir_race=0;
     short_write=bad_read=bad_close=rename_race=rename_error=published=flush_error=0;
     journals=fail_journal=creates=0;longest_temporary=0;
     editing=renames=fault_rename=change_after_stage=stage_bad_read=stage_short_read=busy=swapped_publish=0;
@@ -259,6 +274,37 @@ static void search_checks(void)
     files[a].resource=0;bad_close=1;tools_execute(&call,result,sizeof(result));assert(strstr(result,"\"code\":\"READ\""));
     puts("PASS search: recursion, pagination, absolute CR/CRLF lines, binary and alias refusal, chunk-boundary match and bounded continuation");
 }
+static void folder_checks(void)
+{
+    int i;
+    reset();strcpy(call.name,"create_folder");strcpy(call.arguments,"{\"path\":\"src\"}");
+    assert(!run() && strstr(result,"CREATED_FOLDER") && journals==2 && creates==1);
+    i=leaf("src");assert(i>=0 && files[i].dir);
+    strcpy(call.arguments,"{\"path\":\"src:inner\"}");journals=creates=0;assert(!run() && strstr(result,"CREATED_FOLDER") && files[i+1].used && !strcmp(files[i+1].name,"inner") && files[i+1].parent==files[i].id && files[i+1].dir);
+    strcpy(call.arguments,"{\"path\":\"src\"}");journals=0;assert(!run() && strstr(result,"EXISTS") && !journals);
+    reset();strcpy(call.name,"create_folder");strcpy(call.arguments,"{\"path\":\"hello.c\"}");add(10,"hello.c",0);
+    assert(!run() && strstr(result,"EXISTS") && !creates && !journals);
+    { const char *bad[]={"{\"path\":\"missing:inner\"}","{\"path\":\":escape\"}","{\"path\":\"src:\"}","{\"path\":\"\"}",
+        "{}","{\"path\":\"a\",\"path\":\"b\"}","{\"path\":\"a\",\"mode\":\"x\"}","{\"path\":\"\\ud83e\\udd80\"}"};
+      for(i=0;i<(int)(sizeof(bad)/sizeof(*bad));i++){reset();strcpy(call.name,"create_folder");strcpy(call.arguments,bad[i]);
+        assert(!run() && strstr(result,"error") && !creates && !journals);} }
+    reset();i=add(10,"alias",1);files[i].info.fdFlags=0x8000;strcpy(call.name,"create_folder");strcpy(call.arguments,"{\"path\":\"alias:x\"}");
+    assert(!run() && !creates && !journals);
+    reset();strcpy(call.name,"create_folder");strcpy(call.arguments,"{\"path\":\"src\"}");
+    tools_execute(&call,result,sizeof(result));assert(strstr(result,"JOURNAL") && !creates);
+    reset();strcpy(call.name,"create_folder");strcpy(call.arguments,"{\"path\":\"src\"}");fail_journal=1;assert(run() && !creates && leaf("src")<0);
+    reset();strcpy(call.name,"create_folder");strcpy(call.arguments,"{\"path\":\"src\"}");fail_journal=2;
+    assert(run() && strstr(result,"JOURNAL_AFTER_PUBLISH") && strstr(result,"uncertain") && leaf("src")>=0);
+    reset();strcpy(call.name,"create_folder");strcpy(call.arguments,"{\"path\":\"src\"}");dir_error=1;
+    assert(!run() && strstr(result,"CREATE_FAILED") && leaf("src")<0 && journals==1);
+    reset();strcpy(call.name,"create_folder");strcpy(call.arguments,"{\"path\":\"src\"}");dir_error=dir_leftover=1;
+    assert(run() && strstr(result,"CREATE_FOLDER_UNCERTAIN") && leaf("src")>=0);
+    reset();strcpy(call.name,"create_folder");strcpy(call.arguments,"{\"path\":\"src\"}");dir_race=1;
+    assert(!run() && strstr(result,"EXISTS") && !creates);
+    reset();strcpy(call.name,"create_folder");strcpy(call.arguments,"{\"path\":\"src\"}");flush_error=published=1;
+    assert(run() && strstr(result,"CREATE_FOLDER_UNVERIFIED") && leaf("src")>=0);
+    puts("PASS create_folder: create-only, nested levels, path/alias refusal, journal barriers, races and uncertain outcomes");
+}
 int main(void)
 {
     search_checks();
@@ -308,6 +354,7 @@ int main(void)
       snprintf(call.arguments,sizeof(call.arguments),"{\"path\":%s,\"text\":\"x\"}",quoted);
       assert(!run() && strstr(result,"CREATED") && journals==3 && longest_temporary>512);
     }
+    folder_checks();
     puts("PASS native executor: create/read/collision, encoding, bounds, journal barriers, I/O faults, rename races and uncertain outcomes");
     edit_checks();
     return 0;

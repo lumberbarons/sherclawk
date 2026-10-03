@@ -29,8 +29,8 @@ loop and tools in the classic Mac application.
    `edit_text` adds one exact unique replacement, whole-file revisions for
    files up to 4 KiB, exclusive opens, verified staging and retained original
    backups with journaled publication. Bounded literal workspace search is implemented with optional recursion,
-   catalog/byte continuation and MacRoman/CR line numbers. General overwrite, folder creation
-   and automatic recovery remain unimplemented; larger-file read revisions are
+   catalog/byte continuation and MacRoman/CR line numbers. Create-only `create_folder` (one level, journaled intent and completion) is
+   implemented. General overwrite and automatic recovery remain unimplemented; larger-file read revisions are
    still observational.
 3. Capture a reproducible PowerPC Toolbox template and exact installed
    MrC/PPCLink/Rez/SDK versions. Native MacRelix file-job worker: complete-file

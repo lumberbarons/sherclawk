@@ -107,8 +107,8 @@ static void environment(char *out, size_t cap)
     snprintf(out, cap, "{\"status\":\"ok\",\"os\":\"classic Mac OS\",\"system_version_hex\":\"%04lx\","
         "\"architecture\":\"PowerPC\",\"workspace\":%s,\"paths\":\"relative colon-separated\","
         "\"encoding\":\"MacRoman data fork to UTF-8\",\"read_only\":false,\"free_heap_bytes\":%ld,"
-        "\"tools\":[\"get_environment\",\"list_files\",\"read_text\",\"search_text\",\"write_text\",\"edit_text\"],"
-        "\"write_policy\":\"create_only_existing_parent\",\"write_max_bytes\":4096,"
+        "\"tools\":[\"get_environment\",\"list_files\",\"read_text\",\"search_text\",\"write_text\",\"edit_text\",\"create_folder\"],"
+        "\"write_policy\":\"create_only_existing_parent\",\"folder_policy\":\"create_only_existing_parent\",\"write_max_bytes\":4096,"
         "\"edit_policy\":\"unique_exact_whole_revision_CR_backup\",\"edit_max_bytes\":4096,"
         "\"build_supported\":false,\"launch_supported\":false}", system, q, (long)FreeMem());
 }
@@ -764,6 +764,50 @@ staged_error:
     edit_result(out, cap, status, code, path, temporary, backup_path, length, revision, previous, err);
     return stop;
 }
+/* Create-only folder publication: HFS creation is atomic, so one intent record
+ * precedes it and one committed record follows verification. */
+static int create_folder(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap,
+                         AgentJournal journal, void *context)
+{
+    char path[512], q[1100], record[AGENT_RESULT_CAP], call_id[800], envelope[AGENT_RESULT_CAP + 900];
+    FSSpec target;
+    CInfoPBRec pb;
+    OSErr err;
+    long created = 0;
+    if (valid_keys(call->arguments, tokens, "|path|") ||
+        string_arg(call->arguments, tokens, "path", path, sizeof(path)) < 0) {
+        fail(out, cap, "ARGUMENTS", "Expected only a path string.", 0); return 0;
+    }
+    err = create_spec(path, &target);
+    if (!err) { fail(out, cap, "EXISTS", "Destination exists; create_folder never reuses a name.", 0); return 0; }
+    if (err != fnfErr) { fail(out, cap, "PATH", "Use a relative workspace folder path with existing non-alias parent folders and no trailing colon.", err); return 0; }
+    if (!journal) { fail(out, cap, "JOURNAL", "Creating a folder requires a durable session journal.", 0); return 1; }
+    if (json_quote(call->id, call_id, sizeof(call_id)) < 0 || json_quote(path, q, sizeof(q)) < 0) {
+        fail(out, cap, "JOURNAL", "Cannot encode call identity.", 0); return 1;
+    }
+    snprintf(record, sizeof(record), "{\"status\":\"pending\",\"code\":\"CREATE_FOLDER\",\"path\":%s,\"os_error\":0}", q);
+    snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
+    if (journal(context, "mutation_intent", envelope)) { fail(out, cap, "JOURNAL", "Cannot record mutation intent; no folder created.", 0); return 1; }
+    err = FSpDirCreate(&target, smSystemScript, &created);
+    if (err == dupFNErr) { fail(out, cap, "EXISTS", "Destination appeared during creation; nothing was changed by this call.", err); return 0; }
+    if (err) {
+        /* A failed create may still have left a folder; never claim "unchanged" unless proven. */
+        if (!catalog(&target, &pb)) { snprintf(record, sizeof(record), "{\"status\":\"uncertain\",\"code\":\"CREATE_FOLDER_UNCERTAIN\",\"path\":%s,\"os_error\":%d}", q, (int)err); strcpy(out, record); return 1; }
+        fail(out, cap, "CREATE_FAILED", "Folder creation failed; no folder exists at the destination.", err); return 0;
+    }
+    err = FlushVol(NULL, target.vRefNum);
+    if (!err) err = catalog(&target, &pb);
+    if (!err && (!(pb.hFileInfo.ioFlAttrib & 16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000))) err = ioErr;
+    if (err) {
+        snprintf(out, cap, "{\"status\":\"uncertain\",\"code\":\"CREATE_FOLDER_UNVERIFIED\",\"path\":%s,\"os_error\":%d}", q, (int)err); return 1;
+    }
+    snprintf(out, cap, "{\"status\":\"ok\",\"code\":\"CREATED_FOLDER\",\"path\":%s,\"os_error\":0}", q);
+    snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, out);
+    if (journal(context, "mutation_committed", envelope)) {
+        snprintf(out, cap, "{\"status\":\"uncertain\",\"code\":\"JOURNAL_AFTER_PUBLISH\",\"path\":%s,\"os_error\":0}", q); return 1;
+    }
+    return 0;
+}
 int tools_execute_recorded(const AgentCall *call, char *out, size_t cap, AgentJournal journal, void *context)
 {
     JsonToken tokens[128];
@@ -779,6 +823,7 @@ int tools_execute_recorded(const AgentCall *call, char *out, size_t cap, AgentJo
     else if (!strcmp(call->name, "search_text")) search_text(call->arguments, tokens, out, cap);
     else if (!strcmp(call->name, "write_text")) return write_text(call, tokens, out, cap, journal, context);
     else if (!strcmp(call->name, "edit_text")) return edit_text(call, tokens, out, cap, journal, context);
+    else if (!strcmp(call->name, "create_folder")) return create_folder(call, tokens, out, cap, journal, context);
     else fail(out, cap, "UNKNOWN_TOOL", "This tool is not installed.", 0);
     return 0;
 }

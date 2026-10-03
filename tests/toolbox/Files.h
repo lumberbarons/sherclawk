@@ -17,6 +17,7 @@ enum { noErr=0, fnfErr=-43, dupFNErr=-48, paramErr=-50, dirNFErr=-120, ioErr=-36
 OSErr FSMakeFSSpec(short, long, const unsigned char *, FSSpec *);
 OSErr PBGetCatInfoSync(CInfoPBRec *);
 OSErr FSpCreate(const FSSpec *, unsigned long, unsigned long, short);
+OSErr FSpDirCreate(const FSSpec *, short, long *);
 OSErr FSpOpenDF(const FSSpec *, short, short *);
 OSErr FSRead(short, long *, void *);
 OSErr FSWrite(short, long *, const void *);

@@ -6,7 +6,7 @@ HTTPS, a Finder icon based on `../sherclawk.png`, and that character in the main
 window. [PLAN.md](PLAN.md) tracks the full coding-harness roadmap.
 
 The installed tools are `get_environment`, `list_files`, `read_text`,
-`search_text`, create-only `write_text`, and revision-guarded `edit_text`. Native build jobs
+`search_text`, create-only `write_text`, create-only `create_folder`, and revision-guarded `edit_text`. Native build jobs
 and artifact launch come next. The model receives only these installed capabilities; the app executes tools
 with the File Manager and records their results before requesting a follow-up.
 
@@ -98,6 +98,19 @@ leave the destination present with only a staged record. Inspect both paths
 before taking further action. Automatic recovery is not implemented. These
 small synchronous writes finish before another UI event is handled; Stop
 prevents subsequent calls and does not undo a completed create.
+
+## Creating folders
+
+`create_folder(path)` creates one new folder in an existing workspace folder,
+using the same relative colon syntax and alias refusal as `write_text`. It never
+reuses an existing name and never creates intermediate levels: create each level
+in turn. A trailing colon, empty path or missing parent fails before the journal
+is touched. Sherclawk records a mutation intent, creates the folder (HFS
+creation is atomic, so there is no staging step), flushes the volume, verifies
+the catalog entry is a non-alias folder, and records completion before
+returning `CREATED_FOLDER`. A failure that may have left a folder, an
+unverifiable result or a failed completion record is reported as `uncertain`
+and stops the run. Use `list_files` to verify; Stop does not undo a create.
 
 ## Editing text
 
