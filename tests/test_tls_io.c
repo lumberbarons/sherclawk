@@ -24,6 +24,9 @@ static tls13_hs_result step_result;
 static unsigned char wire[65536];
 static size_t wire_len;
 static unsigned char engine_buf[32];
+static unsigned char recvapp_data[32];
+static size_t recvapp_len;
+static int last_sendapp_ack, last_recvapp_ack, flushes;
 
 unsigned long TickCount(void) { return 10; }
 OTTransportState ot_transport_pump(OTTransport *t) { return t->state; }
@@ -253,17 +256,19 @@ int tls13_record_encrypt(tls13_record_ctx *rc, const void *pt, size_t plen,
 unsigned char *br_ssl_engine_sendapp_buf(const br_ssl_engine_context *cc, size_t *len)
 { (void)cc; *len = 3; return engine_buf; }
 void br_ssl_engine_sendapp_ack(br_ssl_engine_context *cc, size_t len)
-{ (void)cc; (void)len; send_acks++; }
+{ (void)cc; send_acks++; last_sendapp_ack = (int)len; }
 void br_ssl_engine_flush(br_ssl_engine_context *cc, int force)
-{ (void)cc; (void)force; }
+{ (void)cc; (void)force; flushes++; }
 unsigned char *br_ssl_engine_recvapp_buf(const br_ssl_engine_context *cc, size_t *len)
-{ (void)cc; *len = 0; return NULL; }
+{ (void)cc; *len = recvapp_len; return recvapp_len ? recvapp_data : NULL; }
 void br_ssl_engine_recvapp_ack(br_ssl_engine_context *cc, size_t len)
-{ (void)cc; (void)len; }
+{ (void)cc; assert(len <= recvapp_len); last_recvapp_ack = (int)len; recvapp_len -= len; }
 static void application_reset(void)
 {
     reset(1); ctx.state = kMacTLS_Connected; ctx.tls13_active = true;
     encryptions = 0; ctx.hs13.msg_len = 0;
+    last_sendapp_ack = last_recvapp_ack = flushes = 0;
+    recvapp_len = 0;
 }
 int main(void)
 {
@@ -318,7 +323,16 @@ int main(void)
     pump(); assert(MacTLS_Read(&ctx, received, sizeof(received)) == 8500 && received[0] == 'b' && received[8499] == 'b');
     assert(ctx.tls13_recv_len == 0);
     application_reset(); ctx.tls13_active = false; engine_state = BR_SSL_SENDAPP;
+    memset(engine_buf, 0xEE, sizeof(engine_buf));
     assert(MacTLS_Write(&ctx, "abcdef", 6) == 3 && send_acks == 1);
+    assert(!memcmp(engine_buf, "abcdef", 3) && engine_buf[3] == 0xEE);
+    assert(last_sendapp_ack == 3 && flushes == 1);
+
+    /* TLS 1.2 read: plaintext leaves BearSSL's recvapp buffer and is acked. */
+    memcpy(recvapp_data, "world", 5); recvapp_len = 5;
+    assert(MacTLS_Read(&ctx, received, sizeof(received)) == 5);
+    assert(!memcmp(received, "world", 5));
+    assert(last_recvapp_ack == 5 && recvapp_len == 0);
     puts("PASS application TLS partial I/O, backpressure, record boundaries, receive draining");
     return 0;
 }
