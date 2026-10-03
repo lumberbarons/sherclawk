@@ -783,7 +783,7 @@ static void NewChat(void)
     if (gSending) return;
     SessionClose(); agent_reset(&gAgent, Journal, NULL); chat_reset(&gChat);
     ResponseSetText("", 0); TESetText("", 0, gPromptTE); InvalRect(&gPromptRect);
-    FocusSet(gPromptTE); SetStatus("New session. Text tools in %s", SHERCLAWK_WORKSPACE);
+    FocusSet(gPromptTE); SetStatus("Ready. What shall we investigate?");
 }
 static void AbortChat(const char *reason)
 {
@@ -893,7 +893,7 @@ int main(void)
         UIDispose(); MacTLS_Shutdown(); return 1;
     }
     chat_reset(&gChat); agent_reset(&gAgent, Journal, NULL);
-    SetStatus("Text tools in %s. Inspect, create or edit text.", SHERCLAWK_WORKSPACE);
+    SetStatus("Ready. What shall we investigate?");
     LogOpen(); LogLine("Sherclawk session started.");
     while (!gQuit) {
         WaitNextEvent(everyEvent, &event, gSending ? 1 : 10, NULL);
