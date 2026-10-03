@@ -26,8 +26,11 @@ loop and tools in the classic Mac application.
    revision guards, create-only writes, unique exact edits, recovery records.
    Create-only `write_text` is implemented with strict MacRoman/CR/TEXT,
    verified sibling staging, journal barriers and collision-safe publication.
-   Search, guarded overwrite/edit, folder creation and automatic recovery remain
-   unimplemented; read revisions are still observational.
+   `edit_text` adds one exact unique replacement, whole-file revisions for
+   files up to 4 KiB, exclusive opens, verified staging and retained original
+   backups with journaled publication. Search, general overwrite, folder creation
+   and automatic recovery remain unimplemented; larger-file read revisions are
+   still observational.
 3. Capture a reproducible PowerPC Toolbox template and exact installed
    MrC/PPCLink/Rez/SDK versions. Native MacRelix file-job worker: complete-file
    publication, rename claim, stage/log/completion records, uncertain outcomes.

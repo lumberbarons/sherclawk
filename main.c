@@ -893,7 +893,7 @@ int main(void)
         UIDispose(); MacTLS_Shutdown(); return 1;
     }
     chat_reset(&gChat); agent_reset(&gAgent, Journal, NULL);
-    SetStatus("Text tools in %s. Inspect files or create new text.", SHERCLAWK_WORKSPACE);
+    SetStatus("Text tools in %s. Inspect, create or edit text.", SHERCLAWK_WORKSPACE);
     LogOpen(); LogLine("Sherclawk session started.");
     while (!gQuit) {
         WaitNextEvent(everyEvent, &event, gSending ? 1 : 10, NULL);
