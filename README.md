@@ -229,8 +229,8 @@ was verified in host protocol checks and through Command-Period in the guest,
 where completed tool results remained visible. A subsequent fixture request
 completed and its journal parsed successfully. The AFP share's earlier
 spike/recon scripts, outputs, and test folders were archived by same-volume
-rename into `Retro68:Spikes:`. Superseded Sherclawd apps and diagnostics are in
-`Retro68:Older:`; their earlier session directory remains preserved.
+rename into `Retro68:Spikes:`. Superseded apps and diagnostics from before the
+rename are in `Retro68:Older:`; their earlier session directory remains preserved.
 
 Create-only write verification, October 2, 2026: the PowerPC app built and was
 published fork-aware to the AFP share. ASan/UBSan protocol and File Manager
