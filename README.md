@@ -7,9 +7,11 @@ window. [PLAN.md](PLAN.md) tracks the full coding-harness roadmap.
 
 The installed tools are `get_environment`, `list_files`, `read_text`,
 `search_text`, create-only `write_text`, create-only `create_folder`, and revision-guarded `edit_text`. Native build jobs
-and artifact launch come next. The [native PowerPC template](templates/ppc-toolbox/README.md)
+and artifact launch tools come next. The [native PowerPC template](templates/ppc-toolbox/README.md)
 captures a guest-verified MrC/PPCLink/Rez recipe and installed versions;
-the MacRelix job worker remains planned.
+the [MacRelix job worker](worker/README.md) now implements complete-file
+publication, rename claims, output capture and completion records. Native
+producer/polling and build/run tool integration remain planned.
 The model receives only these installed capabilities; the app executes tools
 with the File Manager and records their results before requesting a follow-up.
 
@@ -204,10 +206,13 @@ model history is not silently dropped.
 | `templates/ppc-toolbox/` | Native MPW PowerPC template and guest verification record |
 | `tools/materialize-native-template.py` | Create new MacRoman/CR template source and LF shell scripts |
 | `tools/native-process-check.c` | Native Process Manager diagnostic for executor paths |
+| `worker/` | MacRelix file-job protocol, executor, native build wrapper and guest evidence |
+| `tools/publish-worker-job.py`, `tests/test_worker.py` | Diagnostic job producer and publication/execution/crash checks |
 
 ```bash
 sherclawk/tools/check.sh
 sherclawk/tools/check-transport.sh
+python3 sherclawk/tests/test_worker.py
 sherclawk/tools/build-host-probe.sh
 sherclawk/build/host-probe
 sherclawk/build.sh SherclawkProbe_APPL

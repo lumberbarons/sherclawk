@@ -35,9 +35,10 @@ loop and tools in the classic Mac application.
 3. Capture a reproducible PowerPC Toolbox template and exact installed
    MrC/PPCLink/Rez/SDK versions. The `templates/ppc-toolbox/` fixture is now
    guest-verified for compiler failure, fresh rebuild, native launch and
-   actual ToolServer process identity. Native MacRelix file-job worker remains
-   next: complete-file
-   publication, rename claim, stage/log/completion records, uncertain outcomes.
+   actual ToolServer process identity. The MacRelix file-job worker now
+   implements complete-file publication, rename claim, stage/log/completion
+   records and uncertain outcomes. Native File Manager production and bounded
+   cooperative polling remain next; the Python producer is diagnostic only.
 4. `create_project`, `build_project`, and native `run_application`; associate
    outputs with successful builds and source revisions, and correlate runtime
    smoke-test results by run ID. Never launch an artifact from a failed build.
