@@ -336,10 +336,10 @@ static void search_text(const char *s, const JsonToken *tokens, char *out, size_
         text_to_macroman_strict(query,needle,sizeof(needle)) <= 0) goto arguments;
     qlen = strlen(needle);
     { size_t i; for(i=0;i<qlen;i++) if((unsigned char)needle[i]<32 || needle[i]==127) goto arguments; }
-    if (json_member(s,tokens,0,"cursor") >= 0) {
+    if (json_member(s,tokens,0,"cursor") >= 0 && string_arg(s,tokens,"cursor",cursor,sizeof(cursor))<0) goto arguments;
+    if (*cursor) {
         char *p, *end;
         long values[14]; int n=0;
-        if(string_arg(s,tokens,"cursor",cursor,sizeof(cursor))<0 || !*cursor) goto arguments;
         p=cursor;
         while(*p && n<14) {
             if(*p<'0' || *p>'9') goto arguments;

@@ -47,6 +47,7 @@ creator and custom-icon/bundle flags in Finder info.
 
 Text tools v2 adds `search_text(root, query, recursive=false, limit=4, cursor)`.
 Use an empty root for the workspace or a relative colon-separated folder.
+Omit the cursor or pass an empty string to start a new search.
 Search is case-sensitive and literal; queries must be single-line MacRoman
 text, 1–128 encoded bytes. Matches include paths, absolute one-based line
 numbers, zero-based data-fork byte offsets and short UTF-8 excerpts starting

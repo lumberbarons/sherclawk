@@ -241,6 +241,7 @@ static void search_checks(void)
         assert(++pages<10);
     } while(1);
     assert(total==2);
+    strcpy(call.arguments,"{\"root\":\"Sources:\",\"query\":\"lobster\",\"cursor\":\"\"}");tools_execute(&call,result,sizeof(result));assert(strstr(result,"Sources:hello.c") && strstr(result,"\"line\":2"));
     files[d].info.fdFlags=0x8000;strcpy(call.arguments,"{\"root\":\"Sources\",\"query\":\"lobster\"}");tools_execute(&call,result,sizeof(result));assert(strstr(result,"FOLDER"));
     files[d].info.fdFlags=0;
     reset();a=add(10,"large.c",0);memset(files[a].bytes,'x',10000);memcpy(files[a].bytes+4094,"lobster",7);files[a].size=10000;
