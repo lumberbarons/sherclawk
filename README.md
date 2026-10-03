@@ -6,7 +6,7 @@ HTTPS, a Finder icon based on `../sherclawk.png`, and that character in the main
 window. [PLAN.md](PLAN.md) tracks the full coding-harness roadmap.
 
 The installed tools are `get_environment`, `list_files`, `read_text`,
-create-only `write_text`, and revision-guarded `edit_text`. Native build jobs
+`search_text`, create-only `write_text`, and revision-guarded `edit_text`. Native build jobs
 and artifact launch come next. The model receives only these installed capabilities; the app executes tools
 with the File Manager and records their results before requesting a follow-up.
 
@@ -42,6 +42,34 @@ Both 16px and 32px icons have color, masks and monochrome fallback. The native
 window draws a 156px RGB resource generated from the same image. Fork-aware
 publication keeps the exact netatalk filler/table layout, with Sherclawk's
 creator and custom-icon/bundle flags in Finder info.
+
+## Searching text
+
+Text tools v2 adds `search_text(root, query, recursive=false, limit=4, cursor)`.
+Use an empty root for the workspace or a relative colon-separated folder.
+Search is case-sensitive and literal; queries must be single-line MacRoman
+text, 1–128 encoded bytes. Matches include paths, absolute one-based line
+numbers, zero-based data-fork byte offsets and short UTF-8 excerpts starting
+at the match. Read the source before editing; search does not supply revisions.
+CR, LF and CRLF line endings are counted, including across pages.
+
+Each invocation reads at most 8 KiB and examines at most 64 catalog entries
+plus at most eight ancestor entries to restore recursive traversal. Recursive
+search goes up to eight folders below the root. Results contain at most eight
+matches and fit the existing tool-result bound. Matches spanning scan boundaries
+are included; overlapping matches are returned separately. Empty pages can
+still have `truncated: true`: pass `next_cursor` unchanged with the same root,
+query and recursion setting until `truncated: false` and `next_cursor: null`.
+Stop prevents the next bounded call; it does not interrupt a File Manager call.
+
+Cursors are observational catalog positions, not snapshots. Keep the tree and
+file contents unchanged between pages, and restart search after an edit.
+Aliases (including root ancestors), resource forks and unsupported file types
+are skipped or refused. Binary controls invalidate the current scan range;
+earlier pages are not whole-file binary certification. `skipped` reports excluded
+entries/ranges, including folders beyond the depth/path bounds. A folder with
+more than 30,000 entries requires a narrower search root. I/O and detected
+within-scan catalog changes return errors instead of claiming completion.
 
 ## Creating text
 
@@ -150,6 +178,7 @@ model history is not silently dropped.
 | `tools/check.sh`, `tools/check-transport.sh` | ASan/UBSan protocol, loop, create/edit faults, revision/encoding and TLS I/O checks |
 | `tools/probe.c`, `tools/build-host-probe.sh` | Real model/tool/follow-up diagnostic on host and guest |
 | `tools/write-check.c` | Native create/read/collision, MacRoman/CR/TEXT and size-boundary diagnostic |
+| `tools/search-check.c` | Native recursive search, continuation, MacRoman and discovery/read/edit/read diagnostic |
 | `tools/edit-check.c` | Native guarded replacement, backup, pagination, busy-file, encoding and boundary diagnostic |
 | `tests/toolbox/`, `tests/test_tools.c` | File Manager model for mutation journal barriers, I/O faults and rename races |
 | `tools/scroll-check.c` | Copied actual Toolbox scrollbar diagnostic |
@@ -168,6 +197,9 @@ ssh beardmore 'cat /srv/retro68/SherclawkProbe.log'
 APP=SherclawkWriteCheck sherclawk/tools/deploy-to-share.sh
 # Launch SherclawkWriteCheck in OS 9; fixed diagnostic logs, then quits.
 ssh beardmore 'cat /srv/retro68/SherclawkWriteCheck.log'
+APP=SherclawkSearchCheck sherclawk/tools/deploy-to-share.sh
+# Launch SherclawkSearchCheck in OS 9; retains a unique source/backup fixture.
+ssh beardmore 'cat /srv/retro68/SherclawkSearchCheck.log'
 APP=SherclawkEditCheck sherclawk/tools/deploy-to-share.sh
 # Launch SherclawkEditCheck in OS 9; preserves its unique fixture and backups.
 ssh beardmore 'cat /srv/retro68/SherclawkEditCheck.log'

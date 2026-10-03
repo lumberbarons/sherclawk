@@ -107,7 +107,7 @@ static void environment(char *out, size_t cap)
     snprintf(out, cap, "{\"status\":\"ok\",\"os\":\"classic Mac OS\",\"system_version_hex\":\"%04lx\","
         "\"architecture\":\"PowerPC\",\"workspace\":%s,\"paths\":\"relative colon-separated\","
         "\"encoding\":\"MacRoman data fork to UTF-8\",\"read_only\":false,\"free_heap_bytes\":%ld,"
-        "\"tools\":[\"get_environment\",\"list_files\",\"read_text\",\"write_text\",\"edit_text\"],"
+        "\"tools\":[\"get_environment\",\"list_files\",\"read_text\",\"search_text\",\"write_text\",\"edit_text\"],"
         "\"write_policy\":\"create_only_existing_parent\",\"write_max_bytes\":4096,"
         "\"edit_policy\":\"unique_exact_whole_revision_CR_backup\",\"edit_max_bytes\":4096,"
         "\"build_supported\":false,\"launch_supported\":false}", system, q, (long)FreeMem());
@@ -306,6 +306,170 @@ static OSErr create_spec(const char *path, FSSpec *spec)
     name[0] = (unsigned char)strlen(part); memcpy(name + 1, part, name[0]);
     return FSMakeFSSpec(parent.vRefNum, dir, name, spec);
 }
+/* Stateless depth-first continuation. Catalog order must stay unchanged between
+ * pages. Each call examines at most 64 entries and reads at most 8192 bytes;
+ * the agent services Stop before dispatching the next bounded call. */
+static void search_text(const char *s, const JsonToken *tokens, char *out, size_t cap)
+{
+    static char bytes[4224];
+    char root[512], local[256], query[512], needle[129], cursor[256] = "";
+    char paths[9][256], path[768], utf8[400], entry[1250], tail[400];
+    long dirs[9], indices[9] = {1}, offset = 0, line = 1, prevcr = 0;
+    int depth = 0, recursive = 0, limit, count = 0, steps = 0, budget = 8192, done = 0, skipped = 0;
+    size_t at = 0, qlen;
+    FSSpec spec;
+    CInfoPBRec pb;
+    OSErr err;
+    int member = json_member(s, tokens, 0, "recursive");
+    limit = int_arg(s,tokens,"limit",4,1,8);
+    if (member >= 0) {
+        int n = tokens[member].end - tokens[member].start;
+        if (tokens[member].type != JSON_PRIMITIVE ||
+            !((n == 4 && !memcmp(s+tokens[member].start,"true",4)) ||
+              (n == 5 && !memcmp(s+tokens[member].start,"false",5)))) goto arguments;
+        recursive = n == 4;
+    }
+    if (valid_keys(s,tokens,"|root||query||recursive||limit||cursor|") || limit < 0 ||
+        string_arg(s,tokens,"root",root,sizeof(root)) < 0 ||
+        string_arg(s,tokens,"query",query,sizeof(query)) < 0 ||
+        text_to_macroman_strict(root,local,sizeof(local)) < 0 || tools_validate_path(local,1) ||
+        text_to_macroman_strict(query,needle,sizeof(needle)) <= 0) goto arguments;
+    qlen = strlen(needle);
+    { size_t i; for(i=0;i<qlen;i++) if((unsigned char)needle[i]<32 || needle[i]==127) goto arguments; }
+    if (json_member(s,tokens,0,"cursor") >= 0) {
+        char *p, *end;
+        long values[14]; int n=0;
+        if(string_arg(s,tokens,"cursor",cursor,sizeof(cursor))<0 || !*cursor) goto arguments;
+        p=cursor;
+        while(*p && n<14) {
+            if(*p<'0' || *p>'9') goto arguments;
+            values[n]=0;end=p;
+            while(*end>='0' && *end<='9') {
+                int digit=*end-'0';
+                if(values[n]>(2147483647L-digit)/10)goto arguments;
+                values[n]=values[n]*10+digit;end++;
+            }
+            n++;
+            if(!*end) {p=end;break;}
+            if(*end!=':') goto arguments;
+            p=end+1;if(!*p)goto arguments;
+        }
+        if(*p || n<5 || values[0]>8 || n!=values[0]+5) goto arguments;
+        depth=(int)values[0]; if(depth && !recursive) goto arguments;
+        {int i;for(i=0;i<=depth;i++) {indices[i]=values[i+1];if(indices[i]<1 || indices[i]>30001)goto arguments;}}
+        offset=values[depth+2];line=values[depth+3];prevcr=values[depth+4];
+        if(line<1 || prevcr>1) goto arguments;
+    }
+    /* Resolve each root ancestor by ID, refusing alias folders. */
+    if(*local && local[strlen(local)-1]==':') local[strlen(local)-1]=0;
+    if(*root && root[strlen(root)-1]==':') root[strlen(root)-1]=0;
+    if(*local) err=create_spec(root,&spec);
+    else err=spec_for("",1,&spec);
+    if(!err)err=catalog(&spec,&pb);
+    if(err || !(pb.hFileInfo.ioFlAttrib&16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags&0x8000)) {
+        fail(out,cap,"FOLDER","Cannot resolve a non-alias workspace folder.",err);return;
+    }
+    dirs[0]=pb.dirInfo.ioDrDirID;
+    snprintf(paths[0],sizeof(paths[0]),"%s%s",local,*local ? ":" : "");
+    {int d;for(d=0;d<depth;d++) {
+        Str255 name;
+        memset(&pb,0,sizeof(pb));pb.hFileInfo.ioNamePtr=name;pb.hFileInfo.ioVRefNum=spec.vRefNum;
+        pb.hFileInfo.ioDirID=dirs[d];pb.hFileInfo.ioFDirIndex=(short)indices[d];
+        err=PBGetCatInfoSync(&pb);
+        if(err || !(pb.hFileInfo.ioFlAttrib&16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags&0x8000) ||
+            name[0]>31 || strlen(paths[d])+name[0]+1>180) {fail(out,cap,"CURSOR","Search tree changed or cursor is invalid.",err);return;}
+        memcpy(paths[d+1],paths[d],strlen(paths[d]));
+        memcpy(paths[d+1]+strlen(paths[d]),name+1,name[0]);
+        paths[d+1][strlen(paths[d])+name[0]]=':';paths[d+1][strlen(paths[d])+name[0]+1]=0;
+        dirs[d+1]=pb.dirInfo.ioDrDirID;
+    }}
+    append(out,cap,&at,"{\"status\":\"ok\",\"matches\":[");
+    while(steps<64 && budget>128 && count<limit) {
+        Str255 name;
+        FSSpec file;
+        long size, wanted, process, i;
+        short ref;
+        int binary=0;
+        size_t plen;
+        if(indices[depth]>30000){fail(out,cap,"LIMIT","Folder exceeds 30000 catalog entries; narrow the search root.",0);return;}
+        memset(&pb,0,sizeof(pb));pb.hFileInfo.ioNamePtr=name;pb.hFileInfo.ioVRefNum=spec.vRefNum;
+        pb.hFileInfo.ioDirID=dirs[depth];pb.hFileInfo.ioFDirIndex=(short)indices[depth];steps++;
+        err=PBGetCatInfoSync(&pb);
+        if(err==fnfErr) {
+            if(!depth){done=1;break;} depth--;indices[depth]++;offset=0;line=1;prevcr=0;continue;
+        }
+        if(err){fail(out,cap,"CATALOG","Search enumeration failed.",err);return;}
+        plen=strlen(paths[depth]);
+        if(name[0]>31 || plen+name[0]>179 || (pb.hFileInfo.ioFlFndrInfo.fdFlags&0x8000)) goto skip;
+        memcpy(local,paths[depth],plen);memcpy(local+plen,name+1,name[0]);local[plen+name[0]]=0;
+        if(tools_validate_path(local,(pb.hFileInfo.ioFlAttrib&16)!=0))goto skip;
+        if(pb.hFileInfo.ioFlAttrib&16) {
+            if(recursive) {
+                if(depth==8) goto skip;
+                memcpy(paths[depth+1],paths[depth],plen);memcpy(paths[depth+1]+plen,name+1,name[0]);
+                paths[depth+1][plen+name[0]]=':';paths[depth+1][plen+name[0]+1]=0;
+                dirs[depth+1]=pb.dirInfo.ioDrDirID;depth++;indices[depth]=1;continue;
+            }
+            indices[depth]++;continue;
+        }
+        file.vRefNum=spec.vRefNum;file.parID=dirs[depth];memcpy(file.name,name,(size_t)name[0]+1);
+        if(!plain_file(&file,&pb)) goto skip;
+        if(offset>pb.hFileInfo.ioFlLgLen){fail(out,cap,"CURSOR","File shortened since search page.",0);return;}
+        process=budget-(long)qlen+1;if(process>4096)process=4096;
+        wanted=pb.hFileInfo.ioFlLgLen-offset;if(wanted>process+(long)qlen-1)wanted=process+(long)qlen-1;
+        size=wanted;
+        err=FSpOpenDF(&file,fsRdPerm,&ref);
+        if(err){fail(out,cap,"READ","Cannot open search file.",err);return;}
+        err=SetFPos(ref,fsFromStart,offset);if(!err && size)err=FSRead(ref,&size,bytes);
+        {OSErr closed=FSClose(ref);if(!err)err=closed;}
+        if(err || size!=wanted){fail(out,cap,"READ","Search read failed or was short.",err);return;}
+        {CInfoPBRec after;err=catalog(&file,&after);if(err || !same_file(&pb,&after)){fail(out,cap,"CHANGED","File changed during search; restart search.",err);return;}}
+        budget-=(int)size;
+        for(i=0;i<size;i++){unsigned char c=(unsigned char)bytes[i];if(!c || c==127 || (c<32 && c!=9 && c!=10 && c!=13))binary=1;}
+        if(binary) goto skip;
+        if(process>size)process=size;
+        for(i=0;i<process;i++) {
+            if(i+(long)qlen<=size && !memcmp(bytes+i,needle,qlen)) {
+                size_t pos=0;long end=i;char meta[160];
+                while(end<size && end-i<32 && bytes[end]!=13 && bytes[end]!=10)end++;
+                memcpy(local,paths[depth],plen);memcpy(local+plen,name+1,name[0]);local[plen+name[0]]=0;
+                if(text_to_utf8(local,strlen(local),path,sizeof(path))<0 || text_to_utf8(bytes+i,(size_t)(end-i),utf8,sizeof(utf8))<0)goto arguments;
+                if(append(entry,sizeof(entry),&pos,"{\"path\":") || quote(entry,sizeof(entry),&pos,path)) {fail(out,cap,"LIMIT","Match path exceeds result capacity.",0);return;}
+                snprintf(meta,sizeof(meta),",\"line\":%ld,\"byte\":%ld,\"excerpt\":",line,offset+i);
+                if(append(entry,sizeof(entry),&pos,meta) || quote(entry,sizeof(entry),&pos,utf8) || append(entry,sizeof(entry),&pos,"}")) {fail(out,cap,"LIMIT","Match exceeds result capacity.",0);return;}
+                if(at+pos+280>=cap) {if(!count){fail(out,cap,"LIMIT","Match exceeds result capacity.",0);return;}break;}
+                if(count)append(out,cap,&at,",");
+                append(out,cap,&at,entry);count++;
+            }
+            if(bytes[i]==13 || (bytes[i]==10 && !prevcr)) {
+                if(line>=2147483647L){fail(out,cap,"LIMIT","Line count exceeds search capacity.",0);return;}
+                line++;
+            }
+            prevcr=bytes[i]==13;
+            if(count==limit){i++;break;}
+        }
+        offset+=i;
+        if(offset>=pb.hFileInfo.ioFlLgLen){indices[depth]++;offset=0;line=1;prevcr=0;}
+        if(i<process)break;
+        continue;
+skip:
+        skipped++;indices[depth]++;offset=0;line=1;prevcr=0;
+    }
+    cursor[0]=0;
+    if(!done) {
+        size_t pos=0;int d;
+        pos+=(size_t)snprintf(cursor,sizeof(cursor),"%d",depth);
+        for(d=0;d<=depth;d++)pos+=(size_t)snprintf(cursor+pos,sizeof(cursor)-pos,":%ld",indices[d]);
+        snprintf(cursor+pos,sizeof(cursor)-pos,":%ld:%ld:%ld",offset,line,prevcr);
+    }
+    snprintf(tail,sizeof(tail),"],\"truncated\":%s,\"next_cursor\":%s%s%s,\"skipped\":%d,\"scanned_bytes\":%d}",
+        done ? "false" : "true",done ? "" : "\"",done ? "null" : cursor,done ? "" : "\"",skipped,8192-budget);
+    if(append(out,cap,&at,tail))fail(out,cap,"LIMIT","Search result exceeds capacity.",0);
+    return;
+arguments:
+    fail(out,cap,"ARGUMENTS","Expected root, nonempty single-line MacRoman query (128 bytes), optional recursive, limit (1-8), and returned cursor.",0);
+}
+
 static int mutation_result(char *out, size_t cap, const char *status, const char *code,
                            const char *path, const char *temporary, long bytes,
                            const char *revision, int native)
@@ -612,6 +776,7 @@ int tools_execute_recorded(const AgentCall *call, char *out, size_t cap, AgentJo
         else environment(out, cap);
     } else if (!strcmp(call->name, "list_files")) list(call->arguments, tokens, out, cap);
     else if (!strcmp(call->name, "read_text")) read(call->arguments, tokens, out, cap);
+    else if (!strcmp(call->name, "search_text")) search_text(call->arguments, tokens, out, cap);
     else if (!strcmp(call->name, "write_text")) return write_text(call, tokens, out, cap, journal, context);
     else if (!strcmp(call->name, "edit_text")) return edit_text(call, tokens, out, cap, journal, context);
     else fail(out, cap, "UNKNOWN_TOOL", "This tool is not installed.", 0);

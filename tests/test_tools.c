@@ -7,7 +7,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-static struct File { int used, dir; long parent, id; char name[32], bytes[5000]; long size, resource; FInfo info; } files[64];
+static struct File { int used, dir; long parent, id; char name[32], bytes[20000]; long size, resource; FInfo info; } files[64];
 static long positions[64];
 static int short_write, bad_read, bad_close, rename_race, rename_error, published, flush_error;
 static int journals, fail_journal, creates;
@@ -44,7 +44,14 @@ OSErr FSMakeFSSpec(short vol, long parent, const unsigned char *name, FSSpec *sp
 }
 OSErr PBGetCatInfoSync(CInfoPBRec *pb)
 {
-    int i=find(pb->hFileInfo.ioDirID,pb->hFileInfo.ioNamePtr);
+    int i;
+    if(pb->hFileInfo.ioFDirIndex>0) {
+        int n=0;
+        for(i=0;i<64;i++) if(files[i].used && files[i].parent==pb->hFileInfo.ioDirID && ++n==pb->hFileInfo.ioFDirIndex) break;
+        if(i==64)return fnfErr;
+        pb->hFileInfo.ioNamePtr[0]=(unsigned char)strlen(files[i].name);
+        memcpy(pb->hFileInfo.ioNamePtr+1,files[i].name,strlen(files[i].name));
+    } else i=find(pb->hFileInfo.ioDirID,pb->hFileInfo.ioNamePtr);
     if(i<0) return fnfErr;
     pb->hFileInfo.ioFlAttrib=files[i].dir ? 16 : 0;
     pb->hFileInfo.ioFlFndrInfo=files[i].info;
@@ -213,8 +220,47 @@ static void edit_checks(void)
     }
     puts("PASS exact edit: whole-file/page guards, unique matches, backups, locks, encoding, limits, journal barriers and publication faults");
 }
+static void search_checks(void)
+{
+    int a,b,d,pages=0,total=0;
+    char cursor[256], saved[512];
+    JsonToken tokens[128];
+    reset();d=add(10,"Sources",1);a=add(files[d].id,"hello.c",0);
+    strcpy(files[a].bytes,"first\r\ncaf\216 lobster\rlobster again\n");files[a].size=(long)strlen(files[a].bytes);files[a].info.fdType='TEXT';
+    b=add(10,"binary.c",0);memcpy(files[b].bytes,"lobster\0",8);files[b].size=8;
+    strcpy(call.name,"search_text");strcpy(call.arguments,"{\"root\":\"\",\"query\":\"lobster\"}");tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"matches\":[]") && strstr(result,"\"truncated\":false"));
+    strcpy(saved,"{\"root\":\"\",\"query\":\"lobster\",\"recursive\":true,\"limit\":1");
+    strcpy(call.arguments,saved);strcat(call.arguments,"}");
+    do {
+        tools_execute(&call,result,sizeof(result));assert(json_parse(result,strlen(result),tokens,128)>0);
+        assert(!strstr(result,"\"status\":\"error\""));
+        if(strstr(result,"Sources:hello.c")){total++;assert(strstr(result,total==1 ? "\"line\":2" : "\"line\":3"));}
+        if(strstr(result,"\"truncated\":false"))break;
+        field("next_cursor",cursor,sizeof(cursor));snprintf(call.arguments,sizeof(call.arguments),"%s,\"cursor\":\"%s\"}",saved,cursor);
+        assert(++pages<10);
+    } while(1);
+    assert(total==2);
+    files[d].info.fdFlags=0x8000;strcpy(call.arguments,"{\"root\":\"Sources\",\"query\":\"lobster\"}");tools_execute(&call,result,sizeof(result));assert(strstr(result,"FOLDER"));
+    files[d].info.fdFlags=0;
+    reset();a=add(10,"large.c",0);memset(files[a].bytes,'x',10000);memcpy(files[a].bytes+4094,"lobster",7);files[a].size=10000;
+    strcpy(call.name,"search_text");strcpy(call.arguments,"{\"root\":\"\",\"query\":\"lobster\"}");tools_execute(&call,result,sizeof(result));assert(strstr(result,"\"byte\":4094") && strstr(result,"\"truncated\":true"));
+    field("next_cursor",cursor,sizeof(cursor));snprintf(call.arguments,sizeof(call.arguments),"{\"root\":\"\",\"query\":\"lobster\",\"cursor\":\"%s\"}",cursor);tools_execute(&call,result,sizeof(result));assert(strstr(result,"\"matches\":[]") && strstr(result,"\"truncated\":false"));
+    strcpy(call.arguments,"{\"root\":\"\",\"query\":\"\"}");tools_execute(&call,result,sizeof(result));assert(strstr(result,"ARGUMENTS"));
+    strcpy(call.arguments,"{\"root\":\"\",\"query\":\"x\",\"cursor\":\"9:1:0:1:0\"}");tools_execute(&call,result,sizeof(result));assert(strstr(result,"ARGUMENTS"));
+    strcpy(call.arguments,"{\"root\":\"\",\"query\":\"x\",\"query\":\"y\"}");tools_execute(&call,result,sizeof(result));assert(strstr(result,"ARGUMENTS"));
+    strcpy(call.arguments,"{\"root\":\"\",\"query\":\"x\",\"cursor\":\"0:1:999999999999999999999:1:0\"}");tools_execute(&call,result,sizeof(result));assert(strstr(result,"ARGUMENTS"));
+    strcpy(call.arguments,"{\"root\":\"\",\"query\":\"x\",\"recursive\":1}");tools_execute(&call,result,sizeof(result));assert(strstr(result,"ARGUMENTS"));
+    reset();a=add(10,"hello.c",0);strcpy(files[a].bytes,"aaaa\r\ncaf\216");files[a].size=(long)strlen(files[a].bytes);
+    strcpy(call.name,"search_text");strcpy(call.arguments,"{\"root\":\"\",\"query\":\"aa\"}");tools_execute(&call,result,sizeof(result));assert(strstr(result,"\"byte\":0") && strstr(result,"\"byte\":1") && strstr(result,"\"byte\":2"));
+    strcpy(call.arguments,"{\"root\":\"\",\"query\":\"caf\\u00e9\"}");tools_execute(&call,result,sizeof(result));assert(strstr(result,"\"line\":2"));
+    files[a].resource=1;tools_execute(&call,result,sizeof(result));assert(strstr(result,"\"matches\":[]") && strstr(result,"\"skipped\":1"));
+    files[a].resource=0;bad_close=1;tools_execute(&call,result,sizeof(result));assert(strstr(result,"\"code\":\"READ\""));
+    puts("PASS search: recursion, pagination, absolute CR/CRLF lines, binary and alias refusal, chunk-boundary match and bounded continuation");
+}
 int main(void)
 {
+    search_checks();
     int i;
     reset();assert(!run());assert(strstr(result,"CREATED") && journals==3);
     i=leaf("hello.c");assert(i>=0 && files[i].size==10 && !memcmp(files[i].bytes,"caf\x8e\rline\r",10));

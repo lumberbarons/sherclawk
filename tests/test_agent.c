@@ -36,7 +36,7 @@ int main(void)
     size_t used, i;
     begin();
     assert(agent_request(&a, "model", req, sizeof(req)) > 0);
-    assert(strstr(req, "\"tools\"") && strstr(req, "\"role\":\"system\"") && strstr(req, "write_text") && strstr(req, "edit_text"));
+    assert(strstr(req, "\"tools\"") && strstr(req, "\"role\":\"system\"") && strstr(req, "write_text") && strstr(req, "edit_text") && strstr(req, "search_text"));
     call("tool_calls");
     assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
     assert(a.count == 1 && !a.next && a.active && records == 2);
@@ -84,6 +84,10 @@ int main(void)
     named_call("tool_calls", "edit_text", "{\"path\":\"old.c\",\"expected_revision\":\"full-x\",\"old_text\":\"a\",\"new_text\":\"b\"}");
     assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
     assert(!strcmp(a.calls[0].name, "edit_text") && !agent_stop(&a, "Stop before edit"));
+    assert(a.next == a.count && strstr(a.history, "interrupted") && !a.active);
+    begin(); named_call("tool_calls", "search_text", "{\"root\":\"\",\"query\":\"lobster\"}");
+    assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
+    assert(!strcmp(a.calls[0].name, "search_text") && !agent_stop(&a, "Stop before search"));
     assert(a.next == a.count && strstr(a.history, "interrupted") && !a.active);
     begin(); call("tool_calls");
     a.used = sizeof(a.history) - 10;

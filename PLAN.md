@@ -28,7 +28,8 @@ loop and tools in the classic Mac application.
    verified sibling staging, journal barriers and collision-safe publication.
    `edit_text` adds one exact unique replacement, whole-file revisions for
    files up to 4 KiB, exclusive opens, verified staging and retained original
-   backups with journaled publication. Search, general overwrite, folder creation
+   backups with journaled publication. Bounded literal workspace search is implemented with optional recursion,
+   catalog/byte continuation and MacRoman/CR line numbers. General overwrite, folder creation
    and automatic recovery remain unimplemented; larger-file read revisions are
    still observational.
 3. Capture a reproducible PowerPC Toolbox template and exact installed

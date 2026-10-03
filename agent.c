@@ -7,7 +7,7 @@
 
 static const char policy[] =
     "You are Sherclawk, a native assistant running on classic Mac OS 9.2.2. "
-    "Inspect files using the actual tools. write_text creates new plain text files; "
+    "Inspect files using the actual tools. search_text locates literal matches; follow its cursor to completion and read matches before editing. write_text creates new plain text files; "
     "it cannot overwrite files or create folders. edit_text makes one exact, unique "
     "replacement in existing CR text up to 4096 bytes, using a current whole-file "
     "revision from read_text and retaining a recovery backup. Read before editing "
@@ -33,6 +33,12 @@ const char *agent_tool_schemas(void)
         "\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},"
         "\"start_byte\":{\"type\":\"integer\",\"minimum\":0},\"start_line\":{\"type\":\"integer\",\"minimum\":1},\"max_lines\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":30}},"
         "\"required\":[\"path\"],\"additionalProperties\":false}}},"
+        "{\"type\":\"function\",\"function\":{\"name\":\"search_text\",\"description\":\"Case-sensitive literal search of plain MacRoman text. Returns paths, absolute line "
+        "numbers, byte offsets and excerpts. Bounded to 64 catalog entries and 8192 read bytes per call, recursive depth 8. Pass next_cursor unchanged with the"
+        " same root/query/recursive until truncated is false; keep the tree unchanged between pages. Skips aliases, resource forks and binary scan ranges. Read"
+        " matches before editing.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"root\":{\"type\":\"string\"},\"query\":{\"type\":\"string\",\"minLength\":1},\"recursive\":{\"t"
+        "ype\":\"boolean\"},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"cursor\":{\"type\":\"string\"}},\"required\":[\"root\",\"query\"],\"additionalProperties\":fals"
+        "e}}},"
         "{\"type\":\"function\",\"function\":{\"name\":\"write_text\","
         "\"description\":\"Create a NEW plain text file in an existing workspace folder. Never overwrites. Relative colon-separated path; strict UTF-8 to MacRoman conversion, CR line endings, Finder type TEXT. Maximum 4096 encoded bytes; arguments also bounded to 8192 bytes. Refuses aliases and binary controls. Returns path, bytes and revision; verify with read_text. Never retry an uncertain outcome.\","
         "\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},"

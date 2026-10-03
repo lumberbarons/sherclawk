@@ -441,7 +441,7 @@ static void DrawChrome(void)
             }
         }
         MoveTo(10, 253); PStr(title, "The consulting crustacean"); DrawString(title);
-        MoveTo(10, 266); PStr(title, "Text tools: v1"); DrawString(title);
+        MoveTo(10, 266); PStr(title, "Text tools: v2"); DrawString(title);
     }
     DrawLabel(&gResponseLabelRect, "Conversation:");
     FrameRect(&gResponseRect);
