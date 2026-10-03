@@ -1,5 +1,5 @@
 #!/bin/bash
-# Portable protocol regressions run on the host under ASan/UBSan; no VM/key.
+# Protocol and File Manager fault checks run under ASan/UBSan; no VM/key.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$HERE/build/tests"
@@ -22,3 +22,10 @@ mkdir -p "$HERE/build/tests"
     "$HERE/tests/test_agent.c" "$HERE/agent.c" "$HERE/json.c" "$HERE/text.c" \
     -o "$HERE/build/tests/test-agent"
 "$HERE/build/tests/test-agent"
+
+"${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror -Wno-multichar \
+    -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -I"$HERE/tests/toolbox" -I"$HERE" \
+    "$HERE/tests/test_tools.c" "$HERE/tools.c" "$HERE/json.c" "$HERE/text.c" \
+    -o "$HERE/build/tests/test-tools"
+"$HERE/build/tests/test-tools"

@@ -441,7 +441,7 @@ static void DrawChrome(void)
             }
         }
         MoveTo(10, 253); PStr(title, "Your OS 9 detective"); DrawString(title);
-        MoveTo(10, 266); PStr(title, "Read-only tools: v0"); DrawString(title);
+        MoveTo(10, 266); PStr(title, "Text tools: v1"); DrawString(title);
     }
     DrawLabel(&gResponseLabelRect, "Conversation:");
     FrameRect(&gResponseRect);
@@ -783,7 +783,7 @@ static void NewChat(void)
     if (gSending) return;
     SessionClose(); agent_reset(&gAgent, Journal, NULL); chat_reset(&gChat);
     ResponseSetText("", 0); TESetText("", 0, gPromptTE); InvalRect(&gPromptRect);
-    FocusSet(gPromptTE); SetStatus("New session. Read-only tools in %s", SHERCLAWK_WORKSPACE);
+    FocusSet(gPromptTE); SetStatus("New session. Text tools in %s", SHERCLAWK_WORKSPACE);
 }
 static void AbortChat(const char *reason)
 {
@@ -854,9 +854,11 @@ static void DriveChatStep(void)
             snprintf(started, sizeof(started), "{\"call_id\":%s,\"name\":%s}", id, name);
             if (Journal(NULL, "tool_started", started)) { AbortChat("Could not record tool start; no tool executed."); return; }
         }
-        tools_execute(call, gToolResult, sizeof(gToolResult));
+        result = tools_execute_recorded(call, gToolResult, sizeof(gToolResult), Journal, NULL);
         if (agent_tool_result(&gAgent, gToolResult, error, sizeof(error))) { AbortChat(error); return; }
-        ShowMessage(call->name, gToolResult); return;
+        ShowMessage(call->name, gToolResult);
+        if (result) AbortChat("Mutation stopped. Inspect the result and session recovery records; do not retry automatically.");
+        return;
     }
     if ((uint32_t)TickCount() - gStartTicks > 120UL * 60UL) { AbortChat("Request timed out. Completed results retained."); return; }
     result = network_step(&gNet);
@@ -891,7 +893,7 @@ int main(void)
         UIDispose(); MacTLS_Shutdown(); return 1;
     }
     chat_reset(&gChat); agent_reset(&gAgent, Journal, NULL);
-    SetStatus("Read-only tools in %s. Ask Sherclawk to inspect a file.", SHERCLAWK_WORKSPACE);
+    SetStatus("Text tools in %s. Inspect files or create new text.", SHERCLAWK_WORKSPACE);
     LogOpen(); LogLine("Sherclawk session started.");
     while (!gQuit) {
         WaitNextEvent(everyEvent, &event, gSending ? 1 : 10, NULL);

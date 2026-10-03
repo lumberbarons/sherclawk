@@ -1,10 +1,12 @@
-/* Native read-only tools. All catalog/text work is bounded; aliases, binary
+/* Native bounded tools. Mutations stage verified TEXT files and journal every
+ * publication boundary. All catalog/text work is bounded; aliases, binary
  * files, resource forks and parent traversal are never followed as text. */
 #include "tools.h"
 #include "json.h"
 #include "text.h"
 #include "config.h"
 #include <Files.h>
+#include <Script.h>
 #include <Memory.h>
 #include <Gestalt.h>
 #include <stdio.h>
@@ -104,8 +106,10 @@ static void environment(char *out, size_t cap)
         json_quote(root, q, sizeof(q)) < 0) { fail(out, cap, "CONFIG", "Invalid workspace encoding.", 0); return; }
     snprintf(out, cap, "{\"status\":\"ok\",\"os\":\"classic Mac OS\",\"system_version_hex\":\"%04lx\","
         "\"architecture\":\"PowerPC\",\"workspace\":%s,\"paths\":\"relative colon-separated\","
-        "\"encoding\":\"MacRoman data fork to UTF-8\",\"read_only\":true,\"free_heap_bytes\":%ld,"
-        "\"tools\":[\"get_environment\",\"list_files\",\"read_text\"],\"build_supported\":false,\"launch_supported\":false}", system, q, (long)FreeMem());
+        "\"encoding\":\"MacRoman data fork to UTF-8\",\"read_only\":false,\"free_heap_bytes\":%ld,"
+        "\"tools\":[\"get_environment\",\"list_files\",\"read_text\",\"write_text\"],"
+        "\"write_policy\":\"create_only_existing_parent\",\"write_max_bytes\":4096,"
+        "\"build_supported\":false,\"launch_supported\":false}", system, q, (long)FreeMem());
 }
 static void list(const char *s, const JsonToken *tokens, char *out, size_t cap)
 {
@@ -236,17 +240,159 @@ static void read(const char *s, const JsonToken *tokens, char *out, size_t cap)
     if (append(out, cap, &at, header)) fail(out, cap, "LIMIT", "Text result exceeds output capacity.", 0);
 
 }
-void tools_execute(const AgentCall *call, char *out, size_t cap)
+/* Resolve each existing ancestor by directory ID, never through an alias.
+ * Only fnfErr for the final leaf is a valid create destination. */
+static OSErr create_spec(const char *path, FSSpec *spec)
+{
+    char local[256], *part, *colon;
+    FSSpec parent;
+    CInfoPBRec pb;
+    Str255 name;
+    OSErr err;
+    long dir;
+    if (text_to_macroman_strict(path, local, sizeof(local)) < 0 || tools_validate_path(local, 0)) return paramErr;
+    err = spec_for("", 1, &parent);
+    if (!err) err = catalog(&parent, &pb);
+    if (err) return err == fnfErr ? dirNFErr : err;
+    if (!(pb.hFileInfo.ioFlAttrib & 16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000)) return paramErr;
+    dir = pb.dirInfo.ioDrDirID;
+    part = local;
+    while ((colon = strchr(part, ':')) != NULL) {
+        size_t n = (size_t)(colon - part);
+        name[0] = (unsigned char)n; memcpy(name + 1, part, n);
+        err = FSMakeFSSpec(parent.vRefNum, dir, name, spec);
+        if (!err) err = catalog(spec, &pb);
+        if (err) return err == fnfErr ? dirNFErr : err;
+        if (!(pb.hFileInfo.ioFlAttrib & 16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000)) return paramErr;
+        dir = pb.dirInfo.ioDrDirID; part = colon + 1;
+    }
+    name[0] = (unsigned char)strlen(part); memcpy(name + 1, part, name[0]);
+    return FSMakeFSSpec(parent.vRefNum, dir, name, spec);
+}
+static int mutation_result(char *out, size_t cap, const char *status, const char *code,
+                           const char *path, const char *temporary, long bytes,
+                           const char *revision, int native)
+{
+    char qp[1100], qt[1100];
+    int n;
+    if (json_quote(path, qp, sizeof(qp)) < 0 || json_quote(temporary, qt, sizeof(qt)) < 0) return -1;
+    n = snprintf(out, cap, "{\"status\":\"%s\",\"code\":\"%s\",\"path\":%s,\"temporary_path\":%s,"
+        "\"data_bytes\":%ld,\"encoding\":\"MacRoman\",\"line_endings\":\"CR\",\"finder_type\":\"TEXT\","
+        "\"revision\":\"%s\",\"os_error\":%d}", status, code, qp, qt, bytes, revision, native);
+    return n < 0 || (size_t)n >= cap ? -1 : 0;
+}
+static int write_text(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap,
+                      AgentJournal journal, void *context)
+{
+    static char utf8[AGENT_ARGUMENT_CAP], bytes[4097], observed[4097];
+    char path[512], temporary[768], tempname[32], revision[80] = "", record[AGENT_RESULT_CAP];
+    char call_id[800], envelope[AGENT_RESULT_CAP + 900];
+    FSSpec target, stage;
+    CInfoPBRec pb;
+    OSErr err, closed;
+    short ref;
+    int length, attempt;
+    long count;
+    size_t i, prefix;
+    unsigned long hash = 2166136261UL;
+    if (valid_keys(call->arguments, tokens, "|path||text|") ||
+        string_arg(call->arguments, tokens, "path", path, sizeof(path)) < 0 ||
+        string_arg(call->arguments, tokens, "text", utf8, sizeof(utf8)) < 0) {
+        fail(out, cap, "ARGUMENTS", "Expected only path and text strings.", 0); return 0;
+    }
+    length = text_to_macroman_strict(utf8, bytes, sizeof(bytes));
+    if (length < 0) { fail(out, cap, "ENCODING_LIMIT", "Text must be representable in MacRoman and at most 4096 encoded bytes.", 0); return 0; }
+    for (i = 0; i < (size_t)length; i++) {
+        unsigned char c = (unsigned char)bytes[i];
+        if ((c < 32 && c != 9 && c != 13) || c == 127) { fail(out, cap, "NOT_TEXT", "Binary control bytes are refused.", 0); return 0; }
+        hash = ((hash ^ c) * 16777619UL) & 0xffffffffUL;
+    }
+    err = create_spec(path, &target);
+    if (!err) { fail(out, cap, "EXISTS", "Destination exists; write_text never overwrites.", 0); return 0; }
+    if (err != fnfErr) { fail(out, cap, "PATH", "Use a relative workspace file path with existing non-alias parent folders.", err); return 0; }
+    if (!journal) { fail(out, cap, "JOURNAL", "Creating text requires a durable session journal.", 0); return 1; }
+    if (json_quote(call->id, call_id, sizeof(call_id)) < 0) { fail(out, cap, "JOURNAL", "Cannot encode call identity.", 0); return 1; }
+    prefix = strrchr(path, ':') ? (size_t)(strrchr(path, ':') - path + 1) : 0;
+    for (attempt = 0; attempt < 100; attempt++) {
+        extern unsigned long TickCount(void);
+        snprintf(tempname, sizeof(tempname), "Sherclawk tmp %08lx %02x", (unsigned long)TickCount() & 0xffffffffUL, attempt);
+        stage = target; stage.name[0] = (unsigned char)strlen(tempname); memcpy(stage.name + 1, tempname, stage.name[0]);
+        err = catalog(&stage, &pb);
+        if (!err) continue;
+        if (err != fnfErr) { fail(out, cap, "STAGE", "Cannot inspect temporary destination.", err); return 0; }
+        snprintf(temporary, sizeof(temporary), "%.*s%s", (int)prefix, path, tempname);
+        snprintf(revision, sizeof(revision), "00000000-%08lx-%08lx", (unsigned long)length, hash);
+        if (mutation_result(record, sizeof(record), "pending", "CREATE_ONLY", path, temporary, length, revision, 0)) {
+            fail(out, cap, "LIMIT", "Cannot encode recovery paths; no file created.", 0); return 0;
+        }
+        snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
+        if (journal(context, "mutation_intent", envelope)) { fail(out, cap, "JOURNAL", "Cannot record mutation intent; no file created.", 0); return 1; }
+        err = FSpCreate(&stage, 'ttxt', 'TEXT', smSystemScript);
+        if (err == dupFNErr) continue;
+        break;
+    }
+    if (attempt == 100) { fail(out, cap, "STAGE", "Temporary name collisions; no destination created.", 0); return 0; }
+    if (err) goto failed;
+    err = FSpOpenDF(&stage, fsWrPerm, &ref);
+    if (err) goto failed;
+    count = length; err = FSWrite(ref, &count, bytes); closed = FSClose(ref);
+    if (!err && count != length) err = ioErr;
+    if (!err) err = closed;
+    if (err) goto failed;
+    err = FlushVol(NULL, stage.vRefNum); if (err) goto failed;
+    err = catalog(&stage, &pb);
+    if (!err && (pb.hFileInfo.ioFlLgLen != length || pb.hFileInfo.ioFlRLgLen || pb.hFileInfo.ioFlFndrInfo.fdType != 'TEXT')) err = ioErr;
+    if (err) goto failed;
+    err = FSpOpenDF(&stage, fsRdPerm, &ref); if (err) goto failed;
+    count = length; err = FSRead(ref, &count, observed); closed = FSClose(ref);
+    if (!err && (count != length || memcmp(bytes, observed, (size_t)length))) err = ioErr;
+    if (!err) err = closed;
+    if (err) goto failed;
+    snprintf(revision, sizeof(revision), "%08lx-%08lx-%08lx", (unsigned long)pb.hFileInfo.ioFlMdDat, (unsigned long)length, hash);
+    mutation_result(record, sizeof(record), "staged", "CREATE_ONLY", path, temporary, length, revision, 0);
+    snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
+    if (journal(context, "mutation_staged", envelope)) {
+        mutation_result(out, cap, "error", "JOURNAL_STAGE_RETAINED", path, temporary, length, revision, 0); return 1;
+    }
+    /* HFS/AFP rename refuses a colliding name, including a late race. */
+    err = FSpRename(&stage, target.name);
+    if (err == dupFNErr) {
+        mutation_result(out, cap, "error", "EXISTS_STAGE_RETAINED", path, temporary, length, revision, err); return 0;
+    }
+    if (err) goto uncertain;
+    err = FlushVol(NULL, target.vRefNum); if (err) goto uncertain;
+    err = catalog(&target, &pb); if (err) goto uncertain;
+    snprintf(revision, sizeof(revision), "%08lx-%08lx-%08lx", (unsigned long)pb.hFileInfo.ioFlMdDat, (unsigned long)length, hash);
+    mutation_result(out, cap, "ok", "CREATED", path, "", length, revision, 0);
+    snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, out);
+    if (journal(context, "mutation_committed", envelope)) {
+        mutation_result(out, cap, "uncertain", "JOURNAL_AFTER_PUBLISH", path, temporary, length, revision, 0); return 1;
+    }
+    return 0;
+failed:
+    mutation_result(out, cap, "error", "STAGE_FAILED_INSPECT_TEMP", path, temporary, length, revision, err);
+    return 0;
+uncertain:
+    mutation_result(out, cap, "uncertain", "PUBLISH_INSPECT_PATHS", path, temporary, length, revision, err);
+    return 1;
+}
+int tools_execute_recorded(const AgentCall *call, char *out, size_t cap, AgentJournal journal, void *context)
 {
     JsonToken tokens[128];
-    if (cap < AGENT_RESULT_CAP) { if (cap) out[0] = 0; return; }
+    if (cap < AGENT_RESULT_CAP) { if (cap) out[0] = 0; return 1; }
     if (json_parse(call->arguments, strlen(call->arguments), tokens, 128) < 1 || tokens[0].type != JSON_OBJECT) {
-        fail(out, cap, "ARGUMENTS", "Tool arguments must be a bounded JSON object.", 0); return;
+        fail(out, cap, "ARGUMENTS", "Tool arguments must be a bounded JSON object.", 0); return 0;
     }
     if (!strcmp(call->name, "get_environment")) {
         if (tokens[0].next != 1) fail(out, cap, "ARGUMENTS", "get_environment takes no arguments.", 0);
         else environment(out, cap);
     } else if (!strcmp(call->name, "list_files")) list(call->arguments, tokens, out, cap);
     else if (!strcmp(call->name, "read_text")) read(call->arguments, tokens, out, cap);
+    else if (!strcmp(call->name, "write_text")) return write_text(call, tokens, out, cap, journal, context);
     else fail(out, cap, "UNKNOWN_TOOL", "This tool is not installed.", 0);
+    return 0;
+}
+void tools_execute(const AgentCall *call, char *out, size_t cap)
+{
+    (void)tools_execute_recorded(call, out, cap, NULL, NULL);
 }

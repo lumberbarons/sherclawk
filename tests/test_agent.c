@@ -23,17 +23,20 @@ static void begin(void)
     agent_reset(&a, journal, NULL);
     assert(!agent_begin(&a, "Inspect my files", error, sizeof(error)));
 }
-static void call(const char *finish)
+static void named_call(const char *finish, const char *name, const char *arguments)
 {
-    snprintf(response, sizeof(response), "{\"choices\":[{\"finish_reason\":\"%s\",\"message\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"get_environment\",\"arguments\":\"{}\"}}]}}]}", finish);
+    char quoted[2048];
+    assert(json_quote(arguments, quoted, sizeof(quoted)) > 0);
+    snprintf(response, sizeof(response), "{\"choices\":[{\"finish_reason\":\"%s\",\"message\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"%s\",\"arguments\":%s}}]}}]}", finish, name, quoted);
 }
+static void call(const char *finish) { named_call(finish, "get_environment", "{}"); }
 int main(void)
 {
     const char *final = "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Inspected.\"}}]}";
     size_t used, i;
     begin();
     assert(agent_request(&a, "model", req, sizeof(req)) > 0);
-    assert(strstr(req, "\"tools\"") && strstr(req, "\"role\":\"system\""));
+    assert(strstr(req, "\"tools\"") && strstr(req, "\"role\":\"system\"") && strstr(req, "write_text"));
     call("tool_calls");
     assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
     assert(a.count == 1 && !a.next && a.active && records == 2);
@@ -68,6 +71,15 @@ int main(void)
         assert(agent_response(&a, response, i, 200, error, sizeof(error)) == -1);
         assert(a.messages == 1 && a.count == 0);
     }
+    /* A truncated mutation is rejected; Stop pairs an unexecuted write with
+     * an interrupted result instead of sending it to the executor. */
+    begin(); named_call("length", "write_text", "{\"path\":\"new.c\",\"text\":\"source\"}");
+    assert(agent_response(&a, response, strlen(response), 200, error, sizeof(error)) == -1 && !a.count);
+    named_call("tool_calls", "write_text", "{\"path\":\"new.c\",\"text\":\"source\"}");
+    assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
+    assert(!strcmp(a.calls[0].name, "write_text") && !agent_stop(&a, "Stop before create"));
+    assert(a.next == a.count && strstr(a.history, "interrupted") && !a.active);
+    begin(); call("tool_calls");
     a.used = sizeof(a.history) - 10;
     assert(agent_response(&a, response, strlen(response), 200, error, sizeof(error)) == -1);
     assert(text_to_macroman_strict("\xf0\x9f\xa6\x80", req, sizeof(req)) == -1);
