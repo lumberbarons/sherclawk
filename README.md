@@ -273,3 +273,26 @@ the source stayed unchanged, both backups remained intact, and the parsed
 session retained the completed calls without a subsequent mutation.
 Injected failure paths were tested on the host model, not by damaging the
 live guest volume.
+
+Search verification, October 2, 2026: text tools v2 built and was published
+fork-aware. ASan/UBSan checks passed for recursive/nonrecursive discovery,
+CR/CRLF line numbers, pagination, overlapping and scan-boundary matches,
+MacRoman queries, resource/binary/alias refusal, malformed/overflowed cursors,
+empty initial cursors, duplicate arguments and read-close errors. Agent checks
+advertise search and pair a stopped pending search with an interrupted result.
+The OS 9.2.2 native `SherclawkSearchCheck` diagnostic reported
+`RESULT failures=0` for recursive discovery, continuation, MacRoman search
+and a search/read/guarded-edit/read cycle with a preserved backup.
+The final main app displayed `Text tools: v2`; its `openai/gpt-6-luna`
+conversation called `search_text` with an empty initial cursor, found
+`silver lobster` in `Sherclawk Search 0013438b:Sources:hello.c` on line 2,
+read the source and returned the correct final answer. Both tool calls/results
+paired in the parsed `s00135466.jsonl` session. Earlier testing exposed the
+empty-cursor compatibility issue; the final build accepts it as a new search.
+
+Share cleanup retained the active app, lifecycle log and session journals.
+Completed v1 and v2 diagnostics, sidecars and source/backup fixtures were moved
+by same-volume rename into `Retro68:Spikes:Text tools v1 2026-10-02:` and
+`Retro68:Spikes:Text tools v2 2026-10-02:`. Archive manifests record the old
+root locations; saved recovery/session paths refer to those original locations.
+No AFP service restart was needed.
