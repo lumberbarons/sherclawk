@@ -1,4 +1,4 @@
-# Sherclawk — native OS 9 tools, starting from HelloChat
+# Sherclawk — The consulting crustacean
 
 An independent source copy of HelloChat. The original `../hello-chat/` remains
 unchanged. Sherclawk adds a native, sequential agent loop over direct OpenRouter

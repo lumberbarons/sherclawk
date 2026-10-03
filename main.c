@@ -440,7 +440,7 @@ static void DrawChrome(void)
                 UnlockPixels(pixels);
             }
         }
-        MoveTo(10, 253); PStr(title, "Your OS 9 detective"); DrawString(title);
+        MoveTo(10, 253); PStr(title, "The consulting crustacean"); DrawString(title);
         MoveTo(10, 266); PStr(title, "Text tools: v1"); DrawString(title);
     }
     DrawLabel(&gResponseLabelRect, "Conversation:");
