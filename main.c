@@ -63,6 +63,8 @@ static TEHandle      gFocusedTE = NULL;
 
 static Rect gModelLabelRect, gModelRect, gSendRect;
 static Rect gStatusLabelRect, gStatusRect;
+static Rect gHistoryRect;
+static size_t gDisplayedHistory = (size_t)-1;
 static Rect gResponseLabelRect, gResponseRect, gResponseViewRect;
 
 static MenuHandle gAppleMenu = NULL;
@@ -413,6 +415,7 @@ static void ComputeLayout(void)
     SetRect(&gModelRect, 54, 10, 590, 30);
     SetRect(&gStatusLabelRect, 10, 38, 56, 54);
     SetRect(&gStatusRect, 60, 38, 590, 54);
+    SetRect(&gHistoryRect, 10, 254, 166, 270);
     SetRect(&gResponseLabelRect, 174, 62, 340, 78);
     SetRect(&gResponseRect, 174, 82, 590, 270);
     gResponseViewRect = gResponseRect; gResponseViewRect.right -= kScrollW;
@@ -439,17 +442,25 @@ static void DrawChrome(void)
 
     {
         Rect art = { 82, 10, 238, 166 };
+        Rect destination = { 96, 10, 252, 166 };
         Str255 title;
+        char history[80];
         PStr(title, "Sherclawk"); MoveTo(10, 74); TextFace(bold); DrawString(title); TextFace(normal);
+        MoveTo(10, 87); PStr(title, "The consulting crustacean"); DrawString(title);
         if (gArt) {
             PixMapHandle pixels = GetGWorldPixMap(gArt);
             if (LockPixels(pixels)) {
-                CopyBits((BitMap *)*pixels, &gWindow->portBits, &art, &art, srcCopy, NULL);
+                CopyBits((BitMap *)*pixels, &gWindow->portBits, &art, &destination, srcCopy, NULL);
                 UnlockPixels(pixels);
             }
         }
-        MoveTo(10, 253); PStr(title, "The consulting crustacean"); DrawString(title);
-        MoveTo(10, 266); PStr(title, "Native builds: v2"); DrawString(title);
+        EraseRect(&gHistoryRect);
+        snprintf(history, sizeof(history), "History: %lu/%lu KiB (%lu%%)",
+            (unsigned long)((gAgent.used + 1023) / 1024),
+            (unsigned long)(AGENT_HISTORY_CAP / 1024),
+            (unsigned long)(gAgent.used * 100 / AGENT_HISTORY_CAP));
+        DrawLabel(&gHistoryRect, history);
+        gDisplayedHistory = gAgent.used;
     }
     DrawLabel(&gResponseLabelRect, "Conversation:");
     FrameRect(&gResponseRect);
@@ -912,11 +923,20 @@ static void AbortChat(const char *reason)
     gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
     ShowMessage("Stopped", reason); LogLine("Agent stopped; completed records retained.");
 }
+static void PauseRunAtLimit(void)
+{
+    char reason[256];
+    snprintf(reason, sizeof(reason),
+        "Run paused after %d model rounds and %d tools. History is %lu%% full. Send Continue to resume.",
+        gAgent.rounds, gAgent.tool_count,
+        (unsigned long)(gAgent.used * 100 / AGENT_HISTORY_CAP));
+    AbortChat(reason);
+}
 static int StartModelRequest(void)
 {
     int length;
     if (gAgent.rounds >= AGENT_TURN_MAX || gAgent.tool_count >= AGENT_TOOL_MAX) {
-        AbortChat("Run limit reached. Completed results retained."); return -1;
+        PauseRunAtLimit(); return -1;
     }
     length = agent_request(&gAgent, gRunModel, gJSON, sizeof(gJSON));
     if (length < 0) { AbortChat("Request limit reached. Start a new session."); return -1; }
@@ -969,7 +989,7 @@ static void DriveChatStep(void)
     if (gSending == 2) {
         AgentCall *call;
         if (gAgent.next == gAgent.count) { gSending = 3; return; }
-        if (gAgent.tool_count >= AGENT_TOOL_MAX) { AbortChat("Tool limit reached."); return; }
+        if (gAgent.tool_count >= AGENT_TOOL_MAX) { PauseRunAtLimit(); return; }
         call = &gAgent.calls[gAgent.next];
         SetStatus("Running %s (%d/%d)...", call->name, gAgent.next + 1, gAgent.count);
         {
@@ -1043,6 +1063,9 @@ int main(void)
         WaitNextEvent(everyEvent, &event, gSending ? 1 : 10, NULL);
         SetPort(gWindow); HandleEvent(&event);
         if (gSending) DriveChatStep();
+        /* History changes during sends, tool results, New Chat and handoff.
+         * Keep its indicator current even when the ordinary status is unchanged. */
+        if (gDisplayedHistory != gAgent.used) InvalRect(&gHistoryRect);
     }
     if (gNet.ctx || gOTOpen) CloseChatContext();
     if (gAgent.active) AbortChat("Application quit.");

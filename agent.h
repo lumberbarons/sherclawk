@@ -8,8 +8,8 @@
 #define AGENT_CALL_MAX 4
 #define AGENT_ARGUMENT_CAP 8192
 #define AGENT_TEXT_CAP 16384
-#define AGENT_TURN_MAX 16
-#define AGENT_TOOL_MAX 32
+#define AGENT_TURN_MAX 32
+#define AGENT_TOOL_MAX 64
 
 typedef struct { char id[128], name[64], arguments[AGENT_ARGUMENT_CAP]; } AgentCall;
 typedef int (*AgentJournal)(void *context, const char *event, const char *json);

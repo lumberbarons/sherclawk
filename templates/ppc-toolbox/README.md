@@ -4,11 +4,14 @@ MrC → PPCLink → Rez, executed by MacRelix and MPW ToolServer on OS 9.2.2.
 The model can change `main.c` and `app.r`; the recipe supplies startup
 libraries, the PEF executable, `cfrg`, a 1 MiB `SIZE` resource and Finder
 `APPL/SHTP` metadata. The app redraws on updates, yields with `WaitNextEvent`,
-and quits on a content click or Command-Q.
+and quits on a content click, a confirmed close-box click, or Command-Q.
+Keep the `inGoAway`/`TrackGoAway` branch when replacing the content-click
+behavior with application interactions; releasing outside the close box
+cancels the close.
 
 | File | Purpose |
 |---|---|
-| `main.c`, `app.r` | Toolbox application and resources |
+| `main.c`, `app.r` | Toolbox application with close-box/Command-Q handling and resources |
 | `build-native.sh` | Native recipe with a fresh directory per attempt |
 | `capture-toolchain.sh` | Installed compiler, linker, Rez, ToolServer and SDK capture |
 | `VERIFIED.md` | Exact tested installation and guest acceptance results |

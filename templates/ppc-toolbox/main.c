@@ -1,5 +1,6 @@
 /* MrC Toolbox baseline: C89 plus Apple's Pascal-string extension.
- * Keep update drawing and cooperative event handling when changing behavior.
+ * Keep update drawing, close-box handling and cooperative event handling
+ * when changing behavior. TrackGoAway confirms release inside the close box.
  */
 #include <Types.h>
 #include <Quickdraw.h>
@@ -42,12 +43,17 @@ int main(void)
             MoveTo(16, 44);
             DrawString("\pBuilt natively with MrC, PPCLink and Rez.");
             MoveTo(16, 70);
-            DrawString("\pClick this window or press Command-Q to quit.");
+            DrawString("\pClick window/close box or Command-Q to quit.");
             EndUpdate(window);
         } else if (event.what == mouseDown) {
             WindowPtr hit;
-            if (FindWindow(event.where, &hit) == inContent && hit == window)
-                done = 1;
+            short part = FindWindow(event.where, &hit);
+            if (hit == window) {
+                if (part == inGoAway && TrackGoAway(window, event.where))
+                    done = 1;
+                else if (part == inContent)
+                    done = 1;
+            }
         } else if (event.what == keyDown && (event.modifiers & cmdKey) &&
                    (event.message & charCodeMask) == 'q') {
             done = 1;

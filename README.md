@@ -260,6 +260,14 @@ synchronous edit already executing.
 
 ## Controls, limits and sessions
 
+The sidebar places the subtitle below Sherclawk's title and shows current
+model-history usage below the artwork as used/capacity KiB and a percentage.
+Usage updates during runs and resets with New Chat or a successful handoff.
+
+New `ppc-toolbox-v1` projects include confirmed close-box handling as well
+as Command-Q. Preserve these event branches when adding application behavior;
+existing projects are not changed by updating the embedded template.
+
 Send or Command-Return starts a run. The model is fixed for that run. The app
 services events while waiting, executes calls sequentially, displays tool
 results, and requests another model response until it gets a final answer.
@@ -290,7 +298,7 @@ current sources and uncertain mutations still need inspection before acting.
 Full-journal reloading remains unimplemented; to resume after quitting, ask a
 new chat to read the saved Markdown path displayed when it was created.
 
-Limits are explicit: 16 model rounds, 32 executed calls per run, four calls per
+Limits are explicit: 32 model rounds, 64 executed calls per run, four calls per
 response, 8 KiB arguments per call, 256 KiB history, 288 KiB JSON request, 64 KiB
 raw HTTP response, and 3,072 output tokens. Each HTTPS request has a 120-second
 deadline. Tool output is below 1,536 bytes; folder listings have cursors and
@@ -298,6 +306,9 @@ text reads provide `next_byte` continuation when a line is partial. Reads scan
 at most 8 KiB per invocation. Whole-file revisions guard small-file edits;
 larger-file scan revisions are observational.
 Token-truncated tool calls never execute. There is no automatic network retry.
+Reaching a run limit pauses with the model-round and tool counts, history usage
+percentage, and a reminder to send Continue. Sending another message resets
+the run counters while retaining conversation history; handoff is not required.
 
 History buffers are static: the app allocates their full capacity at launch,
 not incrementally as messages arrive. With handoff enabled, each additional
@@ -326,7 +337,7 @@ model history is not silently dropped.
 
 | Path | Purpose |
 |---|---|
-| `main.c`, `hello.r` | Toolbox UI, character artwork, session journal, cooperative scheduling |
+| `main.c`, `hello.r` | Toolbox UI, character artwork, live history indicator, session journal, cooperative scheduling |
 | `agent.c`, `agent.h` | Typed provider history, tool-call/result pairing, bounds and Stop |
 | `tools.c`, `tools.h` | Native environment/catalog/text executors, journaled creates and guarded exact edits |
 | `json.c`, `text.c`, `network.c`, `chat.c` | Copied protocol/transport/display foundation and baseline checks |
