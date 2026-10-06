@@ -86,11 +86,15 @@ static char gPending[CHAT_PROMPT_CAP * 3];
 static char gJSON[CHAT_REQUEST_CAP];
 static char gToolResult[AGENT_RESULT_CAP];
 static int gSending = 0, gOTOpen = 0;
+static int gHandoff = 0;
+static Agent gHandoffCandidate;
+static char gHandoffSummary[8192], gHandoffPath[256];
 static uint32_t gStartTicks;
 static void FocusSet(TEHandle te);
 static void SendChat(void);
 static void AbortChat(const char *reason);
 static void NewChat(void);
+static void StartHandoff(void);
 
 /* ── Small helpers ────────────────────────────────────────────────── */
 
@@ -141,6 +145,8 @@ static void SetSendEnabled(int enabled)
     if (gFileMenu) {
         if (enabled) EnableItem(gFileMenu, 1);
         else DisableItem(gFileMenu, 1);
+        if (enabled) EnableItem(gFileMenu, 2);
+        else DisableItem(gFileMenu, 2);
     }
     if (gStopBtn) HiliteControl(gStopBtn, enabled ? 255 : 0);
     if (!enabled && gFocusedTE != gResponseTE) FocusSet(gResponseTE);
@@ -355,7 +361,8 @@ static int HandleMenu(long menuChoice)
     switch (menuID) {
     case kFileMenuID:
         if (item == 1) NewChat();
-        if (item == 3) return 1;   /* Quit */
+        if (item == 2) StartHandoff();
+        if (item == 4) return 1;   /* Quit */
         break;
 
     case kAppleMenuID:
@@ -714,7 +721,9 @@ static void SessionClose(void)
 {
     if (gSessionOpen) { FSClose(gSessionRef); FlushVol(NULL, 0); gSessionOpen = 0; }
 }
-static int SessionStart(void)
+/* Create a candidate journal without closing the current one. Handoff
+ * failures must leave the original history and its recording sink intact. */
+static int SessionCreate(char *out_path, size_t cap, short *out_ref)
 {
     Str255 path;
     FSSpec spec;
@@ -722,35 +731,44 @@ static int SessionStart(void)
     OSErr err;
     int attempt;
     char folder[256];
-    SessionClose();
     snprintf(folder, sizeof(folder), "%sSherclawk Sessions:", SHERCLAWK_WORKSPACE);
     PStr(path, folder);
     err = FSMakeFSSpec(0, 0, path, &spec);
     if (err == fnfErr) err = FSpDirCreate(&spec, smSystemScript, &dir);
     if (err != noErr && err != dupFNErr) return -1;
     for (attempt = 0; attempt < 100; attempt++) {
-        snprintf(gSessionPath, sizeof(gSessionPath), "%ss%08lx.jsonl", folder,
-                 ((unsigned long)TickCount() + (unsigned long)attempt) & 0xffffffffUL);
-        PStr(path, gSessionPath);
+        if (snprintf(out_path, cap, "%ss%08lx.jsonl", folder,
+                 ((unsigned long)TickCount() + (unsigned long)attempt) & 0xffffffffUL) >= (int)cap) return -1;
+        PStr(path, out_path);
         err = FSMakeFSSpec(0, 0, path, &spec);
         if (err == noErr) continue;
         if (err != fnfErr || FSpCreate(&spec, 'ShCk', 'TEXT', smSystemScript) != noErr) return -1;
-        if (FSpOpenDF(&spec, fsWrPerm, &gSessionRef)) return -1;
-        gSessionOpen = 1; return 0;
+        if (FSpOpenDF(&spec, fsWrPerm, out_ref)) return -1;
+        return 0;
     }
     return -1;
 }
-static int SessionWrite(const char *text)
+static int SessionStart(void)
+{
+    short ref;
+    char path[256];
+    if (SessionCreate(path, sizeof(path), &ref)) return -1;
+    SessionClose();
+    gSessionRef = ref; gSessionOpen = 1; strcpy(gSessionPath, path);
+    return 0;
+}
+static int SessionWrite(short ref, const char *text)
 {
     long length = (long)strlen(text), written = length;
-    return !gSessionOpen || FSWrite(gSessionRef, &written, text) != noErr || written != length ? -1 : 0;
+    return FSWrite(ref, &written, text) != noErr || written != length ? -1 : 0;
 }
 static int Journal(void *context, const char *event, const char *json)
 {
     char prefix[100];
-    (void)context;
+    short ref = context ? *(short *)context : gSessionRef;
+    if (!context && !gSessionOpen) return -1;
     snprintf(prefix, sizeof(prefix), "{\"event\":\"%s\",\"message\":", event);
-    if (SessionWrite(prefix) || SessionWrite(json) || SessionWrite("}\n") || FlushVol(NULL, 0) != noErr) return -1;
+    if (SessionWrite(ref, prefix) || SessionWrite(ref, json) || SessionWrite(ref, "}\n") || FlushVol(NULL, 0) != noErr) return -1;
     return 0;
 }
 static void ShowMessage(const char *label, const char *text)
@@ -786,8 +804,100 @@ static void NewChat(void)
     ResponseSetText("", 0); TESetText("", 0, gPromptTE); InvalRect(&gPromptRect);
     FocusSet(gPromptTE); SetStatus("Ready. What shall we investigate?");
 }
+/* Native Markdown is MacRoman/CR/TEXT so read_text can read it in later
+ * sessions. Never overwrite a handoff, and verify bytes after close/flush. */
+static int SaveHandoff(void)
+{
+    static char utf8[10000], bytes[4097], verified[4097];
+    char folder[256];
+    Str255 path;
+    FSSpec spec;
+    short ref;
+    long length, written, actual;
+    int attempt, n;
+    OSErr err, close_err;
+    n = snprintf(utf8, sizeof(utf8), "# Sherclawk handoff\n\nOriginal journal: %s\n"
+        "This is a model-generated summary. Verify current files and observed results.\n\n%s\n",
+        gSessionPath, gHandoffSummary);
+    if (n < 0 || (size_t)n >= sizeof(utf8) ||
+        (n = text_to_macroman_strict(utf8, bytes, sizeof(bytes))) < 0) return -1;
+    length = n;
+    snprintf(folder, sizeof(folder), "%sSherclawk Sessions:", SHERCLAWK_WORKSPACE);
+    for (attempt = 0; attempt < 100; attempt++) {
+        char candidate[256];
+        if (snprintf(candidate, sizeof(candidate), "%sh%08lx.md", folder,
+            ((unsigned long)TickCount() + (unsigned long)attempt) & 0xffffffffUL) >= (int)sizeof(candidate)) return -1;
+        PStr(path, candidate);
+        err = FSMakeFSSpec(0, 0, path, &spec);
+        if (err == noErr) continue;
+        if (err != fnfErr || FSpCreate(&spec, 'ShCk', 'TEXT', smSystemScript)) return -1;
+        strcpy(gHandoffPath, candidate); /* Retain/report even partial files. */
+        if (FSpOpenDF(&spec, fsWrPerm, &ref)) return -1;
+        written = length; err = FSWrite(ref, &written, bytes);
+        close_err = FSClose(ref);
+        if (err || written != length || close_err || FlushVol(NULL, 0)) return -1;
+        if (FSpOpenDF(&spec, fsRdPerm, &ref)) return -1;
+        err = GetEOF(ref, &actual);
+        written = length;
+        if (!err && actual == length) err = FSRead(ref, &written, verified);
+        close_err = FSClose(ref);
+        if (err || actual != length || written != length || close_err || memcmp(bytes, verified, (size_t)length)) return -1;
+        return 0;
+    }
+    return -1;
+}
+static int CommitHandoff(void)
+{
+    char path[256];
+    short ref;
+    if (SaveHandoff()) return -1;
+    if (SessionCreate(path, sizeof(path), &ref)) return -1;
+    agent_reset(&gHandoffCandidate, Journal, &ref);
+    if (agent_handoff_seed(&gHandoffCandidate, gHandoffSummary, gSessionPath, gHandoffPath)) {
+        FSClose(ref); return -1;
+    }
+    /* The old agent is untouched until both durable files exist. */
+    SessionClose();
+    gSessionRef = ref; gSessionOpen = 1; strcpy(gSessionPath, path);
+    gHandoffCandidate.journal_context = NULL;
+    gAgent = gHandoffCandidate;
+    return 0;
+}
+static void StartHandoff(void)
+{
+    int length;
+    size_t i;
+    if (gSending) return;
+    if (!gSessionOpen || !gAgent.messages || gAgent.active || gAgent.next < gAgent.count) {
+        SetStatus("Finish or stop the current run before saving a handoff."); return;
+    }
+    if (!SHERCLAWK_API_KEY[0] || TEGetTextInto(gModelTE, gRunModel, sizeof(gRunModel)) < 0 || !*gRunModel) {
+        SetStatus("A model and API key are needed for a handoff."); return;
+    }
+    for (i = 0; gRunModel[i]; i++) if ((unsigned char)gRunModel[i] <= 32 || (unsigned char)gRunModel[i] >= 127) {
+        SetStatus("Use an OpenRouter model ID without spaces."); return;
+    }
+    length = agent_handoff_request(&gAgent, gRunModel, gJSON, sizeof(gJSON));
+    if (length < 0) { SetStatus("Could not prepare handoff; conversation retained."); return; }
+    length = http_build_post("openrouter.ai", "/api/v1/chat/completions", SHERCLAWK_API_KEY,
+        gJSON, (size_t)length, gNet.request, sizeof(gNet.request));
+    if (length < 0) { SetStatus("Could not prepare handoff request; conversation retained."); return; }
+    gHandoffPath[0] = 0; gHandoff = 1;
+    InitOpenTransport(); gOTOpen = 1; gStartTicks = (uint32_t)TickCount(); gSending = 1;
+    SetSendEnabled(0);
+    if (network_start(&gNet, gNet.request, (size_t)length) < 0) { AbortChat(gNet.error); return; }
+    SetStatus("Summarizing for handoff; current conversation retained...");
+}
 static void AbortChat(const char *reason)
 {
+    if (gHandoff) {
+        if (gNet.ctx || gOTOpen) CloseChatContext();
+        gHandoff = 0; gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
+        ShowMessage("Handoff stopped; conversation retained", reason);
+        if (*gHandoffPath) ShowMessage("Retained handoff file (may be incomplete)", gHandoffPath);
+        SetStatus("Handoff stopped; conversation retained. %s", reason);
+        return;
+    }
     if (gSending == 4) {
         char error[256];
         build_project_step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), 1);
@@ -890,6 +1000,17 @@ static void DriveChatStep(void)
         else if (state == kMacTLS_Connected) SetStatus("Waiting for model (%s, %lu bytes)...", TLSVersionLabel(gNet.version), (unsigned long)gNet.received);
         return;
     }
+    if (gHandoff) {
+        if (agent_handoff_response(gNet.body, gNet.body_len, gNet.status, gHandoffSummary,
+            sizeof(gHandoffSummary), error, sizeof(error))) { AbortChat(error); return; }
+        CloseChatContext();
+        if (CommitHandoff()) { AbortChat("Could not save/verify handoff and new journal. History was not cleared."); return; }
+        gHandoff = 0; gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
+        ShowMessage("Saved handoff", gHandoffPath);
+        ShowMessage("Handoff summary", gHandoffSummary);
+        SetStatus("Handoff saved; fresh history is ready. Send a message to continue.");
+        return;
+    }
     if (agent_response(&gAgent, gNet.body, gNet.body_len, gNet.status, error, sizeof(error))) { AbortChat(error); return; }
     CloseChatContext();
     if (*gAgent.text) ShowMessage("Sherclawk", gAgent.text);
@@ -898,7 +1019,9 @@ static void DriveChatStep(void)
     } else {
         gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
         if (gAgent.limited) ShowMessage("Notice", "Reply incomplete: output token limit reached.");
-        SetStatus("Done - %d model rounds, %d tools. Session saved.", gAgent.rounds, gAgent.tool_count);
+        if (gAgent.used >= AGENT_HISTORY_CAP * 3 / 4)
+            SetStatus("History nearly full. File > Save Handoff & Continue (Command-H).");
+        else SetStatus("Done - %d model rounds, %d tools. Session saved.", gAgent.rounds, gAgent.tool_count);
         LogLine("Agent run completed.");
     }
 }

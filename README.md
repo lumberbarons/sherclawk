@@ -266,14 +266,52 @@ results, and requests another model response until it gets a final answer.
 Stop or Command-Period prevents new execution and records interrupted results
 for pending calls; completed results remain in history. New Chat starts a fresh session.
 
+**File > Save Handoff & Continue (Command-H)** summarizes a stopped or completed
+conversation with a separate, tool-free model request. This still works when
+history is full: the summary request never appends to the old history. The model
+produces a concise Markdown handoff covering goals and constraints, completed
+work and exact paths, observed verification, unresolved or uncertain operations,
+and next steps. Summary generation uses the selected model and the normal
+120-second HTTPS deadline. Stop cancels observation and retains the old history;
+there is no automatic retry or automatic compaction.
+
+The app saves a unique `hXXXXXXXX.md` in `Retro68:Sherclawk Sessions:` as
+MacRoman/CR plain `TEXT` (at most 4096 bytes), so later sessions can inspect it
+with `list_files` and `read_text`. It closes, flushes, and reads back the exact
+bytes before creating a new UTF-8 journal with the summary as its first user
+message. Only then does it replace model history. Truncated/tool-call responses,
+unsupported encoding, oversized summaries, and persistence failures leave the
+old history and journal intact. A partially created Markdown file is retained
+and reported; incomplete candidate journals remain in the sessions folder.
+Both the Markdown and seeded message name the original journal. The visible
+transcript and any unsent prompt remain available; send a message to continue.
+At 75% history usage, the status suggests saving a handoff. The summary is lossy:
+current sources and uncertain mutations still need inspection before acting.
+Full-journal reloading remains unimplemented; to resume after quitting, ask a
+new chat to read the saved Markdown path displayed when it was created.
+
 Limits are explicit: 16 model rounds, 32 executed calls per run, four calls per
-response, 8 KiB arguments per call, 64 KiB history, 96 KiB JSON request, 64 KiB
+response, 8 KiB arguments per call, 256 KiB history, 288 KiB JSON request, 64 KiB
 raw HTTP response, and 3,072 output tokens. Each HTTPS request has a 120-second
 deadline. Tool output is below 1,536 bytes; folder listings have cursors and
 text reads provide `next_byte` continuation when a line is partial. Reads scan
 at most 8 KiB per invocation. Whole-file revisions guard small-file edits;
 larger-file scan revisions are observational.
 Token-truncated tool calls never execute. There is no automatic network retry.
+
+History buffers are static: the app allocates their full capacity at launch,
+not incrementally as messages arrive. With handoff enabled, each additional
+history byte costs roughly four RAM bytes (current history, candidate history,
+JSON request, and HTTP request). Per-response scratch is bounded separately.
+The 256 KiB build has 2,330,176 bytes (2.22 MiB) of linked code/static data;
+this excludes dynamic TLS/UI allocations and the stack. Its `SIZE` resource
+still requests 8 MiB preferred / 4 MiB minimum. A 512 KiB history would raise
+that baseline to roughly 3.22 MiB, making the 4 MiB minimum tight; 1 MiB history
+would need roughly 5.22 MiB before dynamic allocations, and 2 MiB would exceed
+the current 8 MiB preferred allocation. Re-measure and raise `SIZE` before such
+increases. Larger histories also upload more bytes and consume more model input
+tokens on every round; byte capacity is not a guarantee of provider context
+capacity. The 30,001-byte TextEdit transcript remains independently bounded.
 
 Before execution, complete assistant responses and tool-start records are
 saved to unique UTF-8 JSON-lines files in `Retro68:Sherclawk Sessions:`.
@@ -297,6 +335,7 @@ model history is not silently dropped.
 | `tools/make-art.py` | Stdlib PNG decoder and native icon/window resource conversion |
 | `tools/netatalk_meta.py`, `tools/deploy-to-share.sh` | Fork-aware publication with the new Finder identity |
 | `tools/check.sh`, `tools/check-transport.sh` | ASan/UBSan protocol, loop, create/edit faults, revision/encoding and TLS I/O checks |
+| `tools/handoff-check.c` | Guest File Manager diagnostic: Markdown verification, new journal seed, distinct filenames and retention on encoding/size failures |
 | `tools/probe.c`, `tools/build-host-probe.sh` | Real model/tool/follow-up diagnostic on host and guest |
 | `tools/write-check.c` | Native create/read/collision, MacRoman/CR/TEXT and size-boundary diagnostic |
 | `tools/search-check.c` | Native recursive search, continuation, MacRoman and discovery/read/edit/read diagnostic |
@@ -318,6 +357,8 @@ model history is not silently dropped.
 ```bash
 sherclawk/tools/check.sh
 sherclawk/tools/check-transport.sh
+APP=SherclawkHandoffCheck sherclawk/tools/deploy-to-share.sh
+# Launch in OS 9; inspect Retro68:SherclawkHandoffCheck.log.
 APP=SherclawkProjectCheck sherclawk/tools/deploy-to-share.sh
 # Launch in OS 9; inspect Retro68:SherclawkProjectCheck.log.
 python3 sherclawk/tests/test_worker.py
@@ -351,6 +392,14 @@ provider protocol and transport. The guest probe uses actual native tools and a
 fixed `Sherclawk Fixture.txt`, plus path, binary-file, duplicate-argument and
 unknown-tool checks. Only fixed diagnostic conversations are printed. The write diagnostic preserves
 a unique fixture folder; its log includes flushed mutation recovery records.
+
+Recorded October 5, 2026: 256 KiB history / 288 KiB request PowerPC build and
+ASan/UBSan checks passed, including a near-full history handoff request and
+refusal of truncated/tool-call summaries and failed seed persistence. The
+OS 9 handoff diagnostic reported zero failures: exact Markdown read-back,
+new-journal seeding, distinct filenames, and retention on encoding/size failures.
+A live `openai/gpt-6-luna` conversation was summarized using Command-H, saved
+as native Markdown, and continued from the seeded history.
 
 Recorded October 2, 2026: PowerPC build passed; ASan/UBSan baseline, agent-loop
 and TLS application-I/O checks passed. Live host and OS 9.2.2 probes both called

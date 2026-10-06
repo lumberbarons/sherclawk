@@ -46,6 +46,7 @@ resource 'MENU' (128, "Apple") {
 resource 'MENU' (129, "File") {
     129, textMenuProc, allEnabled, enabled, "File", {
         "New Chat", noIcon, "N", noMark, plain;
+        "Save Handoff & Continue", noIcon, "H", noMark, plain;
         "-", noIcon, noKey, noMark, plain;
         "Quit", noIcon, "Q", noMark, plain;
     }
