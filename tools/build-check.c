@@ -1,6 +1,9 @@
 /* Exercise the real build tool through native File Manager snapshots and the
  * MacRelix worker. Keeps a fresh independent project and repaired build IDs. */
 #include "build_project.h"
+#ifdef RUN_CHECK
+#include "run_application.h"
+#endif
 #include "config.h"
 #include "json.h"
 #include <Quickdraw.h>
@@ -57,13 +60,32 @@ static int build(WindowPtr window,int success)
     }
     fprintf(logfile,"BUILD %s\n",result); fflush(logfile);
     if(r || (success ? !strstr(result,"\"status\":\"ok\"") : !strstr(result,"\"exit\":1")))failures++;
+#ifdef RUN_CHECK
+    if(!r) {
+        JsonToken t[128]; char id[25]; int launched;
+        if(json_parse(result,strlen(result),t,128)<1 || json_string(result,t,json_member(result,t,0,"build_id"),id,sizeof(id))<0) {failures++;return 1;}
+        snprintf(call.arguments,sizeof(call.arguments),"{\"build_id\":\"%s\"}",id);
+        launched=run_application_begin(&call,result,sizeof(result),journal,NULL,(uint32_t)TickCount());
+        while(launched==2) {
+            WaitNextEvent(everyEvent,&event,1,NULL);
+            launched=run_application_step(result,sizeof(result),(uint32_t)TickCount(),0);
+        }
+        fprintf(logfile,"RUN %s\n",result);fflush(logfile);
+        if(success ? launched || !strstr(result,"LAUNCHED") : launched || !strstr(result,"BUILD_NOT_AUTHORIZED"))failures++;
+    }
+#endif
     return r;
 }
 int main(void)
 {
     char args[512],revision[80]; JsonToken t[64]; WindowPtr window; Rect bounds;
     InitGraf(&qd.thePort); InitFonts(); InitWindows(); InitMenus(); TEInit(); InitDialogs(NULL); InitCursor();
-    logfile=fopen(SHERCLAWK_WORKSPACE "SherclawkBuildCheck.log","w"); if(!logfile)return 1;
+    #ifdef RUN_CHECK
+    logfile=fopen(SHERCLAWK_WORKSPACE "SherclawkRunCheck.log","w");
+#else
+    logfile=fopen(SHERCLAWK_WORKSPACE "SherclawkBuildCheck.log","w");
+#endif
+    if(!logfile)return 1;
     snprintf(folder,sizeof(folder),"BuildCheck%08lx",(unsigned long)TickCount());
     snprintf(args,sizeof(args),"{\"path\":\"%s\"}",folder); invoke("create_folder",args);
     write_file("project.json","{\"protocol\":2,\"toolchain\":\"mpw-ppc-v2\",\"sources\":[\"main.c\",\"extra.c\"],\"resources\":[\"app.r\"],\"headers\":[\"shared.h\"],\"include_paths\":[\".\"],\"output\":\"independent\"}\n");

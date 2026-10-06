@@ -43,9 +43,9 @@ immutable snapshot with source revisions. Report unsupported settings or missing
 inputs explicitly. Return bounded compiler diagnostics and a build ID, preserving
 log continuation and uncertain outcomes from the native job protocol.
 
-`run_application(build_id)` will resolve only an artifact recorded for that
-successful build and its snapshot. It will assign a separate run ID for runtime
-observations and smoke-test results. A failed, uncertain or partial build cannot
+`run_application(build_id)` resolves only an artifact recorded for that
+successful build and its snapshot. It assigns a separate run ID for a native process
+observation. Functional smoke-test results remain separate. A failed, uncertain or partial build cannot
 authorize launch. Later source edits do not turn an older artifact into a build
 of those edits; report the snapshot associated with the launched build.
 
@@ -100,9 +100,11 @@ This establishes flexibility before adding more application-specific fixtures.
 4. Template-backed `create_project` is implemented: verified C/Rez source and a
    versioned descriptor published by one journaled, create-only folder rename.
    `build_project(path)` implements flexible protocol-2 descriptors and native
-   compilation. Native `run_application(build_id)` remains next. Verify both
+   compilation. Native `run_application(build_id)` is implemented with persisted fork
+   fingerprints, cooperative verification, journaled run IDs and exact artifact
+   Process Manager observations. Verify both
    starter-created and independently assembled projects with multiple sources,
-   configurable outputs and revision-bound artifact tracking.
+   configurable outputs and revision-bound artifact tracking. Functional smoke testing remains next.
 5. Counter application acceptance task, compiler-error repair, then a file
    transformer and drawing application. Validate logic automatically and
    appearance manually. Add stronger recovery and context compaction later.

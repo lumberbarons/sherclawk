@@ -25,6 +25,7 @@
 #include "json.h"
 #include "tools.h"
 #include "build_project.h"
+#include "run_application.h"
 #include <QDOffscreen.h>
 #include <Resources.h>
 #include "text.h"
@@ -909,11 +910,12 @@ static void AbortChat(const char *reason)
         SetStatus("Handoff stopped; conversation retained. %s", reason);
         return;
     }
-    if (gSending == 4) {
+    if (gSending == 4 || gSending == 5) {
         char error[256];
-        build_project_step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), 1);
+        if(gSending==5) run_application_step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), 1);
+        else build_project_step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), 1);
         agent_tool_result(&gAgent, gToolResult, error, sizeof(error));
-        ShowMessage("build_project", gToolResult);
+        ShowMessage(gSending==5 ? "run_application" : "build_project", gToolResult);
     }
     if (gNet.ctx || gOTOpen) CloseChatContext();
     if (agent_stop(&gAgent, reason)) {
@@ -977,13 +979,14 @@ static void DriveChatStep(void)
     int result;
     if (!gSending) return;
     if (gSending == 3) { StartModelRequest(); return; }
-    if (gSending == 4) {
-        result = build_project_step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), 0);
+    if (gSending == 4 || gSending == 5) {
+        int running=gSending==5;
+        result = running ? run_application_step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), 0) : build_project_step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), 0);
         if (result == 2) return;
         gSending = 2;
         if (agent_tool_result(&gAgent, gToolResult, error, sizeof(error))) { AbortChat(error); return; }
-        ShowMessage("build_project", gToolResult);
-        if (result) AbortChat("Build observation stopped. Inspect retained snapshot and logs before another build.");
+        ShowMessage(running ? "run_application" : "build_project", gToolResult);
+        if (result) AbortChat(running ? "Launch outcome uncertain. Inspect the run journal; do not retry automatically." : "Build observation stopped. Inspect retained snapshot and logs before another build.");
         return;
     }
     if (gSending == 2) {
@@ -1003,6 +1006,9 @@ static void DriveChatStep(void)
         if (!strcmp(call->name, "build_project")) {
             result = build_project_begin(call, gToolResult, sizeof(gToolResult), Journal, NULL, (uint32_t)TickCount());
             if (result == 2) { gSending = 4; SetStatus("Building snapshot; waiting for MacRelix worker..."); return; }
+        } else if (!strcmp(call->name, "run_application")) {
+            result = run_application_begin(call, gToolResult, sizeof(gToolResult), Journal, NULL, (uint32_t)TickCount());
+            if (result == 2) { gSending = 5; SetStatus("Verifying built application before launch..."); return; }
         } else if (!strcmp(call->name, "read_build_log")) {
             build_project_log(call, gToolResult, sizeof(gToolResult)); result = 0;
         } else result = tools_execute_recorded(call, gToolResult, sizeof(gToolResult), Journal, NULL);

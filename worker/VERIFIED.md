@@ -153,3 +153,43 @@ in `Sherclawk Sessions:s0002e7bf.jsonl`, and the model returned a final successf
 build answer naming that ID. The completed session is retained locally under
 ignored `build/build-session.jsonl`. The idle worker was explicitly activated
 in MacRelix before claiming this snapshot; no host executor compiled it.
+
+
+## Native application launch, October 5–6, 2026
+
+The final PowerPC `SherclawkRunCheck` diagnostic reported `RESULT failures=0`
+on the live OS 9.2.2 AFP volume. It created both project routes, deliberately
+failed compilation, refused launch of those failed build IDs, repaired the
+sources through revision-guarded edits, then compiled fresh snapshots and
+launched their exact artifacts through `LaunchApplication`.
+
+| Build ID | Result | Run ID / native process observation |
+|---|---|---|
+| `build-00094bbb-0001` | Independent compiler error; launch refused | No run ID |
+| `build-00097932-0002` | Independent two-source/header build succeeded | `run-00097c43-0001`, PSN `0:54394882` |
+| `build-00097d53-0003` | Starter compiler error; launch refused | No run ID |
+| `build-00097f94-0004` | Starter with second source and renamed output succeeded | `run-000982bb-0002`, PSN `0:56033282` |
+
+Successful artifacts had both forks hashed in bounded native steps and private
+`launch.rec` authority persisted. Each successful run retained a separate
+Finder `ShRR` intent record in the queue and a journaled exact-artifact process
+observation. The idle worker required foreground activation during this check;
+no ready marker or job was replayed. The log remains in
+`Retro68:SherclawkRunCheck.log`, with the local ignored copy at
+`build/run-check-verified.log`. Functional smoke testing is not claimed.
+
+The final main app was published fork-aware and its live
+`openai/gpt-6-luna` loop called `run_application` for the earlier retained build
+`build-0008274d-0002`, proving authority survives the diagnostic's exit and a
+fresh app/session. It returned `run-0009442b-0001` and process `0:50659330` with
+`process_present` and `smoke_test: not_performed`, then received the model's
+final response. Its parsed session `s000942f5.jsonl` has one paired tool call
+and result plus `run_intent`/`run_observed`; the local ignored copy is
+`build/run-session.jsonl`.
+
+ASan/UBSan checks passed for malformed/unknown IDs, missing resource forks,
+changed data and resource bytes, protected worker-queue mutations, Stop before
+launch, failed build-result journaling without authority publication, pre-launch
+journal refusal, Process Manager errors, observation errors and failed
+post-launch journaling. PowerPC main and final diagnostic builds passed. Injected
+faults were host-model checks; the live volume was not damaged to simulate them.

@@ -3,6 +3,7 @@
  * queue reservation; jobs.c then stages/readbacks them in cooperative steps.
  * Stop/deadline never cancel or replay published compiler jobs. */
 #include "build_project.h"
+#include "run_application.h"
 #include "json.h"
 #include "text.h"
 #include "config.h"
@@ -251,7 +252,7 @@ static int read_step(int i)
     }
     return 0;
 }
-static int finish(char *out,size_t cap)
+static int finish(char *out,size_t cap,uint32_t now)
 {
     const char *status=job.state==JOB_SUCCEEDED ? "ok" : job.state==JOB_UNKNOWN ? "uncertain" : "error";
     char artifact[256],q[520],utf8[1025],qd[1300];
@@ -270,9 +271,14 @@ static int finish(char *out,size_t cap)
     json_quote(artifact,q,sizeof(q));
     for(size_t k=0;k<diagnostic_size;k++)if((unsigned char)diagnostic[k]<32 && diagnostic[k]!='\r' && diagnostic[k]!='\n' && diagnostic[k]!='\t')diagnostic[k]='?';
     if(text_to_utf8(diagnostic,diagnostic_size,utf8,sizeof(utf8))<0 || json_quote(utf8,qd,sizeof(qd))<0)strcpy(qd,"\"[Use read_build_log]\"");
-    snprintf(out,cap,"{\"status\":\"%s\",\"build_id\":\"%s\",\"snapshot\":\"" QUEUE ":%s\",\"adapter\":\"" ADAPTER "\",\"state\":%d,\"exit\":%d,\"os_error\":%d,\"artifact\":%s,\"logs\":\"read_build_log with stream stdout or stderr and byte offset\",\"next_stdout_byte\":0,\"next_stderr_byte\":0,\"launch_supported\":false,\"diagnostics\":%s}",status,id,id,job.state,job.exit_code,job.error,q,qd);
+    snprintf(out,cap,"{\"status\":\"%s\",\"build_id\":\"%s\",\"snapshot\":\"" QUEUE ":%s\",\"adapter\":\"" ADAPTER "\",\"state\":%d,\"exit\":%d,\"os_error\":%d,\"artifact\":%s,\"logs\":\"read_build_log with stream stdout or stderr and byte offset\",\"next_stdout_byte\":0,\"next_stderr_byte\":0,\"launch_supported\":%s,\"diagnostics\":%s}",status,id,id,job.state,job.exit_code,job.error,q,job.state==JOB_SUCCEEDED ? "true" : "false",qd);
+    if(phase!=4 && journal_fn(journal_context,"build_result",out))return error(out,cap,"JOURNAL_AFTER_BUILD",1);
+    if(job.state==JOB_SUCCEEDED && phase==2) {
+        if(application_authorize_begin(id,descriptor.output,journal_fn,journal_context,now)<0)
+            return error(out,cap,"ARTIFACT_AUTHORIZATION_BEGIN",1);
+        phase=3; return 2;
+    }
     active=0;
-    if(journal_fn(journal_context,"build_result",out))return error(out,cap,"JOURNAL_AFTER_BUILD",1);
     return job.state==JOB_UNKNOWN || job.state==JOB_ABANDONED ? 1 : 0;
 }
 int build_project_step(char *out,size_t cap,uint32_t now,int stop)
@@ -310,6 +316,12 @@ int build_project_step(char *out,size_t cap,uint32_t now,int stop)
             phase=2; return 2;
         }
     }
+    if(phase==3) {
+        int r=run_application_step(out,cap,now,stop);
+        if(r==2)return 2;
+        if(r || !strstr(out,"\"status\":\"ok\""))return error(out,cap,"ARTIFACT_AUTHORIZATION_FAILED",1);
+        phase=4; return finish(out,cap,now);
+    }
     jobs_step(&job,now,stop);
     if(job.stderr_size && diagnostic_size<128) {
         size_t n=job.stderr_size;
@@ -317,7 +329,7 @@ int build_project_step(char *out,size_t cap,uint32_t now,int stop)
         memcpy(diagnostic+diagnostic_size,job.stderr_page,n); diagnostic_size+=n;
         diagnostic[diagnostic_size]=0;
     }
-    return job.state==JOB_STAGING || job.state==JOB_WAITING ? 2 : finish(out,cap);
+    return job.state==JOB_STAGING || job.state==JOB_WAITING ? 2 : finish(out,cap,now);
 }
 void build_project_log(const AgentCall *call,char *out,size_t cap)
 {

@@ -108,10 +108,10 @@ static void environment(char *out, size_t cap)
     snprintf(out, cap, "{\"status\":\"ok\",\"os\":\"classic Mac OS\",\"system_version_hex\":\"%04lx\","
         "\"architecture\":\"PowerPC\",\"workspace\":%s,\"paths\":\"relative colon-separated\","
         "\"encoding\":\"MacRoman data fork to UTF-8\",\"read_only\":false,\"free_heap_bytes\":%ld,"
-        "\"tools\":[\"get_environment\",\"list_files\",\"read_text\",\"search_text\",\"write_text\",\"edit_text\",\"create_folder\",\"create_project\",\"build_project\",\"read_build_log\"],"
+        "\"tools\":[\"get_environment\",\"list_files\",\"read_text\",\"search_text\",\"write_text\",\"edit_text\",\"create_folder\",\"create_project\",\"build_project\",\"read_build_log\",\"run_application\"],"
         "\"write_policy\":\"create_only_existing_parent\",\"folder_policy\":\"create_only_existing_parent\",\"write_max_bytes\":4096,"
         "\"edit_policy\":\"unique_exact_whole_revision_CR_backup\",\"edit_max_bytes\":4096,"
-        "\"build_supported\":true,\"launch_supported\":false}", system, q, (long)FreeMem());
+        "\"build_supported\":true,\"launch_supported\":true}", system, q, (long)FreeMem());
 }
 static void list(const char *s, const JsonToken *tokens, char *out, size_t cap)
 {
@@ -818,7 +818,7 @@ static int project_result(char *out, size_t cap, const char *status, const char 
     size_t at = 0;
     snprintf(head, sizeof(head), "{\"status\":\"%s\",\"code\":\"%s\",\"path\":", status, code);
     snprintf(tail, sizeof(tail), ",\"template\":\"ppc-toolbox-v1\",\"files\":[\"main.c\",\"app.r\",\"project.json\"],"
-        "\"build_supported\":true,\"launch_supported\":false,\"os_error\":%d}", native);
+        "\"build_supported\":true,\"launch_supported\":true,\"os_error\":%d}", native);
     return append(out, cap, &at, head) || quote(out, cap, &at, path) ||
         append(out, cap, &at, ",\"temporary_path\":") || quote(out, cap, &at, temporary) ||
         append(out, cap, &at, tail) ? -1 : 0;
@@ -943,6 +943,19 @@ int tools_execute_recorded(const AgentCall *call, char *out, size_t cap, AgentJo
     if (cap < AGENT_RESULT_CAP) { if (cap) out[0] = 0; return 1; }
     if (json_parse(call->arguments, strlen(call->arguments), tokens, 128) < 1 || tokens[0].type != JSON_OBJECT) {
         fail(out, cap, "ARGUMENTS", "Tool arguments must be a bounded JSON object.", 0); return 0;
+    }
+    /* The worker queue is retained execution evidence, never model-editable
+     * source. HFS names are case-insensitive; do not allow text tools to forge
+     * worker results, rewrite immutable snapshots, or alter launch authority. */
+    if (!strcmp(call->name,"write_text") || !strcmp(call->name,"edit_text") ||
+        !strcmp(call->name,"create_folder") || !strcmp(call->name,"create_project")) {
+        char path[512]; size_t i;
+        if(string_arg(call->arguments,tokens,"path",path,sizeof(path))>=0) {
+            for(i=0;path[i];i++)if(path[i]>='A' && path[i]<='Z')path[i]=(char)(path[i]+'a'-'A');
+            if(!strncmp(path,"worker01:buildjobs",18) && (!path[18] || path[18]==':')) {
+                fail(out,cap,"EXECUTION_EVIDENCE_READ_ONLY","Worker queue and snapshots are read-only to source tools.",0);return 0;
+            }
+        }
     }
     if (!strcmp(call->name, "get_environment")) {
         if (tokens[0].next != 1) fail(out, cap, "ARGUMENTS", "get_environment takes no arguments.", 0);

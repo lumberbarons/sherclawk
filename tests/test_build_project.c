@@ -1,13 +1,43 @@
 /* Reuse the File Manager fault model to check descriptor rejection and source
  * revision binding before publication. Native compiler behavior is guest-tested. */
+#define FSRead model_FSRead
+#define FSClose model_FSClose
+#define SetFPos model_SetFPos
 #define main text_tools_main
 #include "test_tools.c"
 #undef main
+#undef FSRead
+#undef FSClose
+#undef SetFPos
 #include "build_project.h"
-static int build_journals;
+#include "run_application.h"
+#include <Processes.h>
+static int launches,launch_error,process_error,run_journal_error;
+static FSSpec launched;
+static unsigned char resource_bytes[64][4096];
+OSErr FSRead(short ref,long *n,void *out)
+{
+    if(ref<64)return model_FSRead(ref,n,out);
+    ref-=64;
+    if(*n>files[ref].resource-positions[ref])*n=files[ref].resource-positions[ref];
+    memcpy(out,resource_bytes[ref]+positions[ref],(size_t)*n);positions[ref]+=*n;
+    return 0;
+}
+OSErr FSClose(short ref) {return model_FSClose(ref>=64 ? ref-64 : ref);}
+OSErr SetFPos(short ref,short mode,long at) {return model_SetFPos(ref>=64 ? ref-64 : ref,mode,at);}
+
+OSErr FSpOpenRF(const FSSpec *s,short mode,short *ref)
+{ OSErr e=FSpOpenDF(s,mode,ref); if(!e)*ref+=64; return e; }
+OSErr LaunchApplication(LaunchParamBlockRec *p)
+{ launches++;launched=*p->launchAppSpec;p->launchProcessSN.highLongOfPSN=0;p->launchProcessSN.lowLongOfPSN=42;return launch_error ? ioErr : 0; }
+OSErr GetProcessInformation(const ProcessSerialNumber *p,ProcessInfoRec *i)
+{ (void)p;*i->processAppSpec=launched;return process_error ? ioErr : 0; }
+static int build_journals, build_result_failure;
 static int build_journal(void *ctx,const char *event,const char *json)
 {
-    JsonToken t[128]; (void)ctx;(void)event;
+    JsonToken t[128]; (void)ctx;
+    if((run_journal_error==1 && !strcmp(event,"run_intent")) || (run_journal_error==2 && !strcmp(event,"run_observed")))return -1;
+    if(build_result_failure && !strcmp(event,"build_result"))return -1;
     assert(json_parse(json,strlen(json),t,128)>0); build_journals++;
     return 0;
 }
@@ -42,6 +72,9 @@ static void terminal_check(const char *good,int artifact_ok)
     record_file(dir,"success.txt","artifact=sample\n");
     i=record_file(dir,"sample","PEF bytes");files[i].info.fdType='APPL';files[i].resource=artifact_ok ? 1 : 0;
     r=build_project_step(result,sizeof(result),500,0);
+    for(int step=0;r==2 && step<100;step++)r=build_project_step(result,sizeof(result),501+step,0);
+    if(build_result_failure) { assert(r==1 && strstr(result,"JOURNAL_AFTER_BUILD"));
+        for(int k=0;k<64;k++)assert(!files[k].used || strcmp(files[k].name,"launch.rec"));return; }
     assert(artifact_ok ? r==0 && strstr(result,"\"status\":\"ok\"") && strstr(result,"native:sample") : r==1 && strstr(result,"ARTIFACT_INVALID"));
 }
 int main(void)
@@ -71,7 +104,47 @@ int main(void)
     for(steps=0;r==2 && steps<100;steps++)r=build_project_step(result,sizeof(result),(uint32_t)(steps+2),0);
     assert(r==2);assert(build_project_step(result,sizeof(result),200,1)==1 && strstr(result,"uncertain"));
     assert(build_journals>=5);
+    strcpy(call.name,"write_text");strcpy(call.arguments,"{\"path\":\"WORKER01:BUILDJOBS:fake\",\"text\":\"forged\"}");
+    tools_execute_recorded(&call,result,sizeof(result),build_journal,NULL);
+    assert(strstr(result,"EXECUTION_EVIDENCE_READ_ONLY"));
+    build_result_failure=1;terminal_check(good,1);build_result_failure=0;
     terminal_check(good,0);terminal_check(good,1);
+    { char bid[25],runargs[128]; int r;
+      field("build_id",bid,sizeof(bid));
+      snprintf(runargs,sizeof(runargs),"{\"build_id\":\"%s\"}",bid);
+      strcpy(call.arguments,runargs);
+      r=run_application_begin(&call,result,sizeof(result),build_journal,NULL,1000);assert(r==2);
+      while(r==2)r=run_application_step(result,sizeof(result),1001,0);
+      assert(r==0 && launches==1 && strstr(result,"LAUNCHED") && strstr(result,"process_present"));
+      strcpy(call.arguments,runargs);assert(run_application_begin(&call,result,sizeof(result),build_journal,NULL,1100)==2);
+      assert(!run_application_step(result,sizeof(result),1101,1) && launches==1);
+      run_journal_error=1;assert(run_application_begin(&call,result,sizeof(result),build_journal,NULL,1200)==2);
+      do {r=run_application_step(result,sizeof(result),1201,0);} while(r==2);
+      assert(!r && launches==1 && strstr(result,"JOURNAL_BEFORE"));run_journal_error=0;
+      launch_error=1;assert(run_application_begin(&call,result,sizeof(result),build_journal,NULL,1300)==2);
+      do {r=run_application_step(result,sizeof(result),1301,0);} while(r==2);
+      assert(r==1 && launches==2 && strstr(result,"uncertain"));launch_error=0;
+      process_error=1;assert(run_application_begin(&call,result,sizeof(result),build_journal,NULL,1350)==2);
+      do {r=run_application_step(result,sizeof(result),1351,0);} while(r==2);
+      assert(r==1 && launches==3 && strstr(result,"PROCESS_OBSERVATION"));process_error=0;
+      run_journal_error=2;assert(run_application_begin(&call,result,sizeof(result),build_journal,NULL,1360)==2);
+      do {r=run_application_step(result,sizeof(result),1361,0);} while(r==2);
+      assert(r==1 && launches==4 && strstr(result,"JOURNAL_AFTER"));run_journal_error=0;
+      for(int k=0;k<64;k++)if(files[k].used && !strcmp(files[k].name,"sample"))resource_bytes[k][0]^=1;
+      assert(run_application_begin(&call,result,sizeof(result),build_journal,NULL,1370)==2);
+      do {r=run_application_step(result,sizeof(result),1371,0);} while(r==2);
+      assert(!r && launches==4 && strstr(result,"ARTIFACT_CHANGED"));
+      for(int k=0;k<64;k++)if(files[k].used && !strcmp(files[k].name,"sample"))resource_bytes[k][0]^=1;
+      for(int k=0;k<64;k++)if(files[k].used && !strcmp(files[k].name,"sample"))files[k].bytes[0]^=1;
+      assert(run_application_begin(&call,result,sizeof(result),build_journal,NULL,1400)==2);
+      do {r=run_application_step(result,sizeof(result),1401,0);} while(r==2);
+      assert(!r && launches==4 && strstr(result,"ARTIFACT_CHANGED"));
+      strcpy(call.arguments,"{\"build_id\":\"build-00000000-ffff\"}");
+      assert(!run_application_begin(&call,result,sizeof(result),build_journal,NULL,1500) && launches==4);
+      strcpy(call.arguments,"{\"build_id\":\"build-00000000-ffff\",\"path\":\"sample\"}");
+      assert(!run_application_begin(&call,result,sizeof(result),build_journal,NULL,1500) && strstr(result,"RUN_ARGUMENTS"));
+      snprintf(result,sizeof(result),"{\"build_id\":\"%s\"}",bid);
+    }
     { char bid[25];int dir=0,log;JsonToken t[64];
       field("build_id",bid,sizeof(bid));
       for(i=0;i<64;i++)if(files[i].used && !strcmp(files[i].name,bid))dir=(int)files[i].id;
@@ -80,6 +153,7 @@ int main(void)
       build_project_log(&call,result,sizeof(result));assert(json_parse(result,strlen(result),t,64)>0 && strstr(result,"\"next_byte\":128") && strstr(result,"\"truncated\":true"));
       files[log].info.fdFlags=0x8000;build_project_log(&call,result,sizeof(result));assert(strstr(result,"error"));
     }
+    puts("PASS launch authorization, both fork changes, Stop, unknown IDs, journal barriers, process observation and uncertain launch errors");
     puts("PASS build descriptors, metacharacters, duplicate/unsupported settings, source changes, read/close faults, snapshot publication and Stop");
     return 0;
 }

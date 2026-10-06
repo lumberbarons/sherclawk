@@ -18,6 +18,7 @@ OSErr FSMakeFSSpec(short, long, const unsigned char *, FSSpec *);
 OSErr PBGetCatInfoSync(CInfoPBRec *);
 OSErr FSpCreate(const FSSpec *, unsigned long, unsigned long, short);
 OSErr FSpDirCreate(const FSSpec *, short, long *);
+OSErr FSpOpenRF(const FSSpec *, short, short *);
 OSErr FSpOpenDF(const FSSpec *, short, short *);
 OSErr FSRead(short, long *, void *);
 OSErr FSWrite(short, long *, const void *);

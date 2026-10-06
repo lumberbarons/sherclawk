@@ -7,8 +7,8 @@ window. [PLAN.md](PLAN.md) tracks the full coding-harness roadmap.
 
 The installed tools are `get_environment`, `list_files`, `read_text`,
 `search_text`, create-only `write_text`, create-only `create_folder`, template-backed `create_project`, revision-guarded `edit_text`, `build_project`,
-and `read_build_log`. Builds execute natively through the MacRelix worker;
-artifact launch remains planned. The [native PowerPC template](templates/ppc-toolbox/README.md)
+`read_build_log`, and `run_application`. Builds execute natively through the MacRelix worker;
+authorized artifacts launch through the native Process Manager. The [native PowerPC template](templates/ppc-toolbox/README.md)
 captures a guest-verified MrC/PPCLink/Rez recipe and installed versions;
 the [MacRelix job worker](worker/README.md) now implements complete-file
 publication, rename claims, output capture and completion records. The native
@@ -125,8 +125,7 @@ and stops the run. Use `list_files` to verify; Stop does not undo a create.
 
 `create_project` is an optional starter shortcut. `build_project(path)` accepts a project folder path with or without the
 trailing colon returned by `list_files`, and any valid `project.json`, including one assembled with ordinary folder/text tools.
-`run_application(build_id)` remains planned; successful builds return an artifact
-path for inspection and manual guest launch.
+`run_application(build_id)` launches the recorded artifact of a successful build.
 
 `create_project(path)` creates a new `ppc-toolbox-v1` project in an existing
 workspace parent. Only `path` is accepted, with relative colon syntax and no
@@ -202,9 +201,40 @@ artifact. Later source edits do not change older snapshots. Initial compiler
 diagnostics are bounded; `read_build_log(build_id, stream, start_byte)` reads
 128-byte retained stdout/stderr pages with `next_byte` and `truncated` continuation.
 Log data is displayed as MacRoman text; binary control bytes display as `?` while
-raw logs remain on disk. Build IDs and artifact paths are retained evidence, not
-launch authorization. Automatic recovery and a persisted launch registry remain
-work for `run_application`.
+raw logs remain on disk. Successful builds persist a private Finder `ShAR`/`ShCk` `launch.rec` in their
+snapshot folder after recording the successful build. This versioned native
+binary record seals the output name, file identity, modification date, creator,
+sizes and FNV hashes of both forks. Old builds without this record require a
+fresh build; IDs or artifact paths alone cannot authorize execution. The worker
+queue and its snapshots are read-only to model-facing source mutation tools.
+
+### Running applications
+
+`run_application(build_id)` takes only the exact successful build ID, never a
+path or shell command. It resolves the persisted authority and artifact through
+non-alias ancestors, checks Finder `APPL`, and rehashes both forks in <=1 KiB
+steps while servicing events. Each fork must be nonempty and <=1 MiB. Stop or
+a one-minute verification deadline prevents launch. Changed, missing, partial,
+failed or unknown artifacts are refused; editing project sources does not alter
+the older recorded build or cause an implicit rebuild.
+
+Before calling `LaunchApplication`, the app journals `run_intent` and reserves
+a unique `run-...` file of Finder type `ShRR` in the queue, with closed read-back
+and volume flush. It uses `launchContinue`/`launchDontSwitch`: Sherclawk keeps
+running and the application need not become foreground. The returned native
+process identity is checked against the exact artifact FSSpec and journaled as
+`run_observed`, with `run_id`, `build_id`, snapshot and artifact path. An already
+running application may be reused by the Process Manager. The observation means
+`process_present`; `smoke_test: not_performed` explicitly leaves functional and
+visual acceptance to subsequent checks. There is no exit monitoring, screenshot
+capture, app termination or automatic recovery in this tool.
+
+Launch errors, failed process observation and failed post-launch journaling are
+`uncertain` and stop the agent. Never retry automatically: inspect retained run
+intent and session records first. Fork fingerprints are observational, not
+cryptographic; AFP-server writes and a change between final verification and
+launch remain outside File Manager guarantees. Native records are local to this
+version/architecture; AFP FlushVol is not a power-loss durability guarantee.
 
 Creation journals intent, reserves a unique sibling staging folder, writes
 and closes each file, flushes and verifies exact bytes and metadata, journals
@@ -359,7 +389,8 @@ model history is not silently dropped.
 | `tools/materialize-native-template.py` | Create new MacRoman/CR template source and LF shell scripts |
 | `tools/native-process-check.c` | Native Process Manager diagnostic for executor paths |
 | `build_project.c`, `build_project.h` | Descriptor validation, trusted recipe, revision snapshot, cooperative build and log pages |
-| `tools/build-check.c`, `tests/test_build_project.c` | Native multi-source/error-repair diagnostic and host validation/fault checks |
+| `tools/build-check.c`, `tests/test_build_project.c` | Native multi-source/error-repair/build-and-launch diagnostics and host fault checks |
+| `run_application.c`, `run_application.h` | Persisted artifact authority, bounded fork verification, native launch and run observations |
 | `jobs.c`, `jobs.h` | Native trusted snapshot publication and bounded completion/log polling |
 | `tools/job-check.c`, `tests/test_jobs.c` | Event-driven guest diagnostic and publication/polling fault checks |
 | `worker/` | MacRelix file-job protocol, executor, native build wrapper and guest evidence |
@@ -373,6 +404,8 @@ APP=SherclawkHandoffCheck sherclawk/tools/deploy-to-share.sh
 APP=SherclawkProjectCheck sherclawk/tools/deploy-to-share.sh
 # Launch in OS 9; inspect Retro68:SherclawkProjectCheck.log.
 python3 sherclawk/tests/test_worker.py
+APP=SherclawkRunCheck sherclawk/tools/deploy-to-share.sh
+# Launch in OS 9; inspect Retro68:SherclawkRunCheck.log.
 APP=SherclawkJobCheck sherclawk/tools/deploy-to-share.sh
 # See worker/README.md for the guest native producer/poller diagnostic.
 sherclawk/tools/build-host-probe.sh
@@ -551,3 +584,15 @@ paired in `s0002e7bf.jsonl`; the local ignored copy is `build/build-session.json
 The final folder-path compatibility fix accepts trailing colons from catalog
 results. Stop retained an uncertain published job without resubmission; its
 original snapshot later completed when the worker was explicitly resumed.
+
+
+Native launch verification, October 5–6, 2026: the final PowerPC main and
+`SherclawkRunCheck` builds passed, along with ASan/UBSan fault checks. The OS 9
+build-and-launch diagnostic reported `RESULT failures=0` for independent and
+starter projects: compiler failures refused launch, revision-guarded repairs
+produced fresh successful snapshots, and both exact artifacts returned distinct
+run IDs and native process observations. The main app's live
+`openai/gpt-6-luna` loop also launched a retained authorized build from a fresh
+session and received a final response, verifying persisted authority across app
+lifetimes. These are process observations, not functional smoke-test results.
+IDs and retained evidence are in [worker/VERIFIED.md](worker/VERIFIED.md).
