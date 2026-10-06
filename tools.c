@@ -108,10 +108,10 @@ static void environment(char *out, size_t cap)
     snprintf(out, cap, "{\"status\":\"ok\",\"os\":\"classic Mac OS\",\"system_version_hex\":\"%04lx\","
         "\"architecture\":\"PowerPC\",\"workspace\":%s,\"paths\":\"relative colon-separated\","
         "\"encoding\":\"MacRoman data fork to UTF-8\",\"read_only\":false,\"free_heap_bytes\":%ld,"
-        "\"tools\":[\"get_environment\",\"list_files\",\"read_text\",\"search_text\",\"write_text\",\"edit_text\",\"create_folder\",\"create_project\"],"
+        "\"tools\":[\"get_environment\",\"list_files\",\"read_text\",\"search_text\",\"write_text\",\"edit_text\",\"create_folder\",\"create_project\",\"build_project\",\"read_build_log\"],"
         "\"write_policy\":\"create_only_existing_parent\",\"folder_policy\":\"create_only_existing_parent\",\"write_max_bytes\":4096,"
         "\"edit_policy\":\"unique_exact_whole_revision_CR_backup\",\"edit_max_bytes\":4096,"
-        "\"build_supported\":false,\"launch_supported\":false}", system, q, (long)FreeMem());
+        "\"build_supported\":true,\"launch_supported\":false}", system, q, (long)FreeMem());
 }
 static void list(const char *s, const JsonToken *tokens, char *out, size_t cap)
 {
@@ -280,7 +280,7 @@ static void read(const char *s, const JsonToken *tokens, char *out, size_t cap)
 }
 /* Resolve each existing ancestor by directory ID, never through an alias.
  * Only fnfErr for the final leaf is a valid create destination. */
-static OSErr create_spec(const char *path, FSSpec *spec)
+OSErr tools_resolve(const char *path, FSSpec *spec)
 {
     char local[256], *part, *colon;
     FSSpec parent;
@@ -364,7 +364,7 @@ static void search_text(const char *s, const JsonToken *tokens, char *out, size_
     /* Resolve each root ancestor by ID, refusing alias folders. */
     if(*local && local[strlen(local)-1]==':') local[strlen(local)-1]=0;
     if(*root && root[strlen(root)-1]==':') root[strlen(root)-1]=0;
-    if(*local) err=create_spec(root,&spec);
+    if(*local) err=tools_resolve(root,&spec);
     else err=spec_for("",1,&spec);
     if(!err)err=catalog(&spec,&pb);
     if(err || !(pb.hFileInfo.ioFlAttrib&16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags&0x8000)) {
@@ -509,7 +509,7 @@ static int write_text(const AgentCall *call, const JsonToken *tokens, char *out,
         if ((c < 32 && c != 9 && c != 13) || c == 127) { fail(out, cap, "NOT_TEXT", "Binary control bytes are refused.", 0); return 0; }
         hash = ((hash ^ c) * 16777619UL) & 0xffffffffUL;
     }
-    err = create_spec(path, &target);
+    err = tools_resolve(path, &target);
     if (!err) { fail(out, cap, "EXISTS", "Destination exists; write_text never overwrites.", 0); return 0; }
     if (err != fnfErr) { fail(out, cap, "PATH", "Use a relative workspace file path with existing non-alias parent folders.", err); return 0; }
     if (!journal) { fail(out, cap, "JOURNAL", "Creating text requires a durable session journal.", 0); return 1; }
@@ -634,7 +634,7 @@ static int edit_text(const AgentCall *call, const JsonToken *tokens, char *out, 
             fail(out, cap, "NOT_TEXT", "Binary controls are refused.", 0); return 0;
         }
     }
-    err = create_spec(path, &target); if (!err) err = catalog(&target, &original);
+    err = tools_resolve(path, &target); if (!err) err = catalog(&target, &original);
     if (err) { fail(out, cap, "PATH", "Expected an existing workspace file with non-alias parents.", err); return 0; }
     if (!plain_file(&target, &original)) { fail(out, cap, "NOT_TEXT", "Only plain data-fork text can be edited.", 0); return 0; }
     size = original.hFileInfo.ioFlLgLen;
@@ -779,7 +779,7 @@ static int create_folder(const AgentCall *call, const JsonToken *tokens, char *o
         string_arg(call->arguments, tokens, "path", path, sizeof(path)) < 0) {
         fail(out, cap, "ARGUMENTS", "Expected only a path string.", 0); return 0;
     }
-    err = create_spec(path, &target);
+    err = tools_resolve(path, &target);
     if (!err) { fail(out, cap, "EXISTS", "Destination exists; create_folder never reuses a name.", 0); return 0; }
     if (err != fnfErr) { fail(out, cap, "PATH", "Use a relative workspace folder path with existing non-alias parent folders and no trailing colon.", err); return 0; }
     if (!journal) { fail(out, cap, "JOURNAL", "Creating a folder requires a durable session journal.", 0); return 1; }
@@ -818,7 +818,7 @@ static int project_result(char *out, size_t cap, const char *status, const char 
     size_t at = 0;
     snprintf(head, sizeof(head), "{\"status\":\"%s\",\"code\":\"%s\",\"path\":", status, code);
     snprintf(tail, sizeof(tail), ",\"template\":\"ppc-toolbox-v1\",\"files\":[\"main.c\",\"app.r\",\"project.json\"],"
-        "\"build_supported\":false,\"launch_supported\":false,\"os_error\":%d}", native);
+        "\"build_supported\":true,\"launch_supported\":false,\"os_error\":%d}", native);
     return append(out, cap, &at, head) || quote(out, cap, &at, path) ||
         append(out, cap, &at, ",\"temporary_path\":") || quote(out, cap, &at, temporary) ||
         append(out, cap, &at, tail) ? -1 : 0;
@@ -868,7 +868,7 @@ static int create_project(const AgentCall *call, const JsonToken *tokens, char *
         string_arg(call->arguments, tokens, "path", path, sizeof(path)) < 0) {
         fail(out, cap, "ARGUMENTS", "Expected only a path string for a new ppc-toolbox-v1 project.", 0); return 0;
     }
-    err = create_spec(path, &target);
+    err = tools_resolve(path, &target);
     if (!err) { fail(out, cap, "EXISTS", "Project destination already exists; never reused.", 0); return 0; }
     if (err != fnfErr) { fail(out, cap, "PATH", "Expected a relative new folder in an existing non-alias parent, without trailing colon.", err); return 0; }
     prefix = strrchr(path, ':') ? (size_t)(strrchr(path, ':') - path + 1) : 0;

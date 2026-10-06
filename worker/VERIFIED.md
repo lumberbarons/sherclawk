@@ -101,3 +101,55 @@ This verifies native snapshot publication and cooperative polling through a
 diagnostic app. Model-facing dispatch, source revision binding, native compiler
 job submission, artifact authorization, cancellation, automatic recovery and
 AFP power-loss durability are still outside this slice.
+
+## Model-facing native builds — October 5, 2026
+
+`SherclawkBuildCheck` used native ordinary file tools to assemble
+`Retro68:BuildCheck00025ac3:` without `create_project`: two C sources, one Rez
+resource, a declared header, include path and an editable protocol-2 descriptor.
+It then used `create_project` for `BuildCheck00025ac3s`, added a second C source
+and edited the descriptor's source list/output name. The native build producer
+published all snapshots; the host did not create ready markers or input copies.
+
+| Build ID in `Worker01:buildjobs:` | Observed result |
+|---|---|
+| `build-00025b49-0001` | Independent project: deliberate `#error`, exit 1, no authorized artifact |
+| `build-00025ce6-0002` | Guarded source repair, fresh revision snapshot, exit 0, artifact `build:native:independent` |
+| `build-00025f5f-0003` | Starter with added source/output `starter`: deliberate `#error`, exit 1 |
+| `build-000260ff-0004` | Guarded repair, fresh snapshot, exit 0, artifact `build:native:starter` |
+
+The diagnostic reported `RESULT failures=0`. Both exact successful artifacts
+were manually launched with MacRelix `open`. The independent app displayed
+`Two source files compiled natively`; the starter displayed its native template
+window. Both quit through Command-Q. This validates compilation and visual
+launch, not automated runtime correlation or the future `run_application` tool.
+The worker exited normally after STOP; its original Stop marker was retained
+by rename before subsequent explicit verification. No AFP restart was needed.
+
+The first independent fixture lacked a `QDGlobals` definition. Both its
+deliberate compiler error and later linker error were correctly returned as
+failed builds, with no artifact path; those original jobs remain retained as
+`build-000215cf-0001` and `build-000217d9-0002`. After correcting the fixture,
+the four-build acceptance above passed. Diagnostic faults were injected only
+on the host File Manager model.
+
+A live main-app check exposed colon-terminated folder paths from `list_files`;
+`build_project` now accepts those directly, with a host regression check. Stop
+was exercised while the model's `build-0002ac3e-0001` was published: the app
+recorded an uncertain outcome with no artifact, retained its original ready
+marker and stopped further calls. After the worker was explicitly resumed, it
+consumed that same original job and returned succeeded/exit 0. The earlier
+observer's uncertain result remained unchanged; no ready marker or snapshot was
+recreated. The retained session is `Sherclawk Sessions:s0002a455.jsonl` (local
+ignored copy `build/build-first-session.jsonl`). The idle MacRelix worker required
+foreground activation to notice STOP in this live check; presence of a worker
+lock never establishes that background polling is progressing.
+
+The final main app's `openai/gpt-6-luna` loop built the independent fixture as
+`build-0002ed03-0001`, received succeeded/exit 0 and its exact artifact path,
+then called `read_build_log` at stdout offsets 0 and 128. The two pages covered
+all 151 bytes through `stage=complete status=0`. All six calls/results paired
+in `Sherclawk Sessions:s0002e7bf.jsonl`, and the model returned a final successful
+build answer naming that ID. The completed session is retained locally under
+ignored `build/build-session.jsonl`. The idle worker was explicitly activated
+in MacRelix before claiming this snapshot; no host executor compiled it.

@@ -24,6 +24,7 @@
 #include "agent.h"
 #include "json.h"
 #include "tools.h"
+#include "build_project.h"
 #include <QDOffscreen.h>
 #include <Resources.h>
 #include "text.h"
@@ -441,7 +442,7 @@ static void DrawChrome(void)
             }
         }
         MoveTo(10, 253); PStr(title, "The consulting crustacean"); DrawString(title);
-        MoveTo(10, 266); PStr(title, "Text tools: v2"); DrawString(title);
+        MoveTo(10, 266); PStr(title, "Native builds: v2"); DrawString(title);
     }
     DrawLabel(&gResponseLabelRect, "Conversation:");
     FrameRect(&gResponseRect);
@@ -787,6 +788,12 @@ static void NewChat(void)
 }
 static void AbortChat(const char *reason)
 {
+    if (gSending == 4) {
+        char error[256];
+        build_project_step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), 1);
+        agent_tool_result(&gAgent, gToolResult, error, sizeof(error));
+        ShowMessage("build_project", gToolResult);
+    }
     if (gNet.ctx || gOTOpen) CloseChatContext();
     if (agent_stop(&gAgent, reason)) {
         SetStatus("Session recording failed. Start a new session before continuing.");
@@ -840,6 +847,15 @@ static void DriveChatStep(void)
     int result;
     if (!gSending) return;
     if (gSending == 3) { StartModelRequest(); return; }
+    if (gSending == 4) {
+        result = build_project_step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), 0);
+        if (result == 2) return;
+        gSending = 2;
+        if (agent_tool_result(&gAgent, gToolResult, error, sizeof(error))) { AbortChat(error); return; }
+        ShowMessage("build_project", gToolResult);
+        if (result) AbortChat("Build observation stopped. Inspect retained snapshot and logs before another build.");
+        return;
+    }
     if (gSending == 2) {
         AgentCall *call;
         if (gAgent.next == gAgent.count) { gSending = 3; return; }
@@ -854,7 +870,12 @@ static void DriveChatStep(void)
             snprintf(started, sizeof(started), "{\"call_id\":%s,\"name\":%s}", id, name);
             if (Journal(NULL, "tool_started", started)) { AbortChat("Could not record tool start; no tool executed."); return; }
         }
-        result = tools_execute_recorded(call, gToolResult, sizeof(gToolResult), Journal, NULL);
+        if (!strcmp(call->name, "build_project")) {
+            result = build_project_begin(call, gToolResult, sizeof(gToolResult), Journal, NULL, (uint32_t)TickCount());
+            if (result == 2) { gSending = 4; SetStatus("Building snapshot; waiting for MacRelix worker..."); return; }
+        } else if (!strcmp(call->name, "read_build_log")) {
+            build_project_log(call, gToolResult, sizeof(gToolResult)); result = 0;
+        } else result = tools_execute_recorded(call, gToolResult, sizeof(gToolResult), Journal, NULL);
         if (agent_tool_result(&gAgent, gToolResult, error, sizeof(error))) { AbortChat(error); return; }
         ShowMessage(call->name, gToolResult);
         if (result) AbortChat("Mutation stopped. Inspect the result and session recovery records; do not retry automatically.");
@@ -901,7 +922,7 @@ int main(void)
         if (gSending) DriveChatStep();
     }
     if (gNet.ctx || gOTOpen) CloseChatContext();
-    if (gAgent.active) agent_stop(&gAgent, "Application quit.");
+    if (gAgent.active) AbortChat("Application quit.");
     SessionClose();
     LogLine("Sherclawk session ended."); LogClose(); UIDispose();
     MacTLS_Shutdown(); return 0;

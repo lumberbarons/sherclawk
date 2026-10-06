@@ -6,13 +6,14 @@ HTTPS, a Finder icon based on `../sherclawk.png`, and that character in the main
 window. [PLAN.md](PLAN.md) tracks the full coding-harness roadmap.
 
 The installed tools are `get_environment`, `list_files`, `read_text`,
-`search_text`, create-only `write_text`, create-only `create_folder`, template-backed `create_project`, and revision-guarded `edit_text`. Native build jobs
-and artifact launch tools come next. The [native PowerPC template](templates/ppc-toolbox/README.md)
+`search_text`, create-only `write_text`, create-only `create_folder`, template-backed `create_project`, revision-guarded `edit_text`, `build_project`,
+and `read_build_log`. Builds execute natively through the MacRelix worker;
+artifact launch remains planned. The [native PowerPC template](templates/ppc-toolbox/README.md)
 captures a guest-verified MrC/PPCLink/Rez recipe and installed versions;
 the [MacRelix job worker](worker/README.md) now implements complete-file
 publication, rename claims, output capture and completion records. The native
 producer and bounded poller now have a cooperative guest diagnostic;
-model-facing build/run tool integration remains planned. The [next contract](PLAN.md#next-buildrun-contract-planned)
+revision-bound builds are implemented. The [contract](PLAN.md#buildrun-contract)
 uses editable project descriptors, multiple source/resource files and structured
 toolchain settings; the verified template supplies a convenient starting point.
 The model receives only these installed capabilities; the app executes tools
@@ -122,26 +123,88 @@ and stops the run. Use `list_files` to verify; Stop does not undo a create.
 
 ## Creating projects
 
-`create_project` is an optional starter shortcut. The agent may also assemble
-projects with ordinary folder/text tools. Planned `build_project(path)` accepts
-any valid project descriptor, with multiple source/resource files, a chosen
-output name and supported toolchain settings. Planned
-`run_application(build_id)` launches a recorded successful build. These tools
-are not installed yet; [PLAN.md](PLAN.md#next-buildrun-contract-planned) defines
-the next implementation and acceptance work.
+`create_project` is an optional starter shortcut. `build_project(path)` accepts a project folder path with or without the
+trailing colon returned by `list_files`, and any valid `project.json`, including one assembled with ordinary folder/text tools.
+`run_application(build_id)` remains planned; successful builds return an artifact
+path for inspection and manual guest launch.
 
 `create_project(path)` creates a new `ppc-toolbox-v1` project in an existing
 workspace parent. Only `path` is accepted, with relative colon syntax and no
-trailing colon. Existing files or folders, missing parents and aliases are
-refused. The project contains the verified template's `main.c` and `app.r`,
-and `project.json` identifying protocol 1, template version and source names.
-All three files are plain MacRoman/CR data forks with Finder `TEXT`/`ttxt`.
-Read the sources to obtain whole-file revisions before editing them.
+trailing colon. Existing destinations, missing parents and aliases are refused.
+It publishes `main.c`, `app.r` and a protocol-2 `project.json` as MacRoman/CR
+Finder `TEXT`/`ttxt` data forks. The default output is `template`; edit the
+descriptor to add sources or change the output. The folder name does not change
+the window title. Projects contain no shell recipes.
 
-The app embeds the repository template at build time. Projects contain no
-shell recipes; trusted build execution remains separate. Build and launch
-are still unavailable. The folder name does not change the template's window
-title or future executable name.
+### Native project builds
+
+The descriptor is editable JSON with this initial supported contract:
+
+```json
+{
+  "protocol": 2,
+  "toolchain": "mpw-ppc-v2",
+  "sources": ["main.c", "extra.c"],
+  "resources": ["app.r"],
+  "headers": ["shared.h"],
+  "include_paths": ["."],
+  "output": "example",
+  "settings": {
+    "warnings": "off",
+    "libraries": ["InterfaceLib", "StdCLib"],
+    "creator": "ShCk"
+  }
+}
+```
+
+Required fields are `protocol`, `toolchain`, nonempty `sources`, and `output`.
+Optional `resources`, `headers`, and `include_paths` default to empty arrays.
+Settings default to the shown values. `InterfaceLib` is required; `StdCLib` may
+be omitted. The verified C runtimes are always linked. No free-form flags are
+accepted; unknown/duplicate fields, settings and libraries fail validation.
+Optional `template` is provenance only. Protocol-1 descriptors are refused:
+replace their combined sources list with separate C sources/Rez resources, add
+`toolchain` and `output`, and set `protocol` to 2 through ordinary guarded edits.
+
+Up to five total declared C/Rez/header files and a 4 KiB descriptor are supported;
+each input is at most 4 KiB, plain Finder `TEXT`, MacRoman/CR, without resource
+forks or aliases. Declare all project-owned headers. Relative paths use colon
+separators and lowercase ASCII letters, digits, underscore, dash and dot;
+components are 1–31 bytes, cannot start with dot/dash, and paths are at most
+95 bytes. Output is one such filename; `success.txt` is reserved. Include paths
+allow up to three directories or `.`. Only declared inputs are copied into the
+fresh build working directory. Standard SDK includes are supplied by the adapter.
+
+Prepare the queue once on the mounted AFP volume, then run the existing worker
+in MacRelix while using the app. On this installation an idle background worker
+may need foreground activation to resume polling; a lock is not liveness evidence:
+
+```bash
+ssh beardmore 'sudo -n install -d -o macos9 -g macos9 -m 775 /srv/retro68/Worker01/buildjobs'
+```
+
+```sh
+perl -w /Volumes/Retro68/Worker01/worker05.pl /Volumes/Retro68/Worker01/buildjobs
+```
+
+`build_project` reads/compares closed input pages before reserving a fresh build
+ID. Its snapshot retains the descriptor, generated trusted recipe and manifest
+with whole-file revisions and recipe hash. Snapshot publication and polling
+service events between bounded steps. Five-minute snapshot/job phase deadlines and Stop abandon
+observation; they never cancel, replay, or modify a published worker job. An
+uncertain result stops the agent run. Keep the queue/journals for inspection.
+Revision hashes are observational FNV tokens, not cryptographic attestations;
+external server writes are outside File Manager locking guarantees.
+
+Success requires a matching worker success, the exact artifact marker and a
+non-alias `APPL` with data and resource forks. Failed/uncertain builds return no
+artifact. Later source edits do not change older snapshots. Initial compiler
+diagnostics are bounded; `read_build_log(build_id, stream, start_byte)` reads
+128-byte retained stdout/stderr pages with `next_byte` and `truncated` continuation.
+Log data is displayed as MacRoman text; binary control bytes display as `?` while
+raw logs remain on disk. Build IDs and artifact paths are retained evidence, not
+launch authorization. Automatic recovery and a persisted launch registry remain
+work for `run_application`.
 
 Creation journals intent, reserves a unique sibling staging folder, writes
 and closes each file, flushes and verifies exact bytes and metadata, journals
@@ -229,7 +292,7 @@ model history is not silently dropped.
 | `agent.c`, `agent.h` | Typed provider history, tool-call/result pairing, bounds and Stop |
 | `tools.c`, `tools.h` | Native environment/catalog/text executors, journaled creates and guarded exact edits |
 | `json.c`, `text.c`, `network.c`, `chat.c` | Copied protocol/transport/display foundation and baseline checks |
-| `tools/embed-project-template.py` | Embed the verified C/Rez source and fixed descriptor under ignored `build/` |
+| `tools/embed-project-template.py` | Embed the verified C/Rez source and protocol-2 descriptor under ignored `build/` |
 | `tools/project-check.c` | Native create_project publication, exact bytes, metadata and collision diagnostic |
 | `tools/make-art.py` | Stdlib PNG decoder and native icon/window resource conversion |
 | `tools/netatalk_meta.py`, `tools/deploy-to-share.sh` | Fork-aware publication with the new Finder identity |
@@ -245,6 +308,8 @@ model history is not silently dropped.
 | `templates/ppc-toolbox/` | Native MPW PowerPC template and guest verification record |
 | `tools/materialize-native-template.py` | Create new MacRoman/CR template source and LF shell scripts |
 | `tools/native-process-check.c` | Native Process Manager diagnostic for executor paths |
+| `build_project.c`, `build_project.h` | Descriptor validation, trusted recipe, revision snapshot, cooperative build and log pages |
+| `tools/build-check.c`, `tests/test_build_project.c` | Native multi-source/error-repair diagnostic and host validation/fault checks |
 | `jobs.c`, `jobs.h` | Native trusted snapshot publication and bounded completion/log polling |
 | `tools/job-check.c`, `tests/test_jobs.c` | Event-driven guest diagnostic and publication/polling fault checks |
 | `worker/` | MacRelix file-job protocol, executor, native build wrapper and guest evidence |
@@ -400,3 +465,29 @@ a final answer. All seven calls/results paired in `s0000c375.jsonl`; concatenate
 readback matched the repository template exactly and all pages carried the same
 editable whole-file revision. Diagnostic evidence is retained locally under
 ignored `build/project-check-verified.log` and `build/project-session.jsonl`.
+
+Native build verification, October 5, 2026: PowerPC main/diagnostic builds and
+ASan/UBSan protocol, descriptor and File Manager fault checks passed. The guest
+`SherclawkBuildCheck` reported `RESULT failures=0` for independent and starter
+projects with two C sources and editable output names. Each route deliberately
+failed compilation, repaired the source with a revision-guarded edit and submitted
+a fresh successful build. The independent project also used a declared header
+and include path. Successful artifacts were manually opened from their exact
+snapshot paths in OS 9: the independent window displayed text from its second C
+file, and the starter displayed the native template window. This is visual
+launch evidence; automated run IDs/runtime observations remain planned. Retained
+build IDs and compiler results are recorded in [worker/VERIFIED.md](worker/VERIFIED.md).
+The initial independent fixture exposed a missing `QDGlobals` definition; the
+linker failure was reported correctly and retained. Host checks include malformed
+descriptors, duplicate/unsupported settings, path metacharacters, source changes,
+close faults, publication/Stop, artifact resource-fork refusal and worst-case
+log escaping. Raw evidence is under ignored `build/build-check-verified.log`,
+`build/build-independent.png`, and `build/build-artifacts2.png`.
+
+The final main app's live `openai/gpt-6-luna` loop also built the independent
+fixture, received build ID `build-0002ed03-0001`, read both stdout pages (0–128,
+128–151), and returned a final successful build answer. All six calls/results
+paired in `s0002e7bf.jsonl`; the local ignored copy is `build/build-session.jsonl`.
+The final folder-path compatibility fix accepts trailing colons from catalog
+results. Stop retained an uncertain published job without resubmission; its
+original snapshot later completed when the worker was explicitly resumed.

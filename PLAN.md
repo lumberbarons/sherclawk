@@ -20,9 +20,11 @@ The verified PowerPC Toolbox template is a starter and acceptance fixture.
 with ordinary folder/text tools must be equally buildable when its descriptor
 is valid. Neither template identity nor creation history authorizes execution.
 
-## Next build/run contract (planned)
+## Build/run contract
 
-Define a versioned project descriptor before implementing `build_project`:
+Protocol 2 and `build_project` are implemented; see the supported descriptor in
+[README.md](README.md#native-project-builds). Extend its explicit limits/settings
+as additional toolchain behavior is verified:
 
 - Describe multiple C sources, Rez resources, project headers/include paths,
   an output name and supported compiler/linker settings, including library
@@ -34,7 +36,7 @@ Define a versioned project descriptor before implementing `build_project`:
   settings into a trusted executor recipe; descriptor fields are data, never
   shell or MPW command fragments. Toolchain adapters can expand support later.
 
-`build_project(path)` will accept any valid project descriptor, including one
+`build_project(path)` accepts any valid project descriptor, including one
 written by the agent without `create_project`. Bind the validated descriptor,
 settings, recipe/toolchain identity and all project-owned build inputs to an
 immutable snapshot with source revisions. Report unsupported settings or missing
@@ -47,9 +49,8 @@ observations and smoke-test results. A failed, uncertain or partial build cannot
 authorize launch. Later source edits do not turn an older artifact into a build
 of those edits; report the snapshot associated with the launched build.
 
-The existing `create_project` descriptor identifies protocol 1, a template and
-source names; it does not yet implement these build settings. Specify its
-compatibility or explicit migration when finalizing the build descriptor.
+New `create_project` descriptors use protocol 2. Older protocol-1 descriptors
+require explicit migration; they are rejected before queue publication.
 Do not advertise planned build/run capabilities until implemented and verified.
 
 First acceptance: build an application with two C sources and an agent-written
@@ -98,8 +99,8 @@ This establishes flexibility before adding more application-specific fixtures.
    and model-facing build/run integration belong to step 4.
 4. Template-backed `create_project` is implemented: verified C/Rez source and a
    versioned descriptor published by one journaled, create-only folder rename.
-   Finalize the flexible project descriptor above, then implement
-   `build_project(path)` and native `run_application(build_id)`. Verify both
+   `build_project(path)` implements flexible protocol-2 descriptors and native
+   compilation. Native `run_application(build_id)` remains next. Verify both
    starter-created and independently assembled projects with multiple sources,
    configurable outputs and revision-bound artifact tracking.
 5. Counter application acceptance task, compiler-error repair, then a file

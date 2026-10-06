@@ -95,7 +95,7 @@ OSErr FSRead(short ref, long *n, void *out)
 OSErr FSWrite(short ref, long *n, const void *in)
 {
     if(short_write && *n) --*n;
-    assert(*n<=4096); memcpy(files[ref].bytes,in,(size_t)*n); files[ref].size=*n; return 0;
+    assert(positions[ref]+*n<=(long)sizeof(files[ref].bytes)); memcpy(files[ref].bytes+positions[ref],in,(size_t)*n); positions[ref]+=*n; if(positions[ref]>files[ref].size)files[ref].size=positions[ref]; return 0;
 }
 OSErr FSClose(short ref) { opens[ref]=0; return bad_close ? ioErr : 0; }
 OSErr SetFPos(short ref, short mode, long pos) { (void)mode; positions[ref]=pos; return 0; }

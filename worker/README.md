@@ -3,13 +3,14 @@
 `worker.pl` executes foreground jobs inside the OS 9 guest. It uses Perl
 built-ins and `/bin/sh`, with no host executor or code copied from MacRelix.
 Sherclawk's native producer and bounded poller implement this protocol,
-with an event-driven Toolbox diagnostic. `build_project`, revision binding
-and launch tools remain subsequent work. The [planned integration](../PLAN.md#next-buildrun-contract-planned)
-will translate validated, editable project descriptors into trusted toolchain
-recipes and immutable snapshots. The current `build-template.sh` is a fixed
-verification fixture; it does not define the future project's source layout,
-output name or supported compiler/linker settings. Projects assembled through
-ordinary file tools will use the same build contract as starter-created projects.
+with an event-driven Toolbox diagnostic. The main app's `build_project` now
+validates editable protocol-2 descriptors, binds source revisions, generates a
+trusted MPW recipe, publishes an immutable snapshot and returns bounded compiler
+diagnostics with `read_build_log` continuation. See the
+[descriptor contract](../README.md#native-project-builds). Artifact launch remains
+planned. `build-template.sh` remains a fixed verification fixture; model-facing
+builds use the generated `mpw-ppc-v2` recipe, accepting independently assembled
+projects and starter-created projects through the same contract.
 
 | File | Purpose |
 |---|---|
