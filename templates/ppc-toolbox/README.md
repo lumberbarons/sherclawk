@@ -15,6 +15,14 @@ and quits on a content click or Command-Q.
 | `../../tools/materialize-native-template.py` | Create new MacRoman/CR source and LF shell scripts |
 | `../../tools/native-process-check.c` | Confirm actual classic application paths |
 
+This is a verified starter and acceptance fixture. Its fixed `main.c`, `app.r`
+and `Template` output are defaults, not requirements for every future project.
+`create_project` embeds its editable C/Rez sources; the planned build tools will
+also accept independently assembled projects with multiple sources/resources,
+a chosen output name and supported toolchain settings. See the
+[build/run plan](../../PLAN.md#next-buildrun-contract-planned). The shell recipe
+below remains the verified fixed-template diagnostic workflow.
+
 ## Materialize and publish source
 
 From the repository root:

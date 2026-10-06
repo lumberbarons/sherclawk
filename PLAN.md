@@ -6,6 +6,59 @@ Sherclawk is an independent source copy of HelloChat in this directory.
 HelloChat remains unchanged. Build Sherclawk with Retro68; execute its agent
 loop and tools in the classic Mac application.
 
+## Harness direction
+
+Build a flexible native coding harness. The agent chooses application behavior,
+source organization and repair steps; tools provide file operations, compilation,
+launch and observations. Keep correctness constraints in the harness: fork-aware
+files, revision-bound snapshots, journal barriers, bounded cooperative execution,
+collision refusal and explicit uncertain outcomes. Project shape and application
+behavior are agent decisions within the supported toolchain and explicit limits.
+
+The verified PowerPC Toolbox template is a starter and acceptance fixture.
+`create_project` remains a convenience; using it is optional. A project assembled
+with ordinary folder/text tools must be equally buildable when its descriptor
+is valid. Neither template identity nor creation history authorizes execution.
+
+## Next build/run contract (planned)
+
+Define a versioned project descriptor before implementing `build_project`:
+
+- Describe multiple C sources, Rez resources, project headers/include paths,
+  an output name and supported compiler/linker settings, including library
+  selection. Paths remain relative to the project within the workspace.
+- Let the agent edit the descriptor through ordinary text tools. Validate its
+  schema, paths, settings and explicit size/count limits before publication.
+  Treat template identity as provenance/defaults, not a fixed source layout.
+- Start with the guest-verified MrC/PPCLink/Rez toolchain. Translate structured
+  settings into a trusted executor recipe; descriptor fields are data, never
+  shell or MPW command fragments. Toolchain adapters can expand support later.
+
+`build_project(path)` will accept any valid project descriptor, including one
+written by the agent without `create_project`. Bind the validated descriptor,
+settings, recipe/toolchain identity and all project-owned build inputs to an
+immutable snapshot with source revisions. Report unsupported settings or missing
+inputs explicitly. Return bounded compiler diagnostics and a build ID, preserving
+log continuation and uncertain outcomes from the native job protocol.
+
+`run_application(build_id)` will resolve only an artifact recorded for that
+successful build and its snapshot. It will assign a separate run ID for runtime
+observations and smoke-test results. A failed, uncertain or partial build cannot
+authorize launch. Later source edits do not turn an older artifact into a build
+of those edits; report the snapshot associated with the launched build.
+
+The existing `create_project` descriptor identifies protocol 1, a template and
+source names; it does not yet implement these build settings. Specify its
+compatibility or explicit migration when finalizing the build descriptor.
+Do not advertise planned build/run capabilities until implemented and verified.
+
+First acceptance: build an application with two C sources and an agent-written
+project descriptor using ordinary file tools, without `create_project`. Also
+build a starter-created project with an added source and a changed output name.
+For both routes, exercise compiler-error repair, a fresh revision-bound rebuild,
+launch of the successful artifact and correlated runtime observation in OS 9.
+This establishes flexibility before adding more application-specific fixtures.
+
 ## Required visual identity
 
 - Use the workspace's `../sherclawk.png` (the requested Sherclawk reference)
@@ -45,9 +98,10 @@ loop and tools in the classic Mac application.
    and model-facing build/run integration belong to step 4.
 4. Template-backed `create_project` is implemented: verified C/Rez source and a
    versioned descriptor published by one journaled, create-only folder rename.
-   `build_project` and native `run_application` remain next; associate
-   outputs with successful builds and source revisions, and correlate runtime
-   smoke-test results by run ID. Never launch an artifact from a failed build.
+   Finalize the flexible project descriptor above, then implement
+   `build_project(path)` and native `run_application(build_id)`. Verify both
+   starter-created and independently assembled projects with multiple sources,
+   configurable outputs and revision-bound artifact tracking.
 5. Counter application acceptance task, compiler-error repair, then a file
    transformer and drawing application. Validate logic automatically and
    appearance manually. Add stronger recovery and context compaction later.

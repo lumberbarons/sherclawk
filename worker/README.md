@@ -4,7 +4,12 @@
 built-ins and `/bin/sh`, with no host executor or code copied from MacRelix.
 Sherclawk's native producer and bounded poller implement this protocol,
 with an event-driven Toolbox diagnostic. `build_project`, revision binding
-and launch tools remain subsequent work.
+and launch tools remain subsequent work. The [planned integration](../PLAN.md#next-buildrun-contract-planned)
+will translate validated, editable project descriptors into trusted toolchain
+recipes and immutable snapshots. The current `build-template.sh` is a fixed
+verification fixture; it does not define the future project's source layout,
+output name or supported compiler/linker settings. Projects assembled through
+ordinary file tools will use the same build contract as starter-created projects.
 
 | File | Purpose |
 |---|---|

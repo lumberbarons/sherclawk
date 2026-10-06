@@ -12,7 +12,9 @@ captures a guest-verified MrC/PPCLink/Rez recipe and installed versions;
 the [MacRelix job worker](worker/README.md) now implements complete-file
 publication, rename claims, output capture and completion records. The native
 producer and bounded poller now have a cooperative guest diagnostic;
-model-facing build/run tool integration remains planned.
+model-facing build/run tool integration remains planned. The [next contract](PLAN.md#next-buildrun-contract-planned)
+uses editable project descriptors, multiple source/resource files and structured
+toolchain settings; the verified template supplies a convenient starting point.
 The model receives only these installed capabilities; the app executes tools
 with the File Manager and records their results before requesting a follow-up.
 
@@ -119,6 +121,14 @@ unverifiable result or a failed completion record is reported as `uncertain`
 and stops the run. Use `list_files` to verify; Stop does not undo a create.
 
 ## Creating projects
+
+`create_project` is an optional starter shortcut. The agent may also assemble
+projects with ordinary folder/text tools. Planned `build_project(path)` accepts
+any valid project descriptor, with multiple source/resource files, a chosen
+output name and supported toolchain settings. Planned
+`run_application(build_id)` launches a recorded successful build. These tools
+are not installed yet; [PLAN.md](PLAN.md#next-buildrun-contract-planned) defines
+the next implementation and acceptance work.
 
 `create_project(path)` creates a new `ppc-toolbox-v1` project in an existing
 workspace parent. Only `path` is accepted, with relative colon syntax and no
