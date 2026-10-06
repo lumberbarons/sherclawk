@@ -29,3 +29,9 @@ mkdir -p "$HERE/build/tests"
     "$HERE/tests/test_tools.c" "$HERE/tools.c" "$HERE/json.c" "$HERE/text.c" \
     -o "$HERE/build/tests/test-tools"
 "$HERE/build/tests/test-tools"
+
+"${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror -Wno-multichar \
+    -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -I"$HERE/tests/toolbox" -I"$HERE" \
+    "$HERE/tests/test_jobs.c" "$HERE/jobs.c" -o "$HERE/build/tests/test-jobs"
+"$HERE/build/tests/test-jobs"

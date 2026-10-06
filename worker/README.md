@@ -2,11 +2,14 @@
 
 `worker.pl` executes foreground jobs inside the OS 9 guest. It uses Perl
 built-ins and `/bin/sh`, with no host executor or code copied from MacRelix.
-This implements the worker protocol; Sherclawk's native producer, polling UI,
-`build_project` and launch tools remain subsequent work.
+Sherclawk's native producer and bounded poller implement this protocol,
+with an event-driven Toolbox diagnostic. `build_project`, revision binding
+and launch tools remain subsequent work.
 
 | File | Purpose |
 |---|---|
+| `../jobs.c`, `../jobs.h` | Native snapshot producer, strict completion parser and bounded log pages |
+| `../tools/job-check.c`, `../tests/test_jobs.c` | Cooperative guest diagnostic and native protocol fault model |
 | `worker.pl` | Singleton polling loop, rename claims, output capture and terminal records |
 | `build-template.sh` | Run a snapshot of the verified PowerPC template |
 | `../tools/publish-worker-job.py` | Stdlib host diagnostic producer with complete-file publication |
@@ -69,9 +72,9 @@ the claim/lock for inspection. A malformed queue is not repaired automatically.
 
 This queue is for trusted local recipes; it is not a sandbox or a model-facing
 generic shell tool. Scripts must not fork background jobs, read interactive
-input or mutate the queue protocol. Logs are currently unbounded on disk;
-future native polling must read bounded pages. Source revisions and artifact
-authorization belong to the future native producer.
+input or mutate the queue protocol. Logs are unbounded on disk;
+native polling reads at most one 1 KiB page from each log per poll. Source revision binding and artifact
+authorization belong to the future build/run tool integration.
 
 Close/rename gives complete-file visibility, not a transactional guarantee
 across AFP server/guest crashes. Neither the installed guest nor this worker
@@ -127,3 +130,72 @@ requires the matching `succeeded` result, the recipe's
 Only then is `build/native/Template` a launch candidate. Do not launch partial
 outputs from failed or uncertain jobs. Applications retain resource forks and
 Finder info; transporting them requires the existing fork-aware workflow.
+
+
+## Native producer and cooperative polling
+
+`jobs_begin` accepts an already-resolved, trusted queue folder, a fresh lowercase
+ID, immutable memory snapshots and a required flushed journal callback. It
+refuses aliases at the queue leaf; the caller must resolve trusted ancestors
+without following aliases. It reserves a new folder exclusively, records the
+intent/reservation and never reuses a failed reservation. The caller
+records the logical queue path alongside these records: native volume and
+directory IDs are observational across remounts. This internal API
+accepts trusted recipes only; it is not a model-facing shell tool.
+
+Up to eight inputs use distinct lowercase ASCII HFS names, each at most 64 KiB,
+with at most 128 KiB total. Exactly one is a nonempty `script`; its bytes contain neither
+CR nor NUL. Worker protocol names are reserved. Source bytes are copied as
+supplied, preserving MacRoman/CR inputs and LF shell recipes. The caller keeps
+input buffers immutable through staging; revision binding is future work.
+
+Call `jobs_step` once per event-loop turn. A staging step writes or verifies
+at most 1 KiB, closes its data-fork descriptor, and returns. Closed inputs have
+length/resource/alias checks and complete byte readback. Only after the staged
+journal barrier does the producer write, close, flush and verify `ready.tmp`,
+then rename it to `ready`. It records publication and never changes inputs
+again. Failure at or after the rename attempt is conservatively unknown.
+Failed staging leaves an unpublished, abandoned folder for manual inspection.
+
+Waiting steps poll at most once per 60 ticks, reading at most a 256-byte result
+and one 1 KiB page each from stdout and stderr. The terminal parser requires
+exact protocol/ID, canonical LF fields, recognized outcome and consistent
+bounded exit/signal/wait status. `.tmp` files are ignored; malformed or
+unreadable results produce unknown outcomes. Logs have separate byte offsets;
+missing logs produce empty pages, while truncation, aliases, resource forks
+and read errors fail observation. Pages are raw bytes with explicit lengths,
+so embedded NUL and partial encodings do not lose bytes. Consume each page
+before the next step. `jobs_logs` supplies explicit bounded continuation after
+completion; a terminal record does not mean all log bytes fit the first page.
+
+Stop and elapsed-tick deadlines abandon staging or mark a published job
+unknown. They never write queue STOP, kill a worker, delete a claim, recreate
+ready or resubmit. Tick subtraction handles clock wrap. Journal failures stop
+publication/observation. Terminal records establish shell completion only;
+they do not authorize an artifact. No build or launch capability is advertised.
+FlushVol does not establish verified power-loss durability across AFP.
+
+The `SherclawkJobCheck` app uses this API from a `WaitNextEvent` loop and
+retains a fresh job under `Retro68:Worker01:nativejobs:`. Create that queue on
+the existing mounted share, then build/publish the diagnostic:
+
+```bash
+ssh beardmore 'sudo -n install -d -o macos9 -g macos9 -m 775 /srv/retro68/Worker01/nativejobs'
+APP=SherclawkJobCheck sherclawk/tools/deploy-to-share.sh
+```
+
+Launch the diagnostic and run the existing worker against the fresh queue in
+MacRelix (a short delay permits complete native publication):
+
+```sh
+cd /Volumes/Retro68/Worker01
+open /Volumes/Retro68/SherclawkJobCheck
+sleep 3
+perl -w worker05.pl nativejobs --once
+```
+
+The diagnostic publishes a fixed LF script and 3 KiB CR snapshot, observes the result
+and separate stdout/stderr, and writes `Retro68:SherclawkJobCheck.log`. It has a
+120-second deadline; Command-period stops observation. Inspect the retained
+folder after an unknown outcome. This verifies the native queue integration,
+not model tool dispatch, source revisions, native compilation or launch.

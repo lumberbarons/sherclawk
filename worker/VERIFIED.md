@@ -56,6 +56,48 @@ explicitly after the child finishes, and verifies no replay. Intentional worker
 crash and output conflicts were tested on the host, not against the live guest.
 `perl -w -c` and `git diff --check` passed.
 
-Native Sherclawk job production, revision binding, bounded result polling,
-build/run tools, cancellation, recovery automation, log limits and power-loss
-durability remain unimplemented or unverified. No new model tool is advertised.
+At the worker-only milestone, native production/polling and build/run tools
+remained future work. The next section records native producer/poller
+verification; no new model tool is advertised.
+
+
+## Native producer/poller — October 3, 2026
+
+`SherclawkJobCheck` was cross-compiled with Retro68, published fork-aware,
+and launched in the same OS 9.2.2 guest. Its own File Manager calls created
+`Retro68:Worker01:nativejobs:` jobs; the host did not publish ready or the
+snapshot inputs. The existing `worker05.pl` executed the published script in
+MacRelix. The diagnostic serviced `WaitNextEvent` between bounded staging and
+polling steps.
+
+| Evidence under `Retro68:Worker01:` | Observed result |
+|---|---|
+| `nativejobs:native-0003564b`, `nativecheck01-producer.log` | Initial fixture exposed absent shell `printf`; shell returned success because of a trailing `exit 0`, but diagnostic correctly reported failure for missing expected logs |
+| `nativejobs:native-00045e3c`, `nativecheck02-producer.log` | Corrected fixture used `cat`/`echo` with explicit failure propagation; native 3 KiB snapshot staging/readback and multiple log pages completed with `RESULT failures=0`, stdout 3,095 bytes, stderr 23 bytes |
+| `nativejobs:native-00046c21`, `nativecheck03-stopped.log` | Command-period during waiting recorded `job_stopped`, state unknown; ready and both inputs remained, with no claim/result or recreated publication at Stop; a later explicit worker scan consumed that original ready marker and completed it |
+| `nativejobs:native-0004a7ab`, `nativecheck04-producer.log` | Final rebuilt/published diagnostic returned `RESULT failures=0`, stdout 3,095 bytes and stderr 23 bytes |
+
+The successful job's script retained LF bytes, its 3,072-byte snapshot ended
+in `78 0d` (x/CR), and its result matched protocol 1, its exact ID, succeeded,
+exit 0, signal 0 and wait status 0. The worker's `nativecheck.status` was 0.
+The diagnostic intentionally reports a non-success result when stopped.
+No worker was left running after these checks. The stopped observer
+retained its unknown result; the later explicit worker scan completed the
+original queued job without recreation or resubmission. This confirms that
+Stop ends observation and does not cancel execution.
+
+ASan/UBSan native File Manager model checks passed for exclusive reservation,
+reserved/duplicate names, script CR refusal, byte-exact multi-page and 64 KiB
+staging, zero-length non-script inputs, short writes, corrupt readback, close
+and flush failures, ready verification, rename uncertainty, journal failures
+at each barrier and after terminal observation, strict result parsing and
+numeric overflow refusal, truncated/mismatched/malformed records, alias and
+resource refusal, `.tmp` ignoring, separate bounded log pages and continuation,
+log truncation, polling rate, Stop, deadlines and tick wrap. The existing
+seven Python worker checks also passed. Fault injection was on the host model,
+not on the live guest volume.
+
+This verifies native snapshot publication and cooperative polling through a
+diagnostic app. Model-facing dispatch, source revision binding, native compiler
+job submission, artifact authorization, cancellation, automatic recovery and
+AFP power-loss durability are still outside this slice.

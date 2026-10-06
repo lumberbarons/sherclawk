@@ -38,7 +38,11 @@ loop and tools in the classic Mac application.
    actual ToolServer process identity. The MacRelix file-job worker now
    implements complete-file publication, rename claim, stage/log/completion
    records and uncertain outcomes. Native File Manager production and bounded
-   cooperative polling remain next; the Python producer is diagnostic only.
+   cooperative polling are implemented in `jobs.c`, with an event-driven
+   `SherclawkJobCheck` diagnostic. Trusted recipe inputs are closed and verified
+   before ready publication; Stop/deadline never cancel or replay a published
+   job. The Python producer remains diagnostic only. Source revision binding
+   and model-facing build/run integration belong to step 4.
 4. `create_project`, `build_project`, and native `run_application`; associate
    outputs with successful builds and source revisions, and correlate runtime
    smoke-test results by run ID. Never launch an artifact from a failed build.

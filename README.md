@@ -10,8 +10,9 @@ The installed tools are `get_environment`, `list_files`, `read_text`,
 and artifact launch tools come next. The [native PowerPC template](templates/ppc-toolbox/README.md)
 captures a guest-verified MrC/PPCLink/Rez recipe and installed versions;
 the [MacRelix job worker](worker/README.md) now implements complete-file
-publication, rename claims, output capture and completion records. Native
-producer/polling and build/run tool integration remain planned.
+publication, rename claims, output capture and completion records. The native
+producer and bounded poller now have a cooperative guest diagnostic;
+model-facing build/run tool integration remains planned.
 The model receives only these installed capabilities; the app executes tools
 with the File Manager and records their results before requesting a follow-up.
 
@@ -206,6 +207,8 @@ model history is not silently dropped.
 | `templates/ppc-toolbox/` | Native MPW PowerPC template and guest verification record |
 | `tools/materialize-native-template.py` | Create new MacRoman/CR template source and LF shell scripts |
 | `tools/native-process-check.c` | Native Process Manager diagnostic for executor paths |
+| `jobs.c`, `jobs.h` | Native trusted snapshot publication and bounded completion/log polling |
+| `tools/job-check.c`, `tests/test_jobs.c` | Event-driven guest diagnostic and publication/polling fault checks |
 | `worker/` | MacRelix file-job protocol, executor, native build wrapper and guest evidence |
 | `tools/publish-worker-job.py`, `tests/test_worker.py` | Diagnostic job producer and publication/execution/crash checks |
 
@@ -213,6 +216,8 @@ model history is not silently dropped.
 sherclawk/tools/check.sh
 sherclawk/tools/check-transport.sh
 python3 sherclawk/tests/test_worker.py
+APP=SherclawkJobCheck sherclawk/tools/deploy-to-share.sh
+# See worker/README.md for the guest native producer/poller diagnostic.
 sherclawk/tools/build-host-probe.sh
 sherclawk/build/host-probe
 sherclawk/build.sh SherclawkProbe_APPL
@@ -320,3 +325,16 @@ by same-volume rename into `Retro68:Spikes:Text tools v1 2026-10-02:` and
 `Retro68:Spikes:Text tools v2 2026-10-02:`. Archive manifests record the old
 root locations; saved recovery/session paths refer to those original locations.
 No AFP service restart was needed.
+
+
+Native job integration, October 3, 2026: `jobs.c` now reserves fresh job folders,
+stages and reads back closed snapshot inputs in bounded steps, publishes ready
+last, and polls strict terminal records plus separate 1 KiB log pages. The
+PowerPC `SherclawkJobCheck` diagnostic was built, published fork-aware and
+launched in OS 9.2.2. It reported `RESULT failures=0` for a 3 KiB native snapshot
+and stdout/stderr continuation through the MacRelix worker. Command-period
+recorded an unknown outcome without changing the published job; a later explicit
+worker scan completed that original queued job. ASan/UBSan File Manager fault
+checks and the existing Python worker checks passed. Detailed evidence and
+limits are in [worker/VERIFIED.md](worker/VERIFIED.md). Model-facing build/run
+tools, source revision binding and artifact authorization remain planned.
