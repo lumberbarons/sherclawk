@@ -5,6 +5,7 @@
 #include "json.h"
 #include "text.h"
 #include "config.h"
+#include "build/project-template.h"
 #include <Files.h>
 #include <Script.h>
 #include <Memory.h>
@@ -107,7 +108,7 @@ static void environment(char *out, size_t cap)
     snprintf(out, cap, "{\"status\":\"ok\",\"os\":\"classic Mac OS\",\"system_version_hex\":\"%04lx\","
         "\"architecture\":\"PowerPC\",\"workspace\":%s,\"paths\":\"relative colon-separated\","
         "\"encoding\":\"MacRoman data fork to UTF-8\",\"read_only\":false,\"free_heap_bytes\":%ld,"
-        "\"tools\":[\"get_environment\",\"list_files\",\"read_text\",\"search_text\",\"write_text\",\"edit_text\",\"create_folder\"],"
+        "\"tools\":[\"get_environment\",\"list_files\",\"read_text\",\"search_text\",\"write_text\",\"edit_text\",\"create_folder\",\"create_project\"],"
         "\"write_policy\":\"create_only_existing_parent\",\"folder_policy\":\"create_only_existing_parent\",\"write_max_bytes\":4096,"
         "\"edit_policy\":\"unique_exact_whole_revision_CR_backup\",\"edit_max_bytes\":4096,"
         "\"build_supported\":false,\"launch_supported\":false}", system, q, (long)FreeMem());
@@ -808,6 +809,134 @@ static int create_folder(const AgentCall *call, const JsonToken *tokens, char *o
     }
     return 0;
 }
+/* Publish a complete, fixed template by one collision-safe folder rename.
+ * Failed stages stay journaled for inspection; never reuse or roll them back. */
+static int project_result(char *out, size_t cap, const char *status, const char *code,
+                          const char *path, const char *temporary, int native)
+{
+    char head[120], tail[256];
+    size_t at = 0;
+    snprintf(head, sizeof(head), "{\"status\":\"%s\",\"code\":\"%s\",\"path\":", status, code);
+    snprintf(tail, sizeof(tail), ",\"template\":\"ppc-toolbox-v1\",\"files\":[\"main.c\",\"app.r\",\"project.json\"],"
+        "\"build_supported\":false,\"launch_supported\":false,\"os_error\":%d}", native);
+    return append(out, cap, &at, head) || quote(out, cap, &at, path) ||
+        append(out, cap, &at, ",\"temporary_path\":") || quote(out, cap, &at, temporary) ||
+        append(out, cap, &at, tail) ? -1 : 0;
+}
+static OSErr project_file(FSSpec *file, const char *bytes, int create)
+{
+    char observed[4096];
+    CInfoPBRec pb;
+    OSErr err, closed;
+    short ref;
+    long length = (long)strlen(bytes), count;
+    if (length > (long)sizeof(observed)) return paramErr;
+    if (create) {
+        err = FSpCreate(file, 'ttxt', 'TEXT', smSystemScript);
+        if (err) return err;
+        err = FSpOpenDF(file, fsWrPerm, &ref);
+        if (err) return err;
+        count = length; err = FSWrite(ref, &count, bytes); closed = FSClose(ref);
+        if (!err && count != length) err = ioErr;
+        if (!err) err = closed;
+        if (err) return err;
+        err = FlushVol(NULL, file->vRefNum); if (err) return err;
+    }
+    err = catalog(file, &pb);
+    if (!err && (!plain_file(file, &pb) || pb.hFileInfo.ioFlLgLen != length ||
+        pb.hFileInfo.ioFlFndrInfo.fdType != 'TEXT' || pb.hFileInfo.ioFlFndrInfo.fdCreator != 'ttxt')) err = ioErr;
+    if (err) return err;
+    err = FSpOpenDF(file, fsRdPerm, &ref); if (err) return err;
+    count = length; err = FSRead(ref, &count, observed); closed = FSClose(ref);
+    if (!err && (count != length || memcmp(bytes, observed, (size_t)length))) err = ioErr;
+    if (!err) err = closed;
+    return err;
+}
+static int create_project(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap,
+                          AgentJournal journal, void *context)
+{
+    char path[512], temporary[768], local[256], child[800], tempname[32];
+    char record[AGENT_RESULT_CAP], call_id[800], envelope[AGENT_RESULT_CAP + 900];
+    FSSpec target, stage, file;
+    CInfoPBRec pb;
+    OSErr err;
+    long dir = 0;
+    int attempt, i;
+    size_t prefix;
+    const char *status = "error", *code = "PROJECT_STAGE_RETAINED";
+    if (valid_keys(call->arguments, tokens, "|path|") ||
+        string_arg(call->arguments, tokens, "path", path, sizeof(path)) < 0) {
+        fail(out, cap, "ARGUMENTS", "Expected only a path string for a new ppc-toolbox-v1 project.", 0); return 0;
+    }
+    err = create_spec(path, &target);
+    if (!err) { fail(out, cap, "EXISTS", "Project destination already exists; never reused.", 0); return 0; }
+    if (err != fnfErr) { fail(out, cap, "PATH", "Expected a relative new folder in an existing non-alias parent, without trailing colon.", err); return 0; }
+    prefix = strrchr(path, ':') ? (size_t)(strrchr(path, ':') - path + 1) : 0;
+    /* Validate every generated path before touching the journal or volume. */
+    snprintf(temporary, sizeof(temporary), "%.*sSherclawk project 00000000 00", (int)prefix, path);
+    for (i = 0; i < (int)(sizeof(project_inputs)/sizeof(project_inputs[0])); i++) {
+        snprintf(child, sizeof(child), "%s:%s", path, project_inputs[i].name);
+        if (text_to_macroman_strict(child, local, sizeof(local)) < 0 || tools_validate_path(local, 0) || strlen(SHERCLAWK_WORKSPACE) + strlen(local) > 255) goto limit;
+        snprintf(child, sizeof(child), "%s:%s", temporary, project_inputs[i].name);
+        if (text_to_macroman_strict(child, local, sizeof(local)) < 0 || tools_validate_path(local, 0) || strlen(SHERCLAWK_WORKSPACE) + strlen(local) > 255) goto limit;
+    }
+    if (project_result(record, sizeof(record), "uncertain", "JOURNAL_AFTER_PUBLISH", path, temporary, -32768)) goto limit;
+    if (!journal || json_quote(call->id, call_id, sizeof(call_id)) < 0) {
+        fail(out, cap, "JOURNAL", "Project creation requires a durable session journal.", 0); return 1;
+    }
+    for (attempt = 0; attempt < 100; attempt++) {
+        extern unsigned long TickCount(void);
+        snprintf(tempname, sizeof(tempname), "Sherclawk project %08lx %02x", (unsigned long)TickCount() & 0xffffffffUL, attempt);
+        stage = target; stage.name[0] = (unsigned char)strlen(tempname); memcpy(stage.name + 1, tempname, stage.name[0]);
+        err = catalog(&stage, &pb);
+        if (!err) continue;
+        if (err != fnfErr) { fail(out, cap, "STAGE", "Cannot inspect project staging name.", err); return 0; }
+        snprintf(temporary, sizeof(temporary), "%.*s%s", (int)prefix, path, tempname);
+        project_result(record, sizeof(record), "pending", "CREATE_PROJECT", path, temporary, 0);
+        snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
+        if (journal(context, "mutation_intent", envelope)) { fail(out, cap, "JOURNAL", "No project created: intent recording failed.", 0); return 1; }
+        err = FSpDirCreate(&stage, smSystemScript, &dir);
+        if (err == dupFNErr) continue;
+        break;
+    }
+    if (attempt == 100) { fail(out, cap, "STAGE", "Project staging names exhausted.", 0); return 0; }
+    if (err) goto retained;
+    err = FlushVol(NULL, stage.vRefNum);
+    if (!err) err = catalog(&stage, &pb);
+    if (!err && (!(pb.hFileInfo.ioFlAttrib & 16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000) || pb.dirInfo.ioDrDirID != dir)) err = ioErr;
+    if (err) goto retained;
+    for (i = 0; i < (int)(sizeof(project_inputs)/sizeof(project_inputs[0])); i++) {
+        file = stage; file.parID = dir; file.name[0] = (unsigned char)strlen(project_inputs[i].name);
+        memcpy(file.name + 1, project_inputs[i].name, file.name[0]);
+        err = project_file(&file, project_inputs[i].bytes, 1); if (err) goto retained;
+    }
+    project_result(record, sizeof(record), "staged", "CREATE_PROJECT", path, temporary, 0);
+    snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
+    if (journal(context, "mutation_staged", envelope)) { err = 0; code = "JOURNAL_STAGE_RETAINED"; goto retained; }
+    err = FSpRename(&stage, target.name);
+    if (err == dupFNErr) { code = "EXISTS_STAGE_RETAINED"; goto retained; }
+    status = "uncertain"; code = "PROJECT_PUBLISH_UNCERTAIN";
+    if (err) goto retained;
+    err = FlushVol(NULL, target.vRefNum);
+    if (!err) err = catalog(&target, &pb);
+    if (!err && (!(pb.hFileInfo.ioFlAttrib & 16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000) || pb.dirInfo.ioDrDirID != dir)) err = ioErr;
+    if (err) goto retained;
+    for (i = 0; i < (int)(sizeof(project_inputs)/sizeof(project_inputs[0])); i++) {
+        file = target; file.parID = dir; file.name[0] = (unsigned char)strlen(project_inputs[i].name);
+        memcpy(file.name + 1, project_inputs[i].name, file.name[0]);
+        err = project_file(&file, project_inputs[i].bytes, 0); if (err) goto retained;
+    }
+    project_result(out, cap, "ok", "CREATED_PROJECT", path, "", 0);
+    snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, out);
+    if (journal(context, "mutation_committed", envelope)) { code = "JOURNAL_AFTER_PUBLISH"; goto retained; }
+    return 0;
+retained:
+    project_result(out, cap, status, code, path, temporary, err);
+    return 1;
+limit:
+    fail(out, cap, "LIMIT", "Project child or recovery paths exceed bounds; no project created.", 0); return 0;
+}
+
 int tools_execute_recorded(const AgentCall *call, char *out, size_t cap, AgentJournal journal, void *context)
 {
     JsonToken tokens[128];
@@ -823,6 +952,7 @@ int tools_execute_recorded(const AgentCall *call, char *out, size_t cap, AgentJo
     else if (!strcmp(call->name, "search_text")) search_text(call->arguments, tokens, out, cap);
     else if (!strcmp(call->name, "write_text")) return write_text(call, tokens, out, cap, journal, context);
     else if (!strcmp(call->name, "edit_text")) return edit_text(call, tokens, out, cap, journal, context);
+    else if (!strcmp(call->name, "create_project")) return create_project(call, tokens, out, cap, journal, context);
     else if (!strcmp(call->name, "create_folder")) return create_folder(call, tokens, out, cap, journal, context);
     else fail(out, cap, "UNKNOWN_TOOL", "This tool is not installed.", 0);
     return 0;

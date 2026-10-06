@@ -2,6 +2,7 @@
 # Protocol and File Manager fault checks run under ASan/UBSan; no VM/key.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
+python3 "$HERE/tools/embed-project-template.py"
 mkdir -p "$HERE/build/tests"
 "${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror \
     -fsanitize=address,undefined -fno-omit-frame-pointer \

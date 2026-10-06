@@ -43,7 +43,9 @@ loop and tools in the classic Mac application.
    before ready publication; Stop/deadline never cancel or replay a published
    job. The Python producer remains diagnostic only. Source revision binding
    and model-facing build/run integration belong to step 4.
-4. `create_project`, `build_project`, and native `run_application`; associate
+4. Template-backed `create_project` is implemented: verified C/Rez source and a
+   versioned descriptor published by one journaled, create-only folder rename.
+   `build_project` and native `run_application` remain next; associate
    outputs with successful builds and source revisions, and correlate runtime
    smoke-test results by run ID. Never launch an artifact from a failed build.
 5. Counter application acceptance task, compiler-error repair, then a file

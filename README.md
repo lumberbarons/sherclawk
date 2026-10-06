@@ -6,7 +6,7 @@ HTTPS, a Finder icon based on `../sherclawk.png`, and that character in the main
 window. [PLAN.md](PLAN.md) tracks the full coding-harness roadmap.
 
 The installed tools are `get_environment`, `list_files`, `read_text`,
-`search_text`, create-only `write_text`, create-only `create_folder`, and revision-guarded `edit_text`. Native build jobs
+`search_text`, create-only `write_text`, create-only `create_folder`, template-backed `create_project`, and revision-guarded `edit_text`. Native build jobs
 and artifact launch tools come next. The [native PowerPC template](templates/ppc-toolbox/README.md)
 captures a guest-verified MrC/PPCLink/Rez recipe and installed versions;
 the [MacRelix job worker](worker/README.md) now implements complete-file
@@ -118,6 +118,32 @@ returning `CREATED_FOLDER`. A failure that may have left a folder, an
 unverifiable result or a failed completion record is reported as `uncertain`
 and stops the run. Use `list_files` to verify; Stop does not undo a create.
 
+## Creating projects
+
+`create_project(path)` creates a new `ppc-toolbox-v1` project in an existing
+workspace parent. Only `path` is accepted, with relative colon syntax and no
+trailing colon. Existing files or folders, missing parents and aliases are
+refused. The project contains the verified template's `main.c` and `app.r`,
+and `project.json` identifying protocol 1, template version and source names.
+All three files are plain MacRoman/CR data forks with Finder `TEXT`/`ttxt`.
+Read the sources to obtain whole-file revisions before editing them.
+
+The app embeds the repository template at build time. Projects contain no
+shell recipes; trusted build execution remains separate. Build and launch
+are still unavailable. The folder name does not change the template's window
+title or future executable name.
+
+Creation journals intent, reserves a unique sibling staging folder, writes
+and closes each file, flushes and verifies exact bytes and metadata, journals
+the staged project, then publishes with one non-overwriting folder rename.
+It verifies the published folder identity and files before journaling completion
+and returning `CREATED_PROJECT`. A failed stage remains at `temporary_path`;
+a publication or completion-record failure returns `uncertain`. Failures after
+staging begins stop the run. There is no automatic cleanup, rollback or retry.
+Inspect the journal and both paths before recovery. FlushVol does not establish
+power-loss durability over AFP. This fixed small template executes synchronously;
+Stop prevents the next tool call and does not undo a completed project.
+
 ## Editing text
 
 `edit_text(path, expected_revision, old_text, new_text)` replaces exactly one
@@ -193,6 +219,8 @@ model history is not silently dropped.
 | `agent.c`, `agent.h` | Typed provider history, tool-call/result pairing, bounds and Stop |
 | `tools.c`, `tools.h` | Native environment/catalog/text executors, journaled creates and guarded exact edits |
 | `json.c`, `text.c`, `network.c`, `chat.c` | Copied protocol/transport/display foundation and baseline checks |
+| `tools/embed-project-template.py` | Embed the verified C/Rez source and fixed descriptor under ignored `build/` |
+| `tools/project-check.c` | Native create_project publication, exact bytes, metadata and collision diagnostic |
 | `tools/make-art.py` | Stdlib PNG decoder and native icon/window resource conversion |
 | `tools/netatalk_meta.py`, `tools/deploy-to-share.sh` | Fork-aware publication with the new Finder identity |
 | `tools/check.sh`, `tools/check-transport.sh` | ASan/UBSan protocol, loop, create/edit faults, revision/encoding and TLS I/O checks |
@@ -215,6 +243,8 @@ model history is not silently dropped.
 ```bash
 sherclawk/tools/check.sh
 sherclawk/tools/check-transport.sh
+APP=SherclawkProjectCheck sherclawk/tools/deploy-to-share.sh
+# Launch in OS 9; inspect Retro68:SherclawkProjectCheck.log.
 python3 sherclawk/tests/test_worker.py
 APP=SherclawkJobCheck sherclawk/tools/deploy-to-share.sh
 # See worker/README.md for the guest native producer/poller diagnostic.
@@ -338,3 +368,25 @@ worker scan completed that original queued job. ASan/UBSan File Manager fault
 checks and the existing Python worker checks passed. Detailed evidence and
 limits are in [worker/VERIFIED.md](worker/VERIFIED.md). Model-facing build/run
 tools, source revision binding and artifact authorization remain planned.
+
+Create-project verification, October 5, 2026: ASan/UBSan protocol and File Manager
+checks passed for exact template bytes, MacRoman/CR/TEXT metadata, nested
+parents, malformed arguments, path/alias refusal, existing destinations, short
+writes, corrupt reads, close failures, journal barriers, rename collisions,
+changed folder identity and uncertain publication. The final PowerPC
+`SherclawkProjectCheck` was built, published fork-aware and launched on the live
+OS 9.2.2 AFP volume. It reported `RESULT failures=0` and retained
+`Retro68:Sherclawk Project 0000af4e:`. All three files matched the embedded
+template, had Finder `TEXT`/`ttxt` with no resource fork, and `main.c` returned
+an editable whole-file revision. Recreating the project and escaping the
+workspace were refused without another mutation. Injected failure paths were
+tested on the host model. This acceptance covers project creation, not native
+compilation or launch of the resulting project.
+
+The rebuilt main Sherclawk app was also published and launched. Its live
+`openai/gpt-6-luna` conversation created `ClawProject01` with `create_project`,
+read all 1,671 source bytes through six bounded `read_text` calls and returned
+a final answer. All seven calls/results paired in `s0000c375.jsonl`; concatenated
+readback matched the repository template exactly and all pages carried the same
+editable whole-file revision. Diagnostic evidence is retained locally under
+ignored `build/project-check-verified.log` and `build/project-session.jsonl`.

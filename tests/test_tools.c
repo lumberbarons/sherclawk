@@ -3,6 +3,7 @@
  * silently overwrite an existing file or claim an uncertain create succeeded. */
 #include "tools.h"
 #include "json.h"
+#include "build/project-template.h"
 #include <Files.h>
 #include <assert.h>
 #include <stdio.h>
@@ -108,7 +109,7 @@ OSErr FSpRename(const FSSpec *s, const unsigned char *name)
     if(find(s->parID,name)>=0)return dupFNErr;
     if(rename_error && (!fault_rename || fault_rename==renames))return ioErr;
     strcpy(files[i].name,dest);published=1;
-    if(editing && renames==2 && swapped_publish) files[i].id++;
+    if((editing && renames==2 && swapped_publish) || (!strcmp(call.name,"create_project") && swapped_publish)) files[i].id++;
     return 0;
 }
 long FreeMem(void) { return 100000; }
@@ -119,6 +120,12 @@ static int journal(void *ctx, const char *event, const char *json)
     JsonToken tokens[128]; (void)ctx;
     assert(json_parse(json,strlen(json),tokens,128)>0);
     journals++; assert(strstr(json,"\"call_id\":\"write1\""));
+    if(!strcmp(call.name,"create_project")) {
+        assert(journals==1 ? !strcmp(event,"mutation_intent") && !creates :
+               journals==2 ? !strcmp(event,"mutation_staged") && creates==4 && !published :
+               journals==3 && !strcmp(event,"mutation_committed") && published);
+        return fail_journal==journals ? -1 : 0;
+    }
     if(!strcmp(call.name,"create_folder")) {
         assert(journals==1 ? !strcmp(event,"mutation_intent") && !creates : !strcmp(event,"mutation_committed") && creates);
         return fail_journal==journals ? -1 : 0;
@@ -305,8 +312,50 @@ static void folder_checks(void)
     assert(run() && strstr(result,"CREATE_FOLDER_UNVERIFIED") && leaf("src")>=0);
     puts("PASS create_folder: create-only, nested levels, path/alias refusal, journal barriers, races and uncertain outcomes");
 }
+static void project_checks(void)
+{
+    int i, j, parent;
+    reset();strcpy(call.name,"create_project");strcpy(call.arguments,"{\"path\":\"Project\"}");
+    assert(!run() && strstr(result,"CREATED_PROJECT") && journals==3 && creates==4);
+    parent=leaf("Project");assert(parent>=0 && files[parent].dir);
+    for(i=0;i<3;i++) {
+        unsigned char name[32];name[0]=(unsigned char)strlen(project_inputs[i].name);
+        memcpy(name+1,project_inputs[i].name,name[0]);j=find(files[parent].id,name);
+        assert(j>=0 && files[j].info.fdType=='TEXT' && files[j].info.fdCreator=='ttxt' && !files[j].resource);
+        assert(files[j].size==(long)strlen(project_inputs[i].bytes) && !memcmp(files[j].bytes,project_inputs[i].bytes,(size_t)files[j].size));
+        assert(!memchr(files[j].bytes,10,(size_t)files[j].size));
+    }
+    assert(!run() && strstr(result,"EXISTS") && creates==4 && journals==3);
+    { const char *bad[]={"{}","{\"path\":\"Project\",\"template\":\"other\"}","{\"path\":\"a\",\"path\":\"b\"}",
+        "{\"path\":\"missing:Project\"}","{\"path\":\":escape\"}","{\"path\":\"Project:\"}","{\"path\":\"\"}"};
+      for(i=0;i<7;i++){reset();strcpy(call.name,"create_project");strcpy(call.arguments,bad[i]);assert(!run() && strstr(result,"error") && !creates && !journals);} }
+    reset();i=add(10,"alias",1);files[i].info.fdFlags=0x8000;strcpy(call.name,"create_project");strcpy(call.arguments,"{\"path\":\"alias:Project\"}");assert(!run() && !creates);
+    for(i=1;i<=3;i++) {
+        reset();strcpy(call.name,"create_project");strcpy(call.arguments,"{\"path\":\"Project\"}");fail_journal=i;
+        assert(run());assert(i==3 ? leaf("Project")>=0 && strstr(result,"uncertain") : leaf("Project")<0);
+        assert(i==1 ? !creates : creates==4);
+    }
+    for(i=0;i<3;i++) {
+        reset();strcpy(call.name,"create_project");strcpy(call.arguments,"{\"path\":\"Project\"}");
+        if(i==0)short_write=1;else if(i==1)bad_read=1;else bad_close=1;
+        assert(run() && strstr(result,"PROJECT_STAGE_RETAINED") && leaf("Project")<0 && journals==1);
+    }
+    reset();strcpy(call.name,"create_project");strcpy(call.arguments,"{\"path\":\"Project\"}");rename_race=1;
+    assert(run() && strstr(result,"EXISTS_STAGE_RETAINED"));i=leaf("Project");assert(i>=0 && !files[i].dir && !strcmp(files[i].bytes,"racer"));
+    reset();strcpy(call.name,"create_project");strcpy(call.arguments,"{\"path\":\"Project\"}");rename_error=1;
+    assert(run() && strstr(result,"uncertain") && leaf("Project")<0);
+    reset();strcpy(call.name,"create_project");strcpy(call.arguments,"{\"path\":\"Project\"}");flush_error=1;
+    assert(run() && strstr(result,"uncertain") && leaf("Project")>=0);
+    reset();strcpy(call.name,"create_project");strcpy(call.arguments,"{\"path\":\"Project\"}");swapped_publish=1;
+    assert(run() && strstr(result,"uncertain") && leaf("Project")>=0);
+    reset();i=add(10,"Parent",1);strcpy(call.name,"create_project");strcpy(call.arguments,"{\"path\":\"Parent:Project\"}");
+    assert(!run() && strstr(result,"CREATED_PROJECT") && files[i+1].parent==files[i].id);
+    reset();strcpy(call.name,"create_project");strcpy(call.arguments,"{\"path\":\"Project\"}");tools_execute(&call,result,sizeof(result));assert(strstr(result,"JOURNAL") && !creates);
+    puts("PASS create_project: exact template, CR/TEXT, collisions, path/alias refusal, stage faults, journal barriers and uncertain publication");
+}
 int main(void)
 {
+    project_checks();
     search_checks();
     int i;
     reset();assert(!run());assert(strstr(result,"CREATED") && journals==3);
