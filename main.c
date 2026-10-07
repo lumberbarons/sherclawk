@@ -55,9 +55,10 @@ enum {
 
 /* ── UI state ─────────────────────────────────────────────────────── */
 static WindowPtr     gWindow = NULL;
-static ControlHandle gSendBtn = NULL, gStopBtn = NULL, gNewBtn = NULL;
+static ControlHandle gSendBtn = NULL, gStopBtn = NULL, gNewBtn = NULL, gHandoffBtn = NULL;
+static int gHandoffEnabled = -1;
 static TEHandle gPromptTE = NULL;
-static Rect gPromptRect, gPromptLabelRect, gStopRect, gNewRect;
+static Rect gPromptRect, gPromptLabelRect, gStopRect, gNewRect, gHandoffRect;
 static TEHandle      gModelTE = NULL;
 static TEHandle      gResponseTE = NULL;
 static ControlHandle gResponseScroll = NULL;
@@ -143,6 +144,19 @@ static const char *TLSVersionLabel(MacTLS_Version v)
     }
 }
 
+static void UpdateHandoffControls(void)
+{
+    int enabled = !gSending && gSessionOpen && gAgent.messages &&
+        !gAgent.active && gAgent.next >= gAgent.count;
+    if (enabled == gHandoffEnabled) return;
+    gHandoffEnabled = enabled;
+    if (gHandoffBtn) HiliteControl(gHandoffBtn, enabled ? 0 : 255);
+    if (gFileMenu) {
+        if (enabled) EnableItem(gFileMenu, 2);
+        else DisableItem(gFileMenu, 2);
+    }
+}
+
 static void SetSendEnabled(int enabled)
 {
     if (gSendBtn) HiliteControl(gSendBtn, enabled ? 0 : 255);
@@ -150,9 +164,8 @@ static void SetSendEnabled(int enabled)
     if (gFileMenu) {
         if (enabled) EnableItem(gFileMenu, 1);
         else DisableItem(gFileMenu, 1);
-        if (enabled) EnableItem(gFileMenu, 2);
-        else DisableItem(gFileMenu, 2);
     }
+    UpdateHandoffControls();
     if (gStopBtn) HiliteControl(gStopBtn, enabled ? 255 : 0);
     if (!enabled && gFocusedTE != gResponseTE) FocusSet(gResponseTE);
 }
@@ -427,6 +440,7 @@ static void ComputeLayout(void)
     SetRect(&gSendRect, 10, 390, 74, 410);
     SetRect(&gStopRect, 84, 390, 148, 410);
     SetRect(&gNewRect, 158, 390, 246, 410);
+    SetRect(&gHandoffRect, 478, 390, 590, 410);
 }
 
 static void DrawChrome(void)
@@ -523,6 +537,8 @@ static void UIInit(void)
                            true, 0, 0, 1, pushButProc, 0);
     gNewBtn = NewControl(gWindow, &gNewRect, (ConstStr255Param)"\pNew Chat",
                            true, 0, 0, 1, pushButProc, 0);
+    gHandoffBtn = NewControl(gWindow, &gHandoffRect, (ConstStr255Param)"\pSave Handoff",
+                           true, 0, 0, 1, pushButProc, 0);
     {
         Rect view = gPromptRect;
         InsetRect(&view, 3, 2);
@@ -572,6 +588,7 @@ static void UIDispose(void)
     if (gPromptTE) TEDispose(gPromptTE);
     if (gStopBtn) DisposeControl(gStopBtn);
     if (gNewBtn) DisposeControl(gNewBtn);
+    if (gHandoffBtn) { DisposeControl(gHandoffBtn); gHandoffBtn = NULL; }
     if (gResponseTE)     { TEDispose(gResponseTE);     gResponseTE = NULL; }
     if (gResponseScroll) { DisposeControl(gResponseScroll); gResponseScroll = NULL; }
     if (gScrollActionUPP){ DisposeControlActionUPP(gScrollActionUPP); gScrollActionUPP = NULL; }
@@ -648,6 +665,11 @@ static void HandleEvent(const EventRecord *event)
             }
             if (cpart && ctl == gNewBtn) {
                 if (!gSending && TrackControl(ctl, local, NULL) == kControlButtonPart) NewChat();
+                break;
+            }
+            if (cpart && ctl == gHandoffBtn) {
+                if (gHandoffEnabled && TrackControl(ctl, local, NULL) == kControlButtonPart)
+                    StartHandoff();
                 break;
             }
             /* Response pane scrollbar. */
@@ -1057,7 +1079,7 @@ static void DriveChatStep(void)
         gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
         if (gAgent.limited) ShowMessage("Notice", "Reply incomplete: output token limit reached.");
         if (gAgent.used >= AGENT_HISTORY_CAP * 3 / 4)
-            SetStatus("History nearly full. File > Save Handoff & Continue (Command-H).");
+            SetStatus("History nearly full. Save Handoff (Command-H) to free history.");
         else SetStatus("Done - %d model rounds, %d tools. Session saved.", gAgent.rounds, gAgent.tool_count);
         LogLine("Agent run completed.");
     }
@@ -1070,7 +1092,7 @@ int main(void)
     TEInit(); InitDialogs(NULL); InitCursor(); MacTLS_Init();
     UIInit();
     if (!gWindow || !gModelTE || !gPromptTE || !gResponseTE ||
-        !gSendBtn || !gStopBtn || !gNewBtn || !gResponseScroll || !gScrollActionUPP) {
+        !gSendBtn || !gStopBtn || !gNewBtn || !gHandoffBtn || !gResponseScroll || !gScrollActionUPP) {
         UIDispose(); MacTLS_Shutdown(); return 1;
     }
     chat_reset(&gChat); agent_reset(&gAgent, Journal, NULL);
@@ -1082,6 +1104,7 @@ int main(void)
         SetPort(gWindow); HandleEvent(&event);
         if (gSending) DriveChatStep();
         selfbuild_drain((uint32_t)TickCount());
+        UpdateHandoffControls();
         /* History changes during sends, tool results, New Chat and handoff.
          * Keep its indicator current even when the ordinary status is unchanged. */
         if (gDisplayedHistory != gAgent.used) InvalRect(&gHistoryRect);

@@ -434,8 +434,10 @@ results, and requests another model response until it gets a final answer.
 Stop or Command-Period prevents new execution and records interrupted results
 for pending calls; completed results remain in history. New Chat starts a fresh session.
 
-**File > Save Handoff & Continue (Command-H)** summarizes a stopped or completed
-conversation with a separate, tool-free model request. This still works when
+**Save Handoff**, right-aligned beside the bottom controls, is also available
+as **File > Save Handoff (Command-H)**. The button and menu item are disabled
+during runs and when there is no conversation to summarize. It summarizes a
+stopped or completed conversation with a separate, tool-free model request. This still works when
 history is full: the summary request never appends to the old history. The model
 produces a concise Markdown handoff covering goals and constraints, completed
 work and exact paths, observed verification, unresolved or uncertain operations,
@@ -457,6 +459,10 @@ At 75% history usage, the status suggests saving a handoff. The summary is lossy
 current sources and uncertain mutations still need inspection before acting.
 Full-journal reloading remains unimplemented; to resume after quitting, ask a
 new chat to read the saved Markdown path displayed when it was created.
+
+The Save Handoff button was built, published fork-aware and checked in OS 9.2.2
+on October 6, 2026: disabled in a fresh chat and during a model request, enabled
+after a reply, and a click saved the handoff and prepared fresh history.
 
 Limits are explicit: 32 model rounds, 64 executed calls per run, four calls per
 response, 8 KiB arguments per call, 256 KiB history, 288 KiB JSON request, 64 KiB
