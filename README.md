@@ -27,10 +27,11 @@ with the File Manager and records their results before requesting a follow-up.
 
 ## Build and publish
 
-Prerequisites: Docker with the `ghcr.io/autc04/retro68` image, a Certainly
+Prerequisites: Docker with the `ghcr.io/autc04/retro68` image, host Python 3
+(stdlib only) for `build.sh` and the artwork converter, `curl`/`unzip` for the
+one-time interface fetch, and `ssh`/`scp` for publishing, plus a Certainly
 clone next to this repository, Apple's Universal Interfaces fetched once, and
-the vendored `patches/` + `art/` in this tree. No additional imaging or runtime
-libraries are required. The stdlib-only artwork converter reads
+the vendored `patches/` + `art/` in this tree. The converter reads
 `art/sherclawk.png` (8-bit RGBA, noninterlaced); override its path with
 `SHERCLAWK_ART`.
 
@@ -234,7 +235,9 @@ queue and its snapshots are read-only to model-facing source mutation tools.
 ### ToolServer diagnostic (idea 005, increment 1)
 
 `SherclawkToolServerCheck` is a standalone asynchronous Apple-event spike.
-The main app still uses the MacRelix worker. Publish the diagnostic with:
+When the build queue is unowned, the main app's `build_project` self-executes
+through this same queued ToolServer channel; the MacRelix worker remains the
+exclusive-owner fallback. Publish the diagnostic with:
 
 ```bash
 APP=SherclawkToolServerCheck tools/deploy-to-share.sh
@@ -592,7 +595,6 @@ the saved session; model history is not silently dropped.
 | `tools/toolserver-check.c`, `tools/toolserver-check.r` | Standalone queued ToolServer replies, native discovery/launch, retained Rez fixtures and explicit unknown-outcome fault controls |
 | `tools/native-process-check.c` | Native Process Manager diagnostic for executor paths |
 | `selfbuild.c`, `selfbuild.h`, `build_plan.h` | Exclusive current-snapshot executor, bounded copies/logs, compatible results, unknown-outcome draining |
-| `toolserver.c`, `toolserver.h` | Single-command queued Apple-event client with sender/return-ID correlation |
 | `tests/test_selfbuild.c` | Ownership races, snapshot changes, command failures, Stop/deadline, late replies and authorization fault model |
 | `build_project.c`, `build_project.h` | Descriptor validation, trusted recipe, revision snapshot, cooperative build and log pages |
 | `tools/build-check.c`, `tests/test_build_project.c` | Multi-source/error–repair–rebuild/self-build-and-launch diagnostics and host fault checks |

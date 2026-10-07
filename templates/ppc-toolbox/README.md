@@ -21,16 +21,17 @@ cancels the close.
 
 This is a verified starter and acceptance fixture. Its fixed `main.c`, `app.r`
 and `Template` output are defaults, not requirements for every future project.
-`create_project` embeds its editable C/Rez sources; the planned build tools will
-also accept independently assembled projects with multiple sources/resources,
-a chosen output name and supported toolchain settings. See the
-[build/run plan](../../PLAN.md#next-buildrun-contract-planned). The shell recipe
+`create_project` embeds its editable C/Rez sources; `build_project` also
+accepts independently assembled protocol-2 projects with multiple
+sources/resources, a chosen output name and supported toolchain settings. See
+the [build/run plan](../../PLAN.md#buildrun-contract). The shell recipe
 below remains the verified fixed-template diagnostic workflow.
 
 The fixed native diagnostic also builds these exact starter sources without
 MacRelix. Its two successful builds, deliberately failing compile and Stop
 during linking are recorded in [idea 005, increment 2](../../docs/idea-005-sherclawk-queue-mode.md#increment-2-guest-evidence--october-6-2026).
-The main harness still uses the file-job worker for `build_project`.
+The main app executes the same queued ToolServer commands directly when the
+queue is unowned; the file-job worker remains the exclusive-owner fallback.
 
 ## Materialize and publish source
 
@@ -72,7 +73,8 @@ reserves a new directory, copies its inputs there and compiles those copies.
 Reusing an ID fails. The last stage-start line locates a failure; redirected
 logs preserve raw ToolServer diagnostics. A later-stage failure can leave a
 partial app, but cannot create a success record. Do not launch that app.
-Source revision tracking, job polling and recovery are subsequent work.
+Source revision tracking and job polling are provided by the model-facing
+build tools; broader recovery remains subsequent work.
 
 The installed shell needs separate `set -e` and `set -u`; combined `set -eu`
 and multiline linker continuations did not work in verification. The recipe
