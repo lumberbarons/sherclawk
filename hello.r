@@ -96,8 +96,9 @@ resource 'DITL' (128, "Preferences") {
         /* [10] */              {134, 135, 152, 195}, EditText { enabled, "128" };
         /* [11] Tools */        {136, 215, 152, 325}, StaticText { disabled, "Max tool calls:" };
         /* [12] */              {134, 330, 152, 390}, EditText { enabled, "128" };
-        /* [13] Debug toggle */ {162, 12, 180, 408}, CheckBox { enabled, "Show tool debug in Conversation" };
-        /* [14] Hint */         {192, 12, 208, 408}, StaticText { disabled, "Stored in System Folder:Preferences. Limits apply to each run." };
+        /* [13] Debug toggle */ {162, 12, 178, 28},  CheckBox { enabled, "" };
+        /* [14] Debug label */  {162, 32, 178, 408}, StaticText { disabled, "Show tool debug in Conversation" };
+        /* [15] Hint */         {192, 12, 208, 408}, StaticText { disabled, "Stored in System Folder:Preferences. Limits apply to each run." };
     }
 };
 

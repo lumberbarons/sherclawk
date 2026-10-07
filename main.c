@@ -338,7 +338,7 @@ static void ShowPreferences(void)
     static Prefs candidate;   /* the live values change only after a verified save */
     DialogPtr dlg;
     short item;
-    int done = 0, rounds, tools;
+    int done = 0, debug = gPrefs.show_tool_debug, rounds, tools;
     char model[CHAT_MODEL_CAP], key[PREFS_KEY_CAP], workspace[PREFS_WORKSPACE_CAP];
     char rounds_text[8], tools_text[8];
 
@@ -352,13 +352,21 @@ static void ShowPreferences(void)
     snprintf(tools_text, sizeof(tools_text), "%d", gPrefs.max_tools);
     SetPrefsText(dlg, kPrefsRoundsItem, rounds_text);
     SetPrefsText(dlg, kPrefsToolsItem, tools_text);
-    SetControlValue(PrefsCheckbox(dlg), gPrefs.show_tool_debug ? 1 : 0);
+    SetControlValue(PrefsCheckbox(dlg), debug);
     SelectDialogItemText(dlg, kPrefsModelItem, 0, 32767);
     SetDialogDefaultItem(dlg, kPrefsOKItem);
     SetDialogCancelItem(dlg, kPrefsCancelItem);
 
     while (!done) {
         ModalDialog(NULL, &item);
+        if (item == kPrefsDebugItem) {
+            /* ModalDialog reports the checkbox hit but does not toggle it. */
+            ControlHandle ctl = PrefsCheckbox(dlg);
+            debug = !debug;
+            SetControlValue(ctl, debug ? 1 : 0);
+            Draw1Control(ctl);
+            continue;
+        }
         if (item == kPrefsCancelItem) break;
         if (item != kPrefsOKItem) continue;
         GetPrefsText(dlg, kPrefsModelItem, model, sizeof(model));
@@ -394,7 +402,7 @@ static void ShowPreferences(void)
         strcpy(candidate.workspace, workspace);
         candidate.max_rounds = rounds;
         candidate.max_tools = tools;
-        candidate.show_tool_debug = GetControlValue(PrefsCheckbox(dlg)) != 0;
+        candidate.show_tool_debug = debug;
         if (PrefsSave(&candidate)) {
             PrefsProblem(dlg, "Could not save the preferences file. Nothing was changed.");
             continue;
