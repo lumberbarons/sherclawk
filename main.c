@@ -21,6 +21,7 @@
 #include "certainly.h"
 #include "http.h"
 #include "network.h"
+#include "timing.h"
 #include "agent.h"
 #include "json.h"
 #include "tools.h"
@@ -96,6 +97,8 @@ static int gHandoff = 0;
 static Agent gHandoffCandidate;
 static char gHandoffSummary[8192], gHandoffPath[256];
 static uint32_t gStartTicks;
+static RoundTiming gRoundTiming;
+static uint32_t gToolStart;
 static void FocusSet(TEHandle te);
 static void SendChat(void);
 static void AbortChat(const char *reason);
@@ -251,6 +254,35 @@ static void LogLine(const char *text)
     len = 2;
     FSWrite(gLogRefNum, &len, crlf);
     FlushVol(NULL, 0);   /* flush every line so the host can tail it */
+}
+
+/* One credential-free line per network round (phase offsets in ticks since the
+ * request began) and per tool call, so tuning can see where a round goes. */
+static void LogRoundTiming(const char *outcome)
+{
+    char line[256];
+    if (!gRoundTiming.active) return;
+    timing_mark(&gRoundTiming, TIMING_CLOSE, (uint32_t)TickCount());
+    timing_set_bytes(&gRoundTiming, (unsigned long)gNet.sent, (unsigned long)gNet.received);
+    if (timing_round_format(&gRoundTiming, outcome, line, sizeof(line)) > 0) LogLine(line);
+    gRoundTiming.active = 0;
+}
+static void LogToolTiming(int index, const char *name)
+{
+    char line[96];
+    if (timing_tool_format(index, name, gToolStart, (uint32_t)TickCount(), line, sizeof(line)) > 0) LogLine(line);
+}
+static void ObserveRound(void)
+{
+    uint32_t now = (uint32_t)TickCount();
+    MacTLS_State state;
+    if (!gNet.ctx || !gRoundTiming.active) return;
+    state = MacTLS_GetState(gNet.ctx);
+    if (state == kMacTLS_Handshaking || state == kMacTLS_Connected) timing_mark(&gRoundTiming, TIMING_CONNECT, now);
+    if (state == kMacTLS_Connected) timing_mark(&gRoundTiming, TIMING_HANDSHAKE, now);
+    if (gNet.request_len && gNet.sent == gNet.request_len) timing_mark(&gRoundTiming, TIMING_SENT, now);
+    if (gNet.received) timing_mark(&gRoundTiming, TIMING_FIRST_BYTE, now);
+    if (gNet.result) timing_mark(&gRoundTiming, TIMING_DONE, now);
 }
 
 static void LogClose(void)
@@ -924,7 +956,9 @@ static void StartHandoff(void)
         attribution, gJSON, (size_t)length, gNet.request, sizeof(gNet.request));
     if (length < 0) { SetStatus("Could not prepare handoff request; conversation retained."); return; }
     gHandoffPath[0] = 0; gHandoff = 1;
+    timing_round_begin(&gRoundTiming, 0, (uint32_t)TickCount());
     InitOpenTransport(); gOTOpen = 1; gStartTicks = (uint32_t)TickCount(); gSending = 1;
+    timing_mark(&gRoundTiming, TIMING_INIT, gStartTicks);
     SetSendEnabled(0);
     if (network_start(&gNet, gNet.request, (size_t)length) < 0) { AbortChat(gNet.error); return; }
     SetStatus("Summarizing for handoff; current conversation retained...");
@@ -941,6 +975,7 @@ static void AbortChat(const char *reason)
 {
     if (gHandoff) {
         if (gNet.ctx || gOTOpen) CloseChatContext();
+        LogRoundTiming("abort");
         gHandoff = 0; gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
         ShowMessage("Handoff stopped; conversation retained", reason);
         if (*gHandoffPath) ShowMessage("Retained handoff file (may be incomplete)", gHandoffPath);
@@ -956,6 +991,7 @@ static void AbortChat(const char *reason)
         ShowMessage(gSending==5 ? "run_application" : "build_project", gToolResult);
     }
     if (gNet.ctx || gOTOpen) CloseChatContext();
+    LogRoundTiming("abort");
     if (agent_stop(&gAgent, reason)) {
         SetStatus("Session recording failed. Start a new session before continuing.");
         SessionClose();
@@ -999,8 +1035,10 @@ static int StartModelRequest(void)
     length = http_build_post_with_headers("openrouter.ai", "/api/v1/chat/completions", SHERCLAWK_API_KEY,
         attribution, gJSON, (size_t)length, gNet.request, sizeof(gNet.request));
     if (length < 0) { AbortChat("Request or API key is too long or invalid."); return -1; }
+    timing_round_begin(&gRoundTiming, gAgent.rounds + 1, (uint32_t)TickCount());
     InitOpenTransport(); gOTOpen = 1;
     gStartTicks = (uint32_t)TickCount(); gSending = 1;
+    timing_mark(&gRoundTiming, TIMING_INIT, gStartTicks);
     if (network_start(&gNet, gNet.request, (size_t)length) < 0) { AbortChat(gNet.error); return -1; }
     SetStatus("Connecting to OpenRouter (round %d)...", gAgent.rounds + 1);
     LogLine("Agent model request started."); return 0;
@@ -1038,6 +1076,7 @@ static void DriveChatStep(void)
         result = running ? run_application_step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), 0) : build_project_step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), 0);
         if (result == 2) return;
         gSending = 2;
+        LogToolTiming(gAgent.next + 1, gAgent.calls[gAgent.next].name);
         if (agent_tool_result(&gAgent, gToolResult, error, sizeof(error))) { AbortChat(error); return; }
         ShowMessage(running ? "run_application" : "build_project", gToolResult);
         if (result) AbortChat(running ? "Launch outcome uncertain. Inspect the run journal; do not retry automatically." : "Build observation stopped. Inspect retained snapshot and logs before another build.");
@@ -1048,6 +1087,7 @@ static void DriveChatStep(void)
         if (gAgent.next == gAgent.count) { gSending = 3; return; }
         if (gAgent.tool_count >= AGENT_TOOL_MAX) { PauseRunAtLimit(); return; }
         call = &gAgent.calls[gAgent.next];
+        gToolStart = (uint32_t)TickCount();
         SetStatus("Running %s (%d/%d)...", call->name, gAgent.next + 1, gAgent.count);
         {
             char id[800], name[400], started[1300];
@@ -1066,6 +1106,7 @@ static void DriveChatStep(void)
         } else if (!strcmp(call->name, "read_build_log")) {
             build_project_log(call, gToolResult, sizeof(gToolResult)); result = 0;
         } else result = tools_execute_recorded(call, gToolResult, sizeof(gToolResult), Journal, NULL);
+        LogToolTiming(gAgent.next + 1, call->name);
         if (agent_tool_result(&gAgent, gToolResult, error, sizeof(error))) { AbortChat(error); return; }
         ShowMessage(call->name, gToolResult);
         if (result) AbortChat("Mutation stopped. Inspect the result and session recovery records; do not retry automatically.");
@@ -1073,6 +1114,7 @@ static void DriveChatStep(void)
     }
     if ((uint32_t)TickCount() - gStartTicks > 120UL * 60UL) { AbortChat("Request timed out. Completed results retained."); return; }
     result = network_step(&gNet);
+    ObserveRound();
     if (result < 0) { AbortChat(gNet.error); return; }
     if (!result) {
         MacTLS_State state = MacTLS_GetState(gNet.ctx);
@@ -1084,6 +1126,7 @@ static void DriveChatStep(void)
         if (agent_handoff_response(gNet.body, gNet.body_len, gNet.status, gHandoffSummary,
             sizeof(gHandoffSummary), error, sizeof(error))) { JournalModelError(error); AbortChat(error); return; }
         CloseChatContext();
+        LogRoundTiming("ok");
         if (CommitHandoff()) { AbortChat("Could not save/verify handoff and new journal. History was not cleared."); return; }
         gHandoff = 0; gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
         ShowMessage("Saved handoff", gHandoffPath);
@@ -1093,6 +1136,7 @@ static void DriveChatStep(void)
     }
     if (agent_response(&gAgent, gNet.body, gNet.body_len, gNet.status, error, sizeof(error))) { JournalModelError(error); AbortChat(error); return; }
     CloseChatContext();
+    LogRoundTiming("ok");
     if (*gAgent.text) ShowMessage("Sherclawk", gAgent.text);
     if (gAgent.count) {
         gSending = 2; SetStatus("Model requested %d tool(s).", gAgent.count);
@@ -1131,6 +1175,7 @@ int main(void)
         if (gDisplayedHistory != gAgent.used) InvalRect(&gHistoryRect);
     }
     if (gNet.ctx || gOTOpen) CloseChatContext();
+    LogRoundTiming("abort");
     if (gAgent.active) AbortChat("Application quit.");
     selfbuild_close();
     SessionClose();

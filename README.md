@@ -579,6 +579,15 @@ automatic session reloading/recovery is not implemented yet. When display
 limits are reached, earlier visible text is replaced with a notice referring to
 the saved session; model history is not silently dropped.
 
+`Retro68:Sherclawk.log` also records timing, with no request or response text.
+Each model round (and the handoff request) ends with one line of tick offsets
+since the request began, `-` for a phase never reached: `round=3 init=2
+connect=10 handshake=100 sent=104 first_byte=500 done=620 close=740 up=4096
+down=812 end=ok`. `close` includes the Open Transport teardown yields, `up` and
+`down` are request and response bytes, and `end=abort` marks a round that
+stopped early. Each tool call logs `tool=<n> name=<tool> ticks=<elapsed>`; for
+`build_project` and `run_application` that spans the whole stepped operation.
+
 ## Files and verification
 
 `AGENTS.md` lists the source layout. Each `tools/*-check.c` is a Mac GUI
