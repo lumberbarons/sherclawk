@@ -1,15 +1,18 @@
-# Sherclawk uses HelloHTTPS's staged Certainly build and HTTP implementation.
+# Sherclawk stages a Certainly clone (patches/ applied, see build.sh) and
+# vendors its HTTP transport under vendor/.
 cmake_minimum_required(VERSION 3.12)
 project(sherclawk C)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 # Shared native tool sources; read-only inspection lives in inspect.c.
 set(TOOLS_SRC tools.c inspect.c)
+# Certainly is fetch-only; build.sh expects it next to this repo. Override
+# with -DCERTAINLY_DIR=<path> when it is cloned elsewhere.
 if(NOT CERTAINLY_DIR)
     set(CERTAINLY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Certainly")
 endif()
 add_subdirectory("${CERTAINLY_DIR}" certainly-src)
-set(CHAT_CORE chat.c json.c text.c network.c ../hello-https/http.c)
+set(CHAT_CORE chat.c json.c text.c network.c vendor/http.c)
 add_application(Sherclawk main.c agent.c ${TOOLS_SRC} build_project.c selfbuild.c toolserver.c run_application.c jobs.c ${CHAT_CORE} hello.r build/art.r CREATOR ShCk)
 add_application(SherclawkProbe tools/probe.c agent.c ${TOOLS_SRC} ${CHAT_CORE} hello.r)
 add_application(SherclawkWriteCheck tools/write-check.c ${TOOLS_SRC} json.c text.c hello.r)
@@ -32,11 +35,11 @@ add_application(SherclawkInspectCheck tools/inspect-check.c ${TOOLS_SRC} json.c 
 add_application(SherclawkScrollCheck tools/scroll-check.c agent.c ${TOOLS_SRC} build_project.c selfbuild.c toolserver.c run_application.c jobs.c ${CHAT_CORE} hello.r build/art.r CREATOR ShCk)
 add_application(SherclawkHandoffCheck tools/handoff-check.c agent.c ${TOOLS_SRC} build_project.c selfbuild.c toolserver.c run_application.c jobs.c ${CHAT_CORE} hello.r build/art.r CREATOR ShCk)
 foreach(app SherclawkSelfBuildStopCheck SherclawkSelfBuildCheck SherclawkNativeBuildErrorCheck SherclawkNativeBuildCheck SherclawkToolServerCheck Sherclawk SherclawkProbe SherclawkScrollCheck SherclawkHandoffCheck SherclawkWriteCheck SherclawkEditCheck SherclawkSearchCheck SherclawkJobCheck SherclawkProjectCheck SherclawkBuildCheck SherclawkRunCheck SherclawkInspectCheck)
-    target_include_directories(${app} PRIVATE . ../hello-https)
+    target_include_directories(${app} PRIVATE . vendor)
     target_link_libraries(${app} certainly FontManager)
     target_compile_options(${app} PRIVATE -Wall -Wextra -ffunction-sections)
     set_target_properties(${app} PROPERTIES LINK_FLAGS "-Wl,-gc-sections")
-    # The shared hello-https/http.c keeps HelloChat's request bytes unchanged
+    # The vendored vendor/http.c keeps HelloChat's request bytes unchanged
     # unless this marker selects Sherclawk's own User-Agent product token.
     target_compile_definitions(${app} PRIVATE SHERCLAWK_APP=1)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/config.local.h")

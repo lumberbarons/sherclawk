@@ -64,6 +64,6 @@ from the captured resource fork.
 
 Evidence remains in the guest fixture: build directories, `bad05.log`,
 `good05.log`, `good08.log`, status files, `toolchain8.log` and `runtime.log`. Local evidence
-is under ignored `sherclawk/build/native-template/`; screenshots and binary
+is under ignored `build/native-template/`; screenshots and binary
 forks are ignored. No AFP restart, disk-image change or host compilation was
 needed for these native applications.

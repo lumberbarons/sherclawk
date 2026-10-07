@@ -4,13 +4,11 @@
 QMP send-key defaults to a 100ms hold, while the original fast text helper
 sends again after 40ms. Keep a complete hold/release interval between keys.
 Control clicks use a small move and 250ms hold, as required by the guest.
-Uses the existing UTM socket helper; it does not change VM configuration.
+Uses the vendored UTM socket helper (tools/utm_qmp.py); it does not change
+VM configuration.
 """
 import argparse
-import sys
 import time
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'macos922/tools'))
 from utm_qmp import QMP
 
 parser = argparse.ArgumentParser()

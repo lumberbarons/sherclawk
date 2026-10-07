@@ -62,7 +62,7 @@ This establishes flexibility before adding more application-specific fixtures.
 
 ## Required visual identity
 
-- Use the workspace's `../sherclawk.png` (the requested Sherclawk reference)
+- Use `art/sherclawk.png` (the requested Sherclawk reference)
   for a real Finder application icon, including small and large sizes,
   transparency masks, and monochrome fallback.
 - Show the same character permanently in the main window beside the

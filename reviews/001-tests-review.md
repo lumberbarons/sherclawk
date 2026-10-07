@@ -1,7 +1,7 @@
 # Tests Review 001 — sherclawk
 
 **Date:** 2026-10-02
-**Scope:** `sherclawk/tests` — test_core.c, test_agent.c, test_network.c, test_tls_io.c, test_tools.c
+**Scope:** `tests/` — test_core.c, test_agent.c, test_network.c, test_tls_io.c, test_tools.c
 **Result:** 10 findings (0 P1, 8 P2, 2 P3)
 
 Each finding carries a **Status** field: `open` until its *Done when* criterion is met, then `fixed`.

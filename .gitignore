@@ -1,0 +1,18 @@
+# Build output
+build/
+
+# Machine-local credentials (never committed)
+config.local.h
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# macOS metadata
+.DS_Store
+._*
+
+# Disk images and logs
+*.dsk
+*.img
+*.log

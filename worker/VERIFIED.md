@@ -47,7 +47,7 @@ open mode was unsupported. Their job trees and locks were preserved by
 same-volume rename into `fork-attempt` and `dup-attempt`; they were not replayed.
 The final worker uses only built-ins and `system()` with shell redirection.
 
-Seven stdlib host checks passed via `python3 sherclawk/tests/test_worker.py`:
+Seven stdlib host checks passed via `python3 tests/test_worker.py`:
 success/failure/no replay, incomplete/rejected jobs, Stop/conflicting outputs,
 signal status, live publication/graceful Stop, singleton/crash non-replay,
 and producer validation. The crash check kills the host worker after execution

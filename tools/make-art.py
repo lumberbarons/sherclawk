@@ -113,7 +113,7 @@ def main():
     parser.add_argument('output')
     args = parser.parse_args()
     w, h, rgba = read_png(args.png)
-    out = '/* Generated from sherclawk.png; do not edit. */\n'
+    out = '/* Generated from art/sherclawk.png; do not edit. */\n'
     chunks = []
     for n, mono_type, color_type, rgb_type, mask_type in [
         (32, 'ICN#', 'icl8', 'il32', 'l8mk'), (16, 'ics#', 'ics8', 'is32', 's8mk')]:

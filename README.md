@@ -1,9 +1,10 @@
 # Sherclawk — The consulting crustacean
 
-An independent source copy of HelloChat. The original `../hello-chat/` remains
-unchanged. Sherclawk adds a native, sequential agent loop over direct OpenRouter
-HTTPS, a Finder icon based on `../sherclawk.png`, and that character in the main
-window. [PLAN.md](PLAN.md) tracks the full coding-harness roadmap.
+A native, sequential agent loop for classic Mac OS 9 over direct OpenRouter
+HTTPS, with a Finder icon generated from `art/sherclawk.png` and that character
+in the main window. It began as an independent source copy of HelloChat and now
+lives in its own repository. [PLAN.md](PLAN.md) tracks the full coding-harness
+roadmap.
 
 The installed tools are `get_environment`, `list_files`, `read_text`,
 `search_text`, create-only `write_text`, create-only `create_folder`,
@@ -26,25 +27,28 @@ with the File Manager and records their results before requesting a follow-up.
 
 ## Build and publish
 
-Uses HelloHTTPS's existing Certainly staging, patches, Universal Interfaces,
-and Retro68 Docker image. No additional imaging or runtime libraries are
-required. The stdlib-only artwork converter expects the workspace reference
-PNG (8-bit RGBA, noninterlaced); override its path with `SHERCLAWK_ART`.
+Prerequisites: Docker with the `ghcr.io/autc04/retro68` image, a Certainly
+clone next to this repository, Apple's Universal Interfaces fetched once, and
+the vendored `patches/` + `art/` in this tree. No additional imaging or runtime
+libraries are required. The stdlib-only artwork converter reads
+`art/sherclawk.png` (8-bit RGBA, noninterlaced); override its path with
+`SHERCLAWK_ART`.
 
 ```bash
-cp sherclawk/config.example.h sherclawk/config.local.h
+git clone --recursive --depth 1 https://github.com/minorbug/certainly.git ../Certainly
+tools/get-universal-interfaces.sh
+cp config.example.h config.local.h
 # Set SHERCLAWK_API_KEY and optionally SHERCLAWK_MODEL / SHERCLAWK_WORKSPACE.
-sherclawk/build.sh
-sherclawk/tools/deploy-to-share.sh
+./build.sh
+SHARE_HOST=<afp-server> tools/deploy-to-share.sh
 ```
 
-A local config was copied from HelloChat for this workspace and renamed to
-Sherclawk's macros. It is ignored, and credentials are embedded only in local
+`config.local.h` is ignored, and credentials are embedded only in local
 binaries. Builds without credentials still launch. Quit a running copy before
 publishing/relaunching. Normal runtime uses no host executor or model relay.
 Model requests identify the client as `Sherclawk/1.0 (Certainly; Mac OS 9)`;
 Sherclawk's build defines `SHERCLAWK_APP`, which selects that User-Agent in the
-shared HelloHTTPS POST builder while the other apps keep their own defaults.
+vendored POST builder.
 Set `SHERCLAWK_APP_URL` in `config.local.h` to a public app URL to also send
 OpenRouter's `HTTP-Referer` and `X-OpenRouter-Title: Sherclawk` attribution
 headers; an empty value sends neither.
@@ -191,7 +195,7 @@ ToolServer and its installed SDK are still required; MacRelix is unnecessary
 for this path. Queue creation and general queue service belong to increment 4:
 
 ```bash
-ssh beardmore 'sudo -n install -d -o macos9 -g macos9 -m 775 /srv/retro68/Worker01/buildjobs'
+ssh "$SHARE_HOST" 'sudo -n install -d -o macos9 -g macos9 -m 775 /srv/retro68/Worker01/buildjobs'
 ```
 
 For the existing fallback, start the worker before publishing builds:
@@ -233,7 +237,7 @@ queue and its snapshots are read-only to model-facing source mutation tools.
 The main app still uses the MacRelix worker. Publish the diagnostic with:
 
 ```bash
-APP=SherclawkToolServerCheck sherclawk/tools/deploy-to-share.sh
+APP=SherclawkToolServerCheck tools/deploy-to-share.sh
 ```
 
 Run only with ToolServer idle and no worker build in progress. It finds a running
@@ -315,8 +319,8 @@ in `Retro68:SherclawkSelfBuildCheck.log`; acceptance is recorded below.
 With MacRelix quit and ToolServer idle, publish and launch:
 
 ```bash
-APP=SherclawkNativeBuildCheck sherclawk/tools/deploy-to-share.sh
-APP=SherclawkNativeBuildErrorCheck sherclawk/tools/deploy-to-share.sh
+APP=SherclawkNativeBuildCheck tools/deploy-to-share.sh
+APP=SherclawkNativeBuildErrorCheck tools/deploy-to-share.sh
 ```
 
 Launch each separately in Finder and save its root log before repeating it:
@@ -340,7 +344,7 @@ this is not queue locking or universal executor detection.
 Both success runs, compiler failure and Stop/late-reply behavior passed in OS 9.
 The repeated artifact payloads matched except for a PEF timestamp; full resource
 maps also differed, so complete fork determinism is not claimed. Detailed
-fixtures and timings are in [idea 005](../ideas/005-sherclawk-queue-mode.md).
+fixtures and timings are in [idea 005](docs/idea-005-sherclawk-queue-mode.md).
 This fixed diagnostic remains separate from the integrated self-build executor above.
 
 ### Running applications
@@ -599,35 +603,35 @@ the saved session; model history is not silently dropped.
 | `tools/publish-worker-job.py`, `tests/test_worker.py` | Diagnostic job producer and publication/execution/crash checks |
 
 ```bash
-sherclawk/tools/check.sh
-sherclawk/tools/check-transport.sh
-APP=SherclawkHandoffCheck sherclawk/tools/deploy-to-share.sh
+tools/check.sh
+tools/check-transport.sh
+APP=SherclawkHandoffCheck tools/deploy-to-share.sh
 # Launch in OS 9; inspect Retro68:SherclawkHandoffCheck.log.
-APP=SherclawkProjectCheck sherclawk/tools/deploy-to-share.sh
+APP=SherclawkProjectCheck tools/deploy-to-share.sh
 # Launch in OS 9; inspect Retro68:SherclawkProjectCheck.log.
-python3 sherclawk/tests/test_worker.py
-APP=SherclawkRunCheck sherclawk/tools/deploy-to-share.sh
+python3 tests/test_worker.py
+APP=SherclawkRunCheck tools/deploy-to-share.sh
 # Launch in OS 9; inspect Retro68:SherclawkRunCheck.log.
-APP=SherclawkJobCheck sherclawk/tools/deploy-to-share.sh
+APP=SherclawkJobCheck tools/deploy-to-share.sh
 # See worker/README.md for the guest native producer/poller diagnostic.
-sherclawk/tools/build-host-probe.sh
-sherclawk/build/host-probe
-sherclawk/build.sh SherclawkProbe_APPL
-APP=SherclawkProbe sherclawk/tools/deploy-to-share.sh
+tools/build-host-probe.sh
+build/host-probe
+./build.sh SherclawkProbe_APPL
+APP=SherclawkProbe tools/deploy-to-share.sh
 # Launch SherclawkProbe in OS 9; it logs, then quits.
-ssh beardmore 'cat /srv/retro68/SherclawkProbe.log'
-APP=SherclawkWriteCheck sherclawk/tools/deploy-to-share.sh
+ssh "$SHARE_HOST" 'cat /srv/retro68/SherclawkProbe.log'
+APP=SherclawkWriteCheck tools/deploy-to-share.sh
 # Launch SherclawkWriteCheck in OS 9; fixed diagnostic logs, then quits.
-ssh beardmore 'cat /srv/retro68/SherclawkWriteCheck.log'
-APP=SherclawkSearchCheck sherclawk/tools/deploy-to-share.sh
+ssh "$SHARE_HOST" 'cat /srv/retro68/SherclawkWriteCheck.log'
+APP=SherclawkSearchCheck tools/deploy-to-share.sh
 # Launch SherclawkSearchCheck in OS 9; retains a unique source/backup fixture.
-ssh beardmore 'cat /srv/retro68/SherclawkSearchCheck.log'
-APP=SherclawkEditCheck sherclawk/tools/deploy-to-share.sh
+ssh "$SHARE_HOST" 'cat /srv/retro68/SherclawkSearchCheck.log'
+APP=SherclawkEditCheck tools/deploy-to-share.sh
 # Launch SherclawkEditCheck in OS 9; preserves its unique fixture and backups.
-ssh beardmore 'cat /srv/retro68/SherclawkEditCheck.log'
-APP=SherclawkInspectCheck sherclawk/tools/deploy-to-share.sh
+ssh "$SHARE_HOST" 'cat /srv/retro68/SherclawkEditCheck.log'
+APP=SherclawkInspectCheck tools/deploy-to-share.sh
 # Launch SherclawkInspectCheck in OS 9; retains alias/resource fixtures.
-ssh beardmore 'cat /srv/retro68/SherclawkInspectCheck.log'
+ssh "$SHARE_HOST" 'cat /srv/retro68/SherclawkInspectCheck.log'
 ```
 
 The cursor matcher can mistake highlights in the lobster artwork for the arrow.
@@ -814,7 +818,7 @@ switching focus. A background run received its reply, but had a maximum event-lo
 gap of 303 ticks (about five seconds). Abrupt process death and reply delivery
 during window dragging remain untested. This is ToolServer-channel evidence,
 not acceptance of a native queue executor or full C build. Detailed IDs, retained
-fixtures and limitations are in [idea 005](../ideas/005-sherclawk-queue-mode.md);
+fixtures and limitations are in [idea 005](docs/idea-005-sherclawk-queue-mode.md);
 raw evidence is under ignored `build/toolserver-check-verified.log` and
 `build/toolserver-final.png` / `build/toolserver-background.png`.
 
@@ -828,7 +832,7 @@ or launch. Stop during linking retained an unknown outcome and drained a late
 reply without Rez or launch. The reusable ToolServer client and fixed diagnostic
 are separate from the queue and model tools. Retained fixture IDs, repeat-byte
 comparison limits and ignored raw evidence are in
-[idea 005](../ideas/005-sherclawk-queue-mode.md#increment-2-guest-evidence--october-6-2026).
+[idea 005](docs/idea-005-sherclawk-queue-mode.md#increment-2-guest-evidence--october-6-2026).
 
 Integrated self-build verification, October 6, 2026: `SherclawkSelfBuildCheck`
 reported `RESULT failures=0` in OS 9.2.2 with MacRelix absent before each build.
@@ -838,7 +842,7 @@ successful launches, two correctly refused failed builds. Resource checks read
 `cfrg`/0 and `SIZE`/-1 for every successful artifact. The independent window showed
 both the original text and the edited “Fresh revision compiled natively” text.
 The detailed build IDs and retained evidence are in
-[idea 005](../ideas/005-sherclawk-queue-mode.md#increment-3-guest-evidence--october-6-2026).
+[idea 005](docs/idea-005-sherclawk-queue-mode.md#increment-3-guest-evidence--october-6-2026).
 Host ASan/UBSan checks and all seven Python worker compatibility tests pass.
 
 The integrated Stop fixture also reported `RESULT failures=0`: first MrC command

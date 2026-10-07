@@ -7,17 +7,25 @@ mkdir -p "$HERE/build/tests"
 # Match the app build: SHERCLAWK_APP selects the User-Agent asserted by the test.
 "${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror \
     -fsanitize=address,undefined -fno-omit-frame-pointer -DSHERCLAWK_APP=1 \
-    -I"$HERE" -I"$HERE/../hello-https" \
+    -I"$HERE" -I"$HERE/vendor" \
     "$HERE/tests/test_core.c" "$HERE/chat.c" "$HERE/json.c" "$HERE/text.c" \
-    "$HERE/../hello-https/http.c" -o "$HERE/build/tests/test-core"
+    "$HERE/vendor/http.c" -o "$HERE/build/tests/test-core"
 "$HERE/build/tests/test-core"
-"${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror \
-    -fsanitize=address,undefined -fno-omit-frame-pointer \
-    -I"$HERE" -I"$HERE/../hello-https" -I"$HERE/../Certainly/include" \
-    -I"$HERE/../hello-https/tools/host-tls/shim" \
-    "$HERE/tests/test_network.c" "$HERE/network.c" "$HERE/../hello-https/http.c" \
-    -o "$HERE/build/tests/test-network"
-"$HERE/build/tests/test-network"
+
+# The network test needs a Certainly clone (fetch-only, see README).
+CERTAINLY_DIR="${CERTAINLY_DIR:-$HERE/../Certainly}"
+if [ -d "$CERTAINLY_DIR/include" ]; then
+    "${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror \
+        -fsanitize=address,undefined -fno-omit-frame-pointer \
+        -I"$HERE" -I"$HERE/vendor" -I"$CERTAINLY_DIR/include" \
+        -I"$HERE/vendor/host-tls/shim" \
+        "$HERE/tests/test_network.c" "$HERE/network.c" "$HERE/vendor/http.c" \
+        -o "$HERE/build/tests/test-network"
+    "$HERE/build/tests/test-network"
+else
+    echo "skip: network test needs a Certainly clone at $CERTAINLY_DIR" >&2
+    echo "      git clone --recursive --depth 1 https://github.com/minorbug/certainly.git Certainly" >&2
+fi
 
 "${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror \
     -fsanitize=address,undefined -fno-omit-frame-pointer -I"$HERE" \

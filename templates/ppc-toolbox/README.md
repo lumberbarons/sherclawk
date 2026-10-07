@@ -29,7 +29,7 @@ below remains the verified fixed-template diagnostic workflow.
 
 The fixed native diagnostic also builds these exact starter sources without
 MacRelix. Its two successful builds, deliberately failing compile and Stop
-during linking are recorded in [idea 005, increment 2](../../../ideas/005-sherclawk-queue-mode.md#increment-2-guest-evidence--october-6-2026).
+during linking are recorded in [idea 005, increment 2](../../docs/idea-005-sherclawk-queue-mode.md#increment-2-guest-evidence--october-6-2026).
 The main harness still uses the file-job worker for `build_project`.
 
 ## Materialize and publish source
@@ -37,9 +37,9 @@ The main harness still uses the file-job worker for `build_project`.
 From the repository root:
 
 ```bash
-python3 sherclawk/tools/materialize-native-template.py sherclawk/build/Template01
-scp sherclawk/build/Template01/main.c sherclawk/build/Template01/app.r sherclawk/build/Template01/build-native.sh sherclawk/build/Template01/capture-toolchain.sh beardmore:/tmp/
-ssh beardmore 'sudo -n mkdir /srv/retro68/Template01 && sudo -n chown macos9:macos9 /srv/retro68/Template01 && sudo -n install -o macos9 -g macos9 -m 666 /tmp/main.c /tmp/app.r /tmp/build-native.sh /tmp/capture-toolchain.sh /srv/retro68/Template01/'
+python3 tools/materialize-native-template.py build/Template01
+scp build/Template01/main.c build/Template01/app.r build/Template01/build-native.sh build/Template01/capture-toolchain.sh "$SHARE_HOST":/tmp/
+ssh "$SHARE_HOST" 'sudo -n mkdir /srv/retro68/Template01 && sudo -n chown macos9:macos9 /srv/retro68/Template01 && sudo -n install -o macos9 -g macos9 -m 666 /tmp/main.c /tmp/app.r /tmp/build-native.sh /tmp/capture-toolchain.sh /srv/retro68/Template01/'
 ```
 
 Both destinations must be new; choose another project name if either exists.

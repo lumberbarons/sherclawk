@@ -1,8 +1,8 @@
 # Sherclawk standalone — internal export plan
 
-Status: **planned, not started** (October 6, 2026).
+Status: **executed** (October 7, 2026).
 Target: private `github.com/lumberbarons/sherclawk`, history preserved with
-`git subtree split` (25 commits touch `sherclawk/` today; first is `34fbe32`).
+`git subtree split` (33 commits touch `sherclawk/`; first is `34fbe32`).
 
 Companion to `PUBLIC-RELEASE.md` (the public-release variant). Two updates to
 that document: `hello-https` now ships **8** Certainly patches (it says 7), and
@@ -17,6 +17,17 @@ Decisions already made:
   export — so there is one source of truth and the workspace rig keeps working.
 - Keep history via `git subtree split`.
 - Move into the repo: artwork (`sherclawk.png`), idea 005, and the research doc.
+
+Resolved open decisions (October 7, 2026):
+
+- **Development home:** the standalone clone at `/Users/jim/projects/sherclawk`
+  (the imac copy freezes after export).
+- **SHARE_HOST:** required env var in `tools/deploy-to-share.sh`; docs use
+  `$SHARE_HOST` placeholders.
+- **LICENSE:** MIT ("Copyright (c) 2026 lumberbarons") plus
+  `THIRD-PARTY-NOTICES.md`.
+- **Certainly:** documented clone step (no submodule).
+- **OpenRouter key:** not rotated (never committed; accepted risk).
 
 `git subtree` (Apple Git 2.50.1) and authenticated `gh` (account
 `lumberbarons`, `repo` scope) were verified on this machine.
@@ -181,7 +192,7 @@ From a fresh clone outside the workspace (the real acceptance test):
 ```bash
 git clone https://github.com/lumberbarons/sherclawk.git "$TMPDIR/sherclawk-clean"
 cd "$TMPDIR/sherclawk-clean"
-git clone --recursive --depth 1 https://github.com/minorbug/certainly.git Certainly
+git clone --recursive --depth 1 https://github.com/minorbug/certainly.git ../Certainly
 tools/get-universal-interfaces.sh
 tools/check.sh
 tools/check-transport.sh

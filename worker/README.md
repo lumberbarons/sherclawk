@@ -115,10 +115,10 @@ lets other classic applications service events while the worker waits.
 For a local host protocol check (the guest uses a queue on its mounted volume):
 
 ```bash
-mkdir -p sherclawk/build/worker-jobs
-python3 sherclawk/tools/materialize-native-template.py sherclawk/build/WorkerTemplate
-python3 sherclawk/tools/publish-worker-job.py sherclawk/build/worker-jobs build001 sherclawk/worker/build-template.sh --input sherclawk/build/WorkerTemplate/main.c --input sherclawk/build/WorkerTemplate/app.r --input sherclawk/build/WorkerTemplate/build-native.sh
-python3 sherclawk/tests/test_worker.py
+mkdir -p build/worker-jobs
+python3 tools/materialize-native-template.py build/WorkerTemplate
+python3 tools/publish-worker-job.py build/worker-jobs build001 worker/build-template.sh --input build/WorkerTemplate/main.c --input build/WorkerTemplate/app.r --input build/WorkerTemplate/build-native.sh
+python3 tests/test_worker.py
 ```
 
 For an actual native build, copy the producer and materialized sources to the
@@ -186,8 +186,8 @@ retains a fresh job under `Retro68:Worker01:nativejobs:`. Create that queue on
 the existing mounted share, then build/publish the diagnostic:
 
 ```bash
-ssh beardmore 'sudo -n install -d -o macos9 -g macos9 -m 775 /srv/retro68/Worker01/nativejobs'
-APP=SherclawkJobCheck sherclawk/tools/deploy-to-share.sh
+ssh "$SHARE_HOST" 'sudo -n install -d -o macos9 -g macos9 -m 775 /srv/retro68/Worker01/nativejobs'
+APP=SherclawkJobCheck tools/deploy-to-share.sh
 ```
 
 Launch the diagnostic and run the existing worker against the fresh queue in

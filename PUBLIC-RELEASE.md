@@ -1,5 +1,10 @@
 # Sherclawk public release plan
 
+> Note (October 7, 2026): the **internal** export was executed via
+> [STANDALONE.md](STANDALONE.md), which is now the operative plan. Two facts
+> below are stale: `hello-https` ships **8** Certainly patches (not 7), and
+> `sherclawk/` carries its full commit history (not a single commit).
+
 Goal: publish `sherclawk/` as a self-contained public GitHub project — no
 credentials, no machine-specific identity, and a build that works from a
 fresh clone. Findings below were verified on 2026-10-02.

@@ -3,7 +3,9 @@
 # netatalk resource-fork layout. Never restart AFP during a guest session.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-SHARE_HOST="${SHARE_HOST:-beardmore}"
+# Required: the AFP server (ssh target) that carries the share. There is no
+# default so a published tree never leaks a developer hostname.
+SHARE_HOST="${SHARE_HOST:?set SHARE_HOST to the AFP server hostname}"
 SHARE_DIR="${SHARE_DIR:-/srv/retro68}"
 APP="${APP:-Sherclawk}"
 BUILD_TARGET="${BUILD_TARGET:-${APP}_APPL}" "$HERE/build.sh"

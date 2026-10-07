@@ -1,0 +1,12 @@
+diff --git a/src/certainly.c b/src/certainly.c
+index d6bbee2..8d52c8d 100644
+--- a/src/certainly.c
++++ b/src/certainly.c
+@@ -16,6 +16,7 @@
+ #include "certainly_internal.h"
+ 
+ #include <Memory.h>   /* NewPtrClear, DisposePtr */
++#include <Events.h>   /* TickCount */
+ #include <string.h>
+ 
+ /* ── Library lifecycle ── */
