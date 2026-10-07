@@ -208,6 +208,84 @@ sizes and FNV hashes of both forks. Old builds without this record require a
 fresh build; IDs or artifact paths alone cannot authorize execution. The worker
 queue and its snapshots are read-only to model-facing source mutation tools.
 
+### ToolServer diagnostic (idea 005, increment 1)
+
+`SherclawkToolServerCheck` is a standalone asynchronous Apple-event spike.
+The main app still uses the MacRelix worker. Publish the diagnostic with:
+
+```bash
+APP=SherclawkToolServerCheck sherclawk/tools/deploy-to-share.sh
+```
+
+Run only with ToolServer idle and no worker build in progress. It finds a running
+`MPSX` process or discovers and launches ToolServer through mounted volumes'
+desktop databases. It creates a fresh `Retro68:ToolServerCheck<ticks>:` fixture
+with native `TEXT`/CR Rez sources and writes
+`Retro68:SherclawkToolServerCheck.log` (overwritten at each launch). Save that
+log before another launch; fixture folders and resource outputs are retained.
+
+The automatic suite sends successful and deliberately failing Rez commands via
+`misc/dosc`, `typeChar`, `kAEQueueReply | kAENeverInteract`. It verifies the
+successful `STR `/128 resource, logs raw `stat`, stdout and diagnostics, and
+checks wrong return IDs/senders, missing status, wrong text type and oversized
+text using synthetic local events through the actual reply handler. The log's
+`RESULT failures=0` applies to this suite; interactive fault tests have separate
+records. Raw MacRoman/CR reply bytes remain in the log.
+
+| Key | Diagnostic action |
+|---|---|
+| `R` | Explicitly start a fresh success/error suite when no command is outstanding |
+| `L` | Send one script containing 41 fixed Rez invocations for interaction tests |
+| `S` or Command-period | Stop observing; retain and drain the outstanding reply, keeping outcome unknown |
+| `T` | Expire the outstanding command's deadline; drain its late reply without advancing |
+| `K` | Politely request ToolServer quit (it may defer until the command finishes) |
+| Command-Q | Quit the diagnostic, recording any outstanding command as unknown |
+
+There is one outstanding command at a time and no automatic resend. If
+ToolServer disappears, the request is retired as unknown; `R` may then test a
+fresh launch. A reply whose sender cannot be verified is ignored. A lost reply
+from a still-running server keeps fresh tests disabled until diagnostic exit.
+Replies are capped at 8 KiB per text parameter for extraction; this does not cap
+the Apple Event Manager's allocation of the incoming event itself. Logs include
+send duration, elapsed ticks, event-loop turns, updates and maximum turn gap.
+The window can be dragged, but ordinary Toolbox `DragWindow` tracking can defer
+reply handling; production code must account for this before promising latency.
+This spike does not build C projects or claim queue jobs.
+
+### Fixed native build diagnostic (idea 005, increment 2)
+
+With MacRelix quit and ToolServer idle, publish and launch:
+
+```bash
+APP=SherclawkNativeBuildCheck sherclawk/tools/deploy-to-share.sh
+APP=SherclawkNativeBuildErrorCheck sherclawk/tools/deploy-to-share.sh
+```
+
+Launch each separately in Finder and save its root log before repeating it:
+`Retro68:SherclawkNativeBuildCheck.log` or
+`Retro68:SherclawkNativeBuildErrorCheck.log`. The good diagnostic stages exact
+current starter sources into a fresh `Retro68:NativeBuildCheck<ticks>:` folder,
+then sends separate queued MrC, PPCLink and Rez commands through `toolserver.c`.
+It verifies both forks, the PowerPC PEF header, `cfrg`, `SIZE`, Finder `APPL/SHTP`
+and the closed success record before native launch. Expected title/text in the
+launched window supply visual acceptance beyond the recorded process observation.
+The error variant expects a deliberate MrC failure and verifies there is no
+application, success record or launch. Each attempt retains its own inputs.
+
+`S` or Command-period stops observation and subsequent steps; an outstanding
+reply is drained without advancing. A 120-second command deadline or observed
+ToolServer disappearance likewise records an unknown outcome. Command-Q leaves
+the diagnostic. Never launch a partial artifact from a stopped attempt.
+Process scans refuse this fixture while the known MacRelix app is running;
+this is not queue locking or universal executor detection.
+
+Both success runs, compiler failure and Stop/late-reply behavior passed in OS 9.
+The repeated artifact payloads matched except for a PEF timestamp; full resource
+maps also differed, so complete fork determinism is not claimed. Detailed
+fixtures and timings are in [idea 005](../ideas/005-sherclawk-queue-mode.md).
+This fixed executor is separate from `build_project`, which still requires the
+MacRelix worker. Queue integration is increment 3.
+
 ### Running applications
 
 `run_application(build_id)` takes only the exact successful build ID, never a
@@ -387,6 +465,9 @@ model history is not silently dropped.
 | `PLAN.md` | Artwork requirements and remaining coding-harness milestones |
 | `templates/ppc-toolbox/` | Native MPW PowerPC template and guest verification record |
 | `tools/materialize-native-template.py` | Create new MacRoman/CR template source and LF shell scripts |
+| `toolserver.c`, `toolserver.h` | Single-command queued ToolServer client, correlated replies, bounded diagnostics and abandoned-outcome draining |
+| `tools/native-build-check.c` | Fixed native compile/link/Rez/verify/launch and deliberately failing compiler acceptance fixtures |
+| `tools/toolserver-check.c`, `tools/toolserver-check.r` | Standalone queued ToolServer replies, native discovery/launch, retained Rez fixtures and explicit unknown-outcome fault controls |
 | `tools/native-process-check.c` | Native Process Manager diagnostic for executor paths |
 | `build_project.c`, `build_project.h` | Descriptor validation, trusted recipe, revision snapshot, cooperative build and log pages |
 | `tools/build-check.c`, `tests/test_build_project.c` | Native multi-source/error-repair/build-and-launch diagnostics and host fault checks |
@@ -596,3 +677,31 @@ run IDs and native process observations. The main app's live
 session and received a final response, verifying persisted authority across app
 lifetimes. These are process observations, not functional smoke-test results.
 IDs and retained evidence are in [worker/VERIFIED.md](worker/VERIFIED.md).
+
+
+ToolServer spike verification, October 6, 2026: the standalone PowerPC diagnostic
+built and was published fork-aware, then ran in OS 9.2.2. Native desktop-database
+ToolServer launch, queued success/error Rez replies, exact compiled string-resource
+readback, and synthetic malformed-reply checks passed (`RESULT failures=0`).
+Stop and expired-deadline runs retained unknown outcomes and drained late replies
+without resend. A polite mid-command ToolServer quit was deferred; an explicit
+fresh suite relaunched it and passed. Sends took zero or one guest tick without
+switching focus. A background run received its reply, but had a maximum event-loop
+gap of 303 ticks (about five seconds). Abrupt process death and reply delivery
+during window dragging remain untested. This is ToolServer-channel evidence,
+not acceptance of a native queue executor or full C build. Detailed IDs, retained
+fixtures and limitations are in [idea 005](../ideas/005-sherclawk-queue-mode.md);
+raw evidence is under ignored `build/toolserver-check-verified.log` and
+`build/toolserver-final.png` / `build/toolserver-background.png`.
+
+
+Fixed native executor verification, October 6, 2026: both PowerPC diagnostics
+built and were published fork-aware. With MacRelix quit, two native template
+builds passed compile/link/Rez, fork/resource/metadata verification and exact
+artifact launch (`RESULT failures=0`); their windows displayed the expected text.
+A deliberate MrC error passed refusal checks with no artifact, success record
+or launch. Stop during linking retained an unknown outcome and drained a late
+reply without Rez or launch. The reusable ToolServer client and fixed diagnostic
+are separate from the queue and model tools. Retained fixture IDs, repeat-byte
+comparison limits and ignored raw evidence are in
+[idea 005](../ideas/005-sherclawk-queue-mode.md#increment-2-guest-evidence--october-6-2026).

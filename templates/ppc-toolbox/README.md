@@ -17,6 +17,7 @@ cancels the close.
 | `VERIFIED.md` | Exact tested installation and guest acceptance results |
 | `../../tools/materialize-native-template.py` | Create new MacRoman/CR source and LF shell scripts |
 | `../../tools/native-process-check.c` | Confirm actual classic application paths |
+| `../../tools/native-build-check.c` | Fixed native ToolServer build/launch and compiler-error diagnostics, with MacRelix quit |
 
 This is a verified starter and acceptance fixture. Its fixed `main.c`, `app.r`
 and `Template` output are defaults, not requirements for every future project.
@@ -25,6 +26,11 @@ also accept independently assembled projects with multiple sources/resources,
 a chosen output name and supported toolchain settings. See the
 [build/run plan](../../PLAN.md#next-buildrun-contract-planned). The shell recipe
 below remains the verified fixed-template diagnostic workflow.
+
+The fixed native diagnostic also builds these exact starter sources without
+MacRelix. Its two successful builds, deliberately failing compile and Stop
+during linking are recorded in [idea 005, increment 2](../../../ideas/005-sherclawk-queue-mode.md#increment-2-guest-evidence--october-6-2026).
+The main harness still uses the file-job worker for `build_project`.
 
 ## Materialize and publish source
 
