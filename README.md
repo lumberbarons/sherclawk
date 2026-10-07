@@ -60,6 +60,21 @@ Workspace source text is interpreted as MacRoman, converted to UTF-8 for the
 model, and displayed through native TextEdit. Binary/resource-fork files and
 aliases are refused. Tool arguments never pass through lossy UI conversion.
 
+**Preferences** (Edit menu, last item) sets the model, API key, workspace,
+per-run limits and a *Show tool debug in Conversation* toggle. Values are saved
+as clear `key=value` MacRoman text with CR line endings at
+`System Folder:Preferences:Sherclawk Preferences` (file type `pref`, creator
+`ShCk`); the file is created on the first save, so existing builds are
+unchanged until the dialog is used. Saved values override `config.local.h`,
+which stays as the compiled fallback. The workspace applies to new tool work
+immediately (tools, new sessions, builds); a session already open keeps
+writing to the folder it was opened in. Limits accept 1–128 and apply per run;
+outside that range, or with a value missing or malformed in the file, the
+compiled default is used. With the debug toggle on, each executed call shows a
+compact call block — rendered arguments, the result and the call's journal
+event names — in the Conversation; the session JSONL is byte-identical either
+way, and the API key never appears in status text, logs, prompts or results.
+
 The Finder icon ships as a bundle icon family and as an attached custom icon,
 so the AFP file displays correctly without rebuilding the Desktop database.
 Both 16px and 32px icons have color, masks and monochrome fallback. The native
@@ -523,7 +538,8 @@ The Save Handoff button was built, published fork-aware and checked in OS 9.2.2
 on October 6, 2026: disabled in a fresh chat and during a model request, enabled
 after a reply, and a click saved the handoff and prepared fresh history.
 
-Limits are explicit: 32 model rounds, 64 executed calls per run, four calls per
+Limits are explicit: by default 32 model rounds and 64 executed calls per run,
+each adjustable 1–128 in Preferences; four calls per
 response, 8 KiB arguments per call, 256 KiB history, 288 KiB JSON request, 64 KiB
 raw HTTP response, and 3,072 output tokens. Each HTTPS request has a 120-second
 deadline. Tool output is below 1,536 bytes; folder listings have cursors and
@@ -531,7 +547,8 @@ text reads provide `next_byte` continuation when a line is partial. Reads scan
 at most 8 KiB per invocation. Whole-file revisions guard small-file edits;
 larger-file scan revisions are observational.
 Token-truncated tool calls never execute. There is no automatic network retry.
-Reaching a run limit pauses with the model-round and tool counts, history usage
+Reaching a run limit pauses with the actual model-round and tool counts, the
+configured ceilings, history usage
 percentage, and a reminder to send Continue. Sending another message resets
 the run counters while retaining conversation history; handoff is not required.
 
@@ -872,3 +889,14 @@ rule and the empty-name-as-absent handling. Logs are retained locally under
 ignored `build/inspect-check-verified.log` and `build/probe-verified.log`.
 Resource reads never load a whole fork, and inspection results are evidence,
 never launch authority.
+
+Preferences verification, October 7, 2026: the pure parser/formatter suite runs
+under ASan/UBSan in `tools/check.sh` alongside the existing suites: missing
+file/defaults, every key, comments and blank lines, CR/LF/CRLF, duplicate and
+unknown keys, empty-key clearing, over-long and boundary values, workspace
+component rules, limit and boolean refusal, and formatter round-trip/refusal.
+The PowerPC main app built with the new Edit-menu item, `DLOG`/`DITL` 128 and
+the validation `ALRT`. Guest acceptance is pending: saving from the dialog,
+inspection and relaunch persistence of the file, the saved key and workspace
+used by a real run, configured limits pausing at the exact counts, and the
+debug toggle surviving a relaunch while leaving the session JSONL unchanged.

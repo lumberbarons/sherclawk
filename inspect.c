@@ -603,8 +603,8 @@ static void resolve_alias(const AgentCall *call, const JsonToken *tokens, char *
     if (!err) err = ResolveAlias(NULL, (AliasHandle)record, &target, &changed);
     if (record) DisposeHandle(record);
     if (err) { fail(out, cap, "ALIAS", "Alias resolution failed; the target volume may not be mounted.", err); return; }
-    workspace_name[0] = (unsigned char)strlen(SHERCLAWK_WORKSPACE);
-    memcpy(workspace_name + 1, SHERCLAWK_WORKSPACE, workspace_name[0]);
+    workspace_name[0] = (unsigned char)strlen(tools_workspace());
+    memcpy(workspace_name + 1, tools_workspace(), workspace_name[0]);
     err = FSMakeFSSpec(0, 0, workspace_name, &workspace);
     if (!err) err = catalog(&workspace, &workspace_pb);
     if (err || !(workspace_pb.hFileInfo.ioFlAttrib & 16)) {

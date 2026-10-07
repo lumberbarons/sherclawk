@@ -13,4 +13,8 @@ void tools_execute(const AgentCall *call, char *result, size_t cap);
 int tools_execute_recorded(const AgentCall *call, char *result, size_t cap,
                            AgentJournal journal, void *context);
 int tools_validate_path(const char *path, int folder);
+/* Runtime workspace root (MacRoman, ends in ':'), compiled default unless the
+ * app applies the saved preferences. Shared by tools, inspection and builds. */
+const char *tools_workspace(void);
+void tools_set_workspace(const char *path);
 #endif

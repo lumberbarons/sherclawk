@@ -16,6 +16,17 @@
 #include <string.h>
 #include <ctype.h>
 
+/* Runtime workspace root; the app replaces the compiled default from the saved
+ * preferences before any tool runs. Tests keep the compiled default. */
+static char gWorkspace[256] = SHERCLAWK_WORKSPACE;
+const char *tools_workspace(void) { return gWorkspace; }
+void tools_set_workspace(const char *path)
+{
+    size_t n = strlen(path);
+    if (n >= sizeof(gWorkspace)) return;
+    memcpy(gWorkspace, path, n + 1);
+}
+
 static int fail(char *out, size_t cap, const char *code, const char *message, int native)
 {
     char q[512];
@@ -57,7 +68,7 @@ static int spec_for(const char *path, int folder, FSSpec *spec)
     Str255 p;
     size_t n;
     if (text_to_macroman_strict(path, local, sizeof(local)) < 0 || tools_validate_path(local, folder)) return paramErr;
-    if (snprintf(full, sizeof(full), "%s%s", SHERCLAWK_WORKSPACE, local) >= (int)sizeof(full)) return paramErr;
+    if (snprintf(full, sizeof(full), "%s%s", tools_workspace(), local) >= (int)sizeof(full)) return paramErr;
     n = strlen(full); if (n > 255) return paramErr;
     p[0] = (unsigned char)n; memcpy(p + 1, full, n);
     return FSMakeFSSpec(0, 0, p, spec);
@@ -104,7 +115,7 @@ static void environment(char *out, size_t cap)
     char root[768], q[1024];
     long system = 0;
     Gestalt(gestaltSystemVersion, &system);
-    if (text_to_utf8(SHERCLAWK_WORKSPACE, strlen(SHERCLAWK_WORKSPACE), root, sizeof(root)) < 0 ||
+    if (text_to_utf8(tools_workspace(), strlen(tools_workspace()), root, sizeof(root)) < 0 ||
         json_quote(root, q, sizeof(q)) < 0) { fail(out, cap, "CONFIG", "Invalid workspace encoding.", 0); return; }
     snprintf(out, cap, "{\"status\":\"ok\",\"os\":\"classic Mac OS\",\"system_version_hex\":\"%04lx\","
         "\"architecture\":\"PowerPC\",\"workspace\":%s,\"paths\":\"relative colon-separated\","
@@ -877,9 +888,9 @@ static int create_project(const AgentCall *call, const JsonToken *tokens, char *
     snprintf(temporary, sizeof(temporary), "%.*sSherclawk project 00000000 00", (int)prefix, path);
     for (i = 0; i < (int)(sizeof(project_inputs)/sizeof(project_inputs[0])); i++) {
         snprintf(child, sizeof(child), "%s:%s", path, project_inputs[i].name);
-        if (text_to_macroman_strict(child, local, sizeof(local)) < 0 || tools_validate_path(local, 0) || strlen(SHERCLAWK_WORKSPACE) + strlen(local) > 255) goto limit;
+        if (text_to_macroman_strict(child, local, sizeof(local)) < 0 || tools_validate_path(local, 0) || strlen(tools_workspace()) + strlen(local) > 255) goto limit;
         snprintf(child, sizeof(child), "%s:%s", temporary, project_inputs[i].name);
-        if (text_to_macroman_strict(child, local, sizeof(local)) < 0 || tools_validate_path(local, 0) || strlen(SHERCLAWK_WORKSPACE) + strlen(local) > 255) goto limit;
+        if (text_to_macroman_strict(child, local, sizeof(local)) < 0 || tools_validate_path(local, 0) || strlen(tools_workspace()) + strlen(local) > 255) goto limit;
     }
     if (project_result(record, sizeof(record), "uncertain", "JOURNAL_AFTER_PUBLISH", path, temporary, -32768)) goto limit;
     if (!journal || json_quote(call->id, call_id, sizeof(call_id)) < 0) {

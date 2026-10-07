@@ -10,6 +10,7 @@
 #include "Processes.r"
 #include "SysTypes.r"
 #include "Menus.r"
+#include "Dialogs.r"
 
 resource 'SIZE' (-1) {
     reserved,
@@ -62,5 +63,62 @@ resource 'MENU' (130, "Edit") {
         "Clear", noIcon, noKey, noMark, plain;
         "-", noIcon, noKey, noMark, plain;
         "Select All", noIcon, "A", noMark, plain;
+        "-", noIcon, noKey, noMark, plain;
+        "Preferences\0xC9", noIcon, noKey, noMark, plain;
+    }
+};
+
+/* Preferences (Edit menu, last item). EditText capacity is the length of the
+ * template string: model and key 255 characters, workspace 192 (the
+ * validator's cap), limits 3. main.c seeds every field from the live values. */
+resource 'DLOG' (128, "Preferences") {
+    {70, 60, 320, 480},
+    movableDBoxProc,
+    visible,
+    noGoAway,
+    0x0,
+    128,
+    "Preferences",
+    centerMainScreen
+};
+
+resource 'DITL' (128, "Preferences") {
+    {
+        /* [1] OK */            {222, 262, 242, 324}, Button { enabled, "OK" };
+        /* [2] Cancel */        {222, 332, 242, 404}, Button { enabled, "Cancel" };
+        /* [3] Model */         {12, 12, 28, 100},   StaticText { disabled, "Model:" };
+        /* [4] */               {28, 10, 46, 408},   EditText { enabled, "                                                                                                                                                                                                                                                               " };
+        /* [5] API key */       {53, 12, 69, 100},   StaticText { disabled, "API key:" };
+        /* [6] */               {69, 10, 87, 408},   EditText { enabled, "                                                                                                                                                                                                                                                               " };
+        /* [7] Workspace */     {94, 12, 110, 100},  StaticText { disabled, "Workspace:" };
+        /* [8] */               {110, 10, 128, 408}, EditText { enabled, "                                                                                                                                                                                                " };
+        /* [9] Rounds */        {136, 12, 152, 130}, StaticText { disabled, "Max model rounds:" };
+        /* [10] */              {134, 135, 152, 195}, EditText { enabled, "128" };
+        /* [11] Tools */        {136, 215, 152, 325}, StaticText { disabled, "Max tool calls:" };
+        /* [12] */              {134, 330, 152, 390}, EditText { enabled, "128" };
+        /* [13] Debug toggle */ {162, 12, 180, 408}, CheckBox { enabled, "Show tool debug in Conversation" };
+        /* [14] Hint */         {192, 12, 208, 408}, StaticText { disabled, "Stored in System Folder:Preferences. Limits apply to each run." };
+    }
+};
+
+/* One reusable validation alert; main.c substitutes the message with
+ * ParamText. The caution icon is ICON 2 from the System file. */
+resource 'ALRT' (128, "Preferences Error") {
+    {80, 80, 180, 420},
+    129,
+    {
+        OK, visible, sound1,
+        OK, visible, sound1,
+        OK, visible, sound1,
+        OK, visible, sound1
+    },
+    alertPositionMainScreen
+};
+
+resource 'DITL' (129, "Preferences Error") {
+    {
+        /* [1] OK */   {68, 270, 88, 330},  Button { enabled, "OK" };
+        /* [2] Text */ {14, 60, 60, 330},   StaticText { disabled, "^0" };
+        /* [3] Icon */ {12, 12, 44, 44},    Icon { disabled, 2 };
     }
 };
