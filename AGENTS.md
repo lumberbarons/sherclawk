@@ -47,6 +47,13 @@ cp config.example.h config.local.h  # optional local config; gitignored
   the AFP share (`/srv/retro68`; override `SHARE_DIR`). `SHARE_HOST` has no
   default. Quit a running copy before republishing and never restart AFP/
   netatalk during a guest session.
+- If a freshly published app fails to launch with "could not be opened,
+  because it is in use", suspect a stale server-side AFP session before the
+  guest: an unclean guest disconnect (host sleep, VM reset) can leave `afpd`
+  processes with no live client connection holding the old app and its `._`
+  sidecar open on the share host. Confirm with `ss`/`lsof` that the process
+  has no client and holds the app path, kill only those stale sessions, and
+  leave netatalk and the live mount alone.
 - Verification beyond host tests means the OS 9 guest: launch the diagnostic
   and read `Retro68:<Name>.log`. Per-diagnostic launch/read commands are in
   README.md under "Files and verification".
