@@ -501,6 +501,30 @@ The sidebar places the subtitle below Sherclawk's title and shows current
 model-history usage below the artwork as used/capacity KiB and a percentage.
 Usage updates during runs and resets with New Chat or a successful handoff.
 
+Directly under that indicator, a usage line reports provider accounting.
+`Context: 45.2k tokens (4%)` is the most recent model round's
+`usage.prompt_tokens` (cached input included) and its rounded share of that
+model's context window; before the first reply it reads `Context: -`, and the
+percentage is omitted while the window is unknown. `Cost: $0.012345` is the
+running sum, across the session's model rounds, of the provider-computed USD
+`usage.cost` (OpenRouter credits are USD 1:1), accumulated in millionths of a
+dollar and hidden while it is zero. Accounting is display-grade: values below
+one micro-dollar round to zero. New Chat resets both totals; a successful
+handoff carries the cost total into the fresh history but leaves the context
+line unset until the next reply.
+
+The context window comes from the public
+`GET /api/v1/models/<model>/endpoints` metadata response: the largest
+`context_length` across its endpoints. The app requests it at most once per
+model per launch, with a 30-second deadline and the same 64 KiB response
+bound. Any HTTP error, timeout, oversized body, or response beyond the
+4096-token JSON parser cap silently omits the percentage and proceeds with the
+send; there is no retry. The model field stays editable during the lookup; if
+it changes, the send is held and the typed prompt is kept. Stop during the
+lookup leaves no session record and keeps the prompt; the stopped exchange
+continues to a terminal network state before it is closed, so a send in the
+next few seconds may briefly report that the lookup is still closing.
+
 New `ppc-toolbox-v1` projects include confirmed close-box handling as well
 as Command-Q. Preserve these event branches when adding application behavior;
 existing projects are not changed by updating the embedded template.
@@ -557,11 +581,11 @@ History buffers are static: the app allocates their full capacity at launch,
 not incrementally as messages arrive. With handoff enabled, each additional
 history byte costs roughly four RAM bytes (current history, candidate history,
 JSON request, and HTTP request). Per-response scratch is bounded separately.
-The 256 KiB build has 2,330,176 bytes (2.22 MiB) of linked code/static data;
+The 256 KiB build has 2,423,608 bytes (2.31 MiB) of linked code/static data;
 this excludes dynamic TLS/UI allocations and the stack. Its `SIZE` resource
 still requests 8 MiB preferred / 4 MiB minimum. A 512 KiB history would raise
-that baseline to roughly 3.22 MiB, making the 4 MiB minimum tight; 1 MiB history
-would need roughly 5.22 MiB before dynamic allocations, and 2 MiB would exceed
+that baseline to roughly 3.31 MiB, making the 4 MiB minimum tight; 1 MiB history
+would need roughly 5.31 MiB before dynamic allocations, and 2 MiB would exceed
 the current 8 MiB preferred allocation. Re-measure and raise `SIZE` before such
 increases. Larger histories also upload more bytes and consume more model input
 tokens on every round; byte capacity is not a guarantee of provider context

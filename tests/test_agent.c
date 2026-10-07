@@ -30,6 +30,97 @@ static void named_call(const char *finish, const char *name, const char *argumen
     snprintf(response, sizeof(response), "{\"choices\":[{\"finish_reason\":\"%s\",\"message\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"%s\",\"arguments\":%s}}]}}]}", finish, name, quoted);
 }
 static void call(const char *finish) { named_call(finish, "get_environment", "{}"); }
+static const char *usage1 =
+    "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Counted.\"}}],"
+    "\"usage\":{\"prompt_tokens\":1200,\"completion_tokens\":30,\"total_tokens\":1230,\"cost\":0.012345}}";
+static const char *usage2 =
+    "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Counted again.\"}}],"
+    "\"usage\":{\"prompt_tokens\":2400,\"cost\":0.000002}}";
+static const char *usage_missing =
+    "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"No usage.\"}}]}";
+static const char *usage_big = "{\"usage\":{\"prompt_tokens\":900000,\"cost\":999999999.999999}}";
+static const char *handoff_usage =
+    "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Handoff summary.\"}}],"
+    "\"usage\":{\"prompt_tokens\":1500,\"cost\":0.034567}}";
+static void usage(void)
+{
+    size_t i, used;
+    begin();
+    assert(!agent_response(&a, usage1, strlen(usage1), 200, error, sizeof(error)));
+    assert(a.context_seen && a.context_tokens == 1200);
+    assert(a.cost_seen && a.cost_micros == 12345);
+    assert(!agent_begin(&a, "Again", error, sizeof(error)));
+    assert(!agent_response(&a, usage2, strlen(usage2), 200, error, sizeof(error)));
+    assert(a.context_tokens == 2400 && a.cost_micros == 12347);
+    /* Missing or malformed usage never moves either total. */
+    agent_usage_absorb(&a, usage_missing, strlen(usage_missing));
+    assert(a.context_tokens == 2400 && a.cost_micros == 12347);
+    agent_usage_absorb(&a, "{\"usage\":{\"prompt_tokens\":\"x\",\"cost\":\"cheap\"}}",
+                       strlen("{\"usage\":{\"prompt_tokens\":\"x\",\"cost\":\"cheap\"}}"));
+    assert(a.context_tokens == 2400 && a.cost_micros == 12347);
+    agent_usage_absorb(&a, "{\"usage\":[-1]}", strlen("{\"usage\":[-1]}"));
+    agent_usage_absorb(&a, "not json", strlen("not json"));
+    agent_usage_absorb(&a, "{\"usage\":{\"prompt_tokens\":-5,\"cost\":-1}}",
+                       strlen("{\"usage\":{\"prompt_tokens\":-5,\"cost\":-1}}"));
+    assert(a.context_tokens == 2400 && a.cost_micros == 12347);
+    /* Rejected, non-2xx, truncated and journal-failed responses keep totals. */
+    begin();
+    used = a.used;
+    assert(agent_response(&a, "{\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"cost\":1.5}}",
+                          strlen("{\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"cost\":1.5}}"),
+                          200, error, sizeof(error)) == -1);
+    assert(!a.context_seen && !a.cost_seen && a.used == used);
+    assert(agent_response(&a, usage1, strlen(usage1), 503, error, sizeof(error)) == -1);
+    assert(!a.context_seen && !a.cost_seen);
+    for (i = 1; i < strlen(usage1); i++) {
+        assert(agent_response(&a, usage1, i, 200, error, sizeof(error)) == -1);
+        assert(!a.context_seen && !a.cost_seen && a.used == used);
+    }
+    fail_record = 1;
+    assert(agent_response(&a, usage1, strlen(usage1), 200, error, sizeof(error)) == -1);
+    assert(a.used == used && !a.context_seen && !a.cost_seen);
+    fail_record = 0;
+    /* The accumulator clamps instead of wrapping and stays clamped. */
+    agent_reset(&a, journal, NULL);
+    for (i = 0; i < 16; i++) agent_usage_absorb(&a, usage_big, strlen(usage_big));
+    assert(a.cost_seen && a.cost_micros == AGENT_COST_MICROS_MAX && a.context_tokens == 900000);
+    agent_usage_absorb(&a, usage2, strlen(usage2));
+    assert(a.cost_micros == AGENT_COST_MICROS_MAX);
+    /* A handoff completion shares the absorber; the fresh candidate starts
+     * reset and receives cost only, leaving the context line unset. */
+    agent_reset(&a, journal, NULL);
+    agent_usage_absorb(&a, handoff_usage, strlen(handoff_usage));
+    assert(a.cost_micros == 34567 && a.context_tokens == 1500);
+    assert(!agent_handoff_response(handoff_usage, strlen(handoff_usage), 200, req, sizeof(req), error, sizeof(error)));
+    assert(!strcmp(req, "Handoff summary."));
+    agent_reset(&candidate, journal, NULL);
+    assert(!agent_handoff_seed(&candidate, req, "old.jsonl", "handoff.md"));
+    candidate.cost_micros = a.cost_micros;
+    candidate.cost_seen = a.cost_seen;
+    assert(candidate.cost_micros == 34567 && candidate.cost_seen);
+    assert(!candidate.context_seen && !candidate.context_tokens);
+}
+static void contexts(void)
+{
+    static const char *body =
+        "{\"data\":{\"endpoints\":[{\"name\":\"a\",\"context_length\":8192},{\"name\":\"b\"},"
+        "{\"context_length\":131072,\"name\":\"c\"},{\"context_length\":32768}]}}";
+    static char big[65536];
+    size_t i, at = 0;
+    assert(agent_context_limit(body, strlen(body)) == 131072);
+    assert(agent_context_limit("{\"data\":{\"endpoints\":[]}}", strlen("{\"data\":{\"endpoints\":[]}}")) == -1);
+    assert(agent_context_limit("{\"error\":{\"message\":\"no\"}}", strlen("{\"error\":{\"message\":\"no\"}}")) == -1);
+    assert(agent_context_limit("{\"data\":{}}", strlen("{\"data\":{}}")) == -1);
+    assert(agent_context_limit("{\"data\":{\"endpoints\":{}}}", strlen("{\"data\":{\"endpoints\":{}}}")) == -1);
+    for (i = 0; i < strlen(body); i++) assert(agent_context_limit(body, i) == -1);
+    /* More endpoint tokens than the shared parser cap: quiet -1. */
+    at += (size_t)snprintf(big + at, sizeof(big) - at, "{\"data\":{\"endpoints\":[");
+    for (i = 0; i < 1500; i++)
+        at += (size_t)snprintf(big + at, sizeof(big) - at, "%s{\"context_length\":1024}", i ? "," : "");
+    at += (size_t)snprintf(big + at, sizeof(big) - at, "]}}");
+    assert(at < sizeof(big));
+    assert(agent_context_limit(big, at) == -1);
+}
 int main(void)
 {
     const char *final = "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Inspected.\"}}]}";
@@ -144,6 +235,8 @@ int main(void)
     assert(agent_response(&a, response, strlen(response), 200, error, sizeof(error)) == -1);
     assert(text_to_macroman_strict("\xf0\x9f\xa6\x80", req, sizeof(req)) == -1);
     assert(text_to_macroman_strict("caf\xc3\xa9", req, sizeof(req)) == 4);
-    puts("PASS agent tools, history, truncation, Stop, persistence barriers and bounds");
+    usage();
+    contexts();
+    puts("PASS agent tools, usage accounting, history, truncation, Stop, persistence barriers and bounds");
     return 0;
 }

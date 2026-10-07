@@ -141,9 +141,56 @@ static void history(void)
     memset(out, '\n', CHAT_REQUEST_CAP); out[CHAT_REQUEST_CAP] = 0;
     assert(chat_request(&c, "model", out, req, sizeof(req)) == -1);
 }
+static void numbers(void)
+{
+    static const struct { const char *text; long value; } ints[] = {
+        {"0", 0}, {"7", 7}, {"45234", 45234}, {"2147483647", 2147483647L}
+    };
+    static const char *int_bad[] = {
+        "2147483648", "99999999999999999999", "1.5", "1e2", "-1", "\"12\"", "[1]", "true", "null"
+    };
+    static const struct { const char *text; long long value; } decimals[] = {
+        {"0", 0LL}, {"0.5", 500000LL}, {"12.5", 12500000LL},
+        {"0.012345", 12345LL}, {"1.2e-5", 12LL}, {"2e-6", 2LL},
+        {"1.5e-6", 2LL}, {"1e+2", 100000000LL}, {"0.0000004", 0LL},
+        {"0.0000005", 1LL}, {"999999999.999999", 999999999999999LL}
+    };
+    static const char *decimal_bad[] = {
+        "-0.1", "1000000000", "999999999999.999999", "1e40",
+        "12345678901234567890", "\"0.5\"", "true", "[1]"
+    };
+    char fixture[128];
+    long integer;
+    long long micros;
+    size_t i;
+    for (i = 0; i < sizeof(ints)/sizeof(*ints); i++) {
+        snprintf(fixture, sizeof(fixture), "{\"n\":%s}", ints[i].text);
+        assert(json_parse(fixture, strlen(fixture), tokens, 2048) > 0);
+        assert(!json_integer(fixture, tokens, json_member(fixture, tokens, 0, "n"), &integer));
+        assert(integer == ints[i].value);
+    }
+    for (i = 0; i < sizeof(int_bad)/sizeof(*int_bad); i++) {
+        snprintf(fixture, sizeof(fixture), "{\"n\":%s}", int_bad[i]);
+        assert(json_parse(fixture, strlen(fixture), tokens, 2048) > 0);
+        assert(json_integer(fixture, tokens, json_member(fixture, tokens, 0, "n"), &integer) == -1);
+    }
+    for (i = 0; i < sizeof(decimals)/sizeof(*decimals); i++) {
+        snprintf(fixture, sizeof(fixture), "{\"n\":%s}", decimals[i].text);
+        assert(json_parse(fixture, strlen(fixture), tokens, 2048) > 0);
+        assert(!json_decimal_micros(fixture, tokens, json_member(fixture, tokens, 0, "n"), &micros));
+        assert(micros == decimals[i].value);
+    }
+    for (i = 0; i < sizeof(decimal_bad)/sizeof(*decimal_bad); i++) {
+        snprintf(fixture, sizeof(fixture), "{\"n\":%s}", decimal_bad[i]);
+        assert(json_parse(fixture, strlen(fixture), tokens, 2048) > 0);
+        assert(json_decimal_micros(fixture, tokens, json_member(fixture, tokens, 0, "n"), &micros) == -1);
+    }
+    assert(json_integer(fixture, tokens, -1, &integer) == -1);
+    assert(json_decimal_micros(fixture, tokens, 0, &micros) == -1);
+}
 int main(void)
 {
-    framing(); json(); encoding(); history();
-    puts("PASS HTTP framing, JSON, encoding, history and rollback");
+    framing(); json(); numbers(); encoding(); history();
+    puts("PASS HTTP framing, JSON, numbers, encoding, history and rollback");
     return 0;
 }

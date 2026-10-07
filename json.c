@@ -197,6 +197,76 @@ int json_member(const char *s, const JsonToken *t, int object, const char *key)
     }
     return -1;
 }
+int json_integer(const char *s, const JsonToken *t, int index, long *out)
+{
+    long v = 0;
+    int i;
+    if (index < 0 || t[index].type != JSON_PRIMITIVE || t[index].end <= t[index].start) return -1;
+    for (i = t[index].start; i < t[index].end; i++) {
+        int d = (unsigned char)s[i] - '0';
+        if (d < 0 || d > 9 || v > (2147483647L - d) / 10) return -1;
+        v = v * 10 + d;
+    }
+    *out = v;
+    return 0;
+}
+/* Rounds a non-negative decimal-or-exponent literal to millionths. The
+ * mantissa is capped separately so no intermediate can overflow. */
+int json_decimal_micros(const char *s, const JsonToken *t, int index, long long *out)
+{
+    static const long long pow10[19] = {
+        1LL, 10LL, 100LL, 1000LL, 10000LL, 100000LL, 1000000LL, 10000000LL,
+        100000000LL, 1000000000LL, 10000000000LL, 100000000000LL,
+        1000000000000LL, 10000000000000LL, 100000000000000LL,
+        1000000000000000LL, 10000000000000000LL, 100000000000000000LL,
+        1000000000000000000LL
+    };
+    long long m = 0, divisor;
+    long e = 0, scale;
+    int i, end, frac = 0;
+    if (index < 0 || t[index].type != JSON_PRIMITIVE || t[index].end <= t[index].start) return -1;
+    i = t[index].start; end = t[index].end;
+    if (s[i] == '-') return -1;                      /* usage costs are never negative */
+    for (; i < end && s[i] >= '0' && s[i] <= '9'; i++) {
+        int d = s[i] - '0';
+        if (m > (1000000000000000000LL - d) / 10) return -1;
+        m = m * 10 + d;
+    }
+    if (i < end && s[i] == '.') {
+        i++;
+        for (; i < end && s[i] >= '0' && s[i] <= '9'; i++) {
+            int d = s[i] - '0';
+            if (m > (1000000000000000000LL - d) / 10) return -1;
+            m = m * 10 + d;
+            frac++;
+        }
+    }
+    if (i < end && (s[i] == 'e' || s[i] == 'E')) {
+        int negative, digits = 0;
+        i++;
+        negative = i < end && s[i] == '-';
+        if (i < end && (s[i] == '+' || s[i] == '-')) i++;
+        for (; i < end && s[i] >= '0' && s[i] <= '9'; i++) {
+            if (e < 1000) e = e * 10 + (s[i] - '0');
+            digits++;
+        }
+        if (!digits) return -1;
+        if (negative) e = -e;
+    }
+    if (i != end) return -1;
+    scale = e - (long)frac + 6;
+    if (scale >= 0) {
+        if (scale > 18 || m > 999999999999999LL / pow10[scale]) return -1;
+        m *= pow10[scale];
+    } else if (-scale > 18) {
+        m = 0;
+    } else {
+        divisor = pow10[-scale];
+        m = (m + divisor / 2) / divisor;
+    }
+    *out = m;
+    return 0;
+}
 int json_quote(const char *s, char *out, size_t cap)
 {
     size_t at = 0, n = strlen(s), used = 1;
