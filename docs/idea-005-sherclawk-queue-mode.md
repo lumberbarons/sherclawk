@@ -44,7 +44,7 @@ protocol uses.
   shell text whose real work is `tlsrvr` (a MacRelix tool) sending a `dosc`
   ("Do Script") Apple event to MPW's ToolServer. The research document already
   ruled out driving MacRelix by Apple event: Genie's `execute` handler was
-  deleted upstream and is a trap (`sherclawk-agent-harness-research.md:741-748`).
+  deleted upstream and is a trap (`docs/sherclawk-agent-harness-research.md:741-748`).
 
 ## Is `sherclawk --queue` possible?
 

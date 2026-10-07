@@ -67,7 +67,10 @@ cp config.example.h config.local.h  # optional local config; gitignored
   `run_application.c`, `jobs.c`; `worker/` is the Perl fallback executor for
   jobs in the guest.
 - `tests/` uses `tests/toolbox/` stubs to compile app sources with host `cc`;
-  `tools/*-check.c` are Mac GUI diagnostics built by CMake, not host programs.
+  most `tools/*-check.c` are Mac GUI diagnostics built by CMake, not host
+  programs. `tools/native-process-check.c` is the exception: a guest source
+  fixture built as `main.c` in a ppc-toolbox copy (see
+  `templates/ppc-toolbox/README.md`).
 - `patches/` are fixes applied to staged copies of Certainly by build.sh and
   check-transport.sh. `vendor/` is imported code (HelloChat HTTP plus the host
   TLS shim); `SHERCLAWK_APP` gates Sherclawk's own User-Agent there.
