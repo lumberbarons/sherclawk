@@ -1,6 +1,7 @@
 /* Optional local credentials: missing configuration still permits a UI build. */
 #ifndef SHERCLAWK_CONFIG_H
 #define SHERCLAWK_CONFIG_H
+#include <stdio.h>
 #ifdef SHERCLAWK_HAS_LOCAL_CONFIG
 #include "config.local.h"
 #endif
@@ -13,6 +14,22 @@
 #ifndef SHERCLAWK_WORKSPACE
 #define SHERCLAWK_WORKSPACE "Retro68:"
 #endif
+/* Optional public app URL for OpenRouter attribution; empty sends none. */
+#ifndef SHERCLAWK_APP_URL
+#define SHERCLAWK_APP_URL ""
+#endif
+
+/* Compose OpenRouter app-attribution headers for a configured URL. An empty
+ * URL writes an empty block (0); -1 for CR/LF or when the URL does not fit. */
+static inline int sherclawk_attribution(const char *url, char *out, size_t cap)
+{
+    int n;
+    const char *p;
+    if (!url || !url[0]) { out[0] = 0; return 0; }
+    for (p = url; *p; p++) if (*p == '\r' || *p == '\n') return -1;
+    n = snprintf(out, cap, "HTTP-Referer: %s\r\nX-OpenRouter-Title: Sherclawk\r\n", url);
+    return n > 0 && (size_t)n < cap ? n : -1;
+}
 
 /* Fixed originating queue shared by build publication and retained authority. */
 #define SHERCLAWK_BUILD_QUEUE "Worker01:buildjobs"

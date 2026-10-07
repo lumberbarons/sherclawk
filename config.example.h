@@ -6,4 +6,6 @@
 #define SHERCLAWK_MODEL "openai/gpt-6-luna"
 /* Classic MacRoman workspace path, ending in a colon. */
 #define SHERCLAWK_WORKSPACE "Retro68:"
+/* Optional public app URL for OpenRouter attribution (empty sends none). */
+#define SHERCLAWK_APP_URL ""
 #endif

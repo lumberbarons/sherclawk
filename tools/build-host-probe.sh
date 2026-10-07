@@ -12,7 +12,7 @@ git init -q "$STAGE"
 for patch in "$HTTPS"/patches/*.patch; do
     (cd "$STAGE" && GIT_CEILING_DIRECTORIES="$STAGE" git apply "$patch")
 done
-LOCAL_FLAGS=(-DSHERCLAWK_HOST=1)
+LOCAL_FLAGS=(-DSHERCLAWK_HOST=1 -DSHERCLAWK_APP=1)
 if [ -f "$HERE/config.local.h" ]; then LOCAL_FLAGS+=(-DSHERCLAWK_HAS_LOCAL_CONFIG=1); fi
 SAN_FLAGS=(-fsanitize=address,undefined -fno-omit-frame-pointer)
 # bash on macOS is 3.2; populate the array without mapfile.

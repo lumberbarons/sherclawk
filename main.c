@@ -882,6 +882,7 @@ static void StartHandoff(void)
 {
     int length;
     size_t i;
+    char attribution[256];
     if (gSending) return;
     if (!gSessionOpen || !gAgent.messages || gAgent.active || gAgent.next < gAgent.count) {
         SetStatus("Finish or stop the current run before saving a handoff."); return;
@@ -894,8 +895,11 @@ static void StartHandoff(void)
     }
     length = agent_handoff_request(&gAgent, gRunModel, gJSON, sizeof(gJSON));
     if (length < 0) { SetStatus("Could not prepare handoff; conversation retained."); return; }
-    length = http_build_post("openrouter.ai", "/api/v1/chat/completions", SHERCLAWK_API_KEY,
-        gJSON, (size_t)length, gNet.request, sizeof(gNet.request));
+    if (sherclawk_attribution(SHERCLAWK_APP_URL, attribution, sizeof(attribution)) < 0) {
+        SetStatus("Attribution URL is too long; conversation retained."); return;
+    }
+    length = http_build_post_with_headers("openrouter.ai", "/api/v1/chat/completions", SHERCLAWK_API_KEY,
+        attribution, gJSON, (size_t)length, gNet.request, sizeof(gNet.request));
     if (length < 0) { SetStatus("Could not prepare handoff request; conversation retained."); return; }
     gHandoffPath[0] = 0; gHandoff = 1;
     InitOpenTransport(); gOTOpen = 1; gStartTicks = (uint32_t)TickCount(); gSending = 1;
@@ -940,13 +944,17 @@ static void PauseRunAtLimit(void)
 static int StartModelRequest(void)
 {
     int length;
+    char attribution[256];
     if (gAgent.rounds >= AGENT_TURN_MAX || gAgent.tool_count >= AGENT_TOOL_MAX) {
         PauseRunAtLimit(); return -1;
     }
     length = agent_request(&gAgent, gRunModel, gJSON, sizeof(gJSON));
     if (length < 0) { AbortChat("Request limit reached. Start a new session."); return -1; }
-    length = http_build_post("openrouter.ai", "/api/v1/chat/completions", SHERCLAWK_API_KEY,
-        gJSON, (size_t)length, gNet.request, sizeof(gNet.request));
+    if (sherclawk_attribution(SHERCLAWK_APP_URL, attribution, sizeof(attribution)) < 0) {
+        AbortChat("Attribution URL is too long."); return -1;
+    }
+    length = http_build_post_with_headers("openrouter.ai", "/api/v1/chat/completions", SHERCLAWK_API_KEY,
+        attribution, gJSON, (size_t)length, gNet.request, sizeof(gNet.request));
     if (length < 0) { AbortChat("Request or API key is too long or invalid."); return -1; }
     InitOpenTransport(); gOTOpen = 1;
     gStartTicks = (uint32_t)TickCount(); gSending = 1;

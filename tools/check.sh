@@ -4,8 +4,9 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 python3 "$HERE/tools/embed-project-template.py"
 mkdir -p "$HERE/build/tests"
+# Match the app build: SHERCLAWK_APP selects the User-Agent asserted by the test.
 "${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror \
-    -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -fsanitize=address,undefined -fno-omit-frame-pointer -DSHERCLAWK_APP=1 \
     -I"$HERE" -I"$HERE/../hello-https" \
     "$HERE/tests/test_core.c" "$HERE/chat.c" "$HERE/json.c" "$HERE/text.c" \
     "$HERE/../hello-https/http.c" -o "$HERE/build/tests/test-core"

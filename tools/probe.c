@@ -124,17 +124,20 @@ static int native_checks(void)
 #endif
 static int run_agent(void)
 {
-    char error[256];
+    char error[256], attribution[256];
     int rounds = 0, seen = 0, length;
     agent_reset(&agent, NULL, NULL);
+    if (sherclawk_attribution(SHERCLAWK_APP_URL, attribution, sizeof(attribution)) < 0) {
+        fprintf(logfile, "FAIL attribution URL is too long\n"); return 1;
+    }
     if (agent_begin(&agent, "Use get_environment, then list_files for the workspace root (empty root). "
         "Then use read_text on Sherclawk Fixture.txt. If the listing is paginated you may read that exact path directly. "
         "Report the diagnostic codeword from the file. You must use all three tools.", error, sizeof(error))) return 1;
     while (agent.active && rounds++ < 8) {
         length = agent_request(&agent, SHERCLAWK_MODEL, body, sizeof(body));
         if (length < 0) return 1;
-        length = http_build_post("openrouter.ai", "/api/v1/chat/completions", SHERCLAWK_API_KEY,
-            body, (size_t)length, net.request, sizeof(net.request));
+        length = http_build_post_with_headers("openrouter.ai", "/api/v1/chat/completions", SHERCLAWK_API_KEY,
+            attribution, body, (size_t)length, net.request, sizeof(net.request));
         if (exchange(length) < 0 || agent_response(&agent, net.body, net.body_len, net.status, error, sizeof(error))) {
             fprintf(logfile, "FAIL model %s\n", error); return 1;
         }

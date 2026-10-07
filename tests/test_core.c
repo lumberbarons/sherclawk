@@ -3,6 +3,7 @@
 #include "json.h"
 #include "text.h"
 #include "http.h"
+#include "config.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -40,6 +41,27 @@ static void framing(void)
     assert(http_build_post("openrouter.ai", "/api/v1/chat/completions", "test\r\nInjected: yes", "{}", 2, req, sizeof(req)) == -1);
     assert(http_build_post("openrouter.ai", "/x", "test", "\xc3\xa9", 2, req, sizeof(req)) > 0);
     assert(strstr(req, "Content-Length: 2\r\n") && strstr(req, "Accept-Encoding: identity"));
+#ifdef SHERCLAWK_APP
+    assert(strstr(req, "User-Agent: Sherclawk/1.0 (Certainly; Mac OS 9)\r\n"));
+#else
+    assert(strstr(req, "User-Agent: HelloChat/1.0 (Certainly; Mac OS 9)\r\n"));
+#endif
+    {
+        char headers[128], small[8];
+        assert(sherclawk_attribution("", headers, sizeof(headers)) == 0 && !headers[0]);
+        assert(sherclawk_attribution("https://x\r\nEvil: y", headers, sizeof(headers)) == -1);
+        assert(sherclawk_attribution("https://example.test/sherclawk", small, sizeof(small)) == -1);
+        assert(sherclawk_attribution("https://example.test/sherclawk", headers, sizeof(headers)) > 0);
+        assert(!strcmp(headers, "HTTP-Referer: https://example.test/sherclawk\r\nX-OpenRouter-Title: Sherclawk\r\n"));
+        assert(http_build_post_with_headers("openrouter.ai", "/x", "test", headers, "{}", 2, req, sizeof(req)) > 0);
+        assert(strstr(req, "Host: openrouter.ai\r\nHTTP-Referer: https://example.test/sherclawk\r\n"
+                          "X-OpenRouter-Title: Sherclawk\r\nUser-Agent: "));
+        assert(http_build_post_with_headers("openrouter.ai", "/x", "test", NULL, "{}", 2, req, sizeof(req)) > 0);
+        assert(!strstr(req, "HTTP-Referer"));
+        assert(http_build_post_with_headers("openrouter.ai", "/x", "test", "Bare\nline\r\n", "{}", 2, req, sizeof(req)) == -1);
+        assert(http_build_post_with_headers("openrouter.ai", "/x", "test", "Bare\rline\r\n", "{}", 2, req, sizeof(req)) == -1);
+        assert(http_build_post_with_headers("openrouter.ai", "/x", "test", headers, "{}", 2, req, 40) == -1);
+    }
     assert(http_build_post("host", "/x", "test", "body", 4, req, 20) == -1);
 }
 static void json(void)

@@ -33,6 +33,9 @@ foreach(app SherclawkSelfBuildStopCheck SherclawkSelfBuildCheck SherclawkNativeB
     target_link_libraries(${app} certainly)
     target_compile_options(${app} PRIVATE -Wall -Wextra -ffunction-sections)
     set_target_properties(${app} PROPERTIES LINK_FLAGS "-Wl,-gc-sections")
+    # The shared hello-https/http.c keeps HelloChat's request bytes unchanged
+    # unless this marker selects Sherclawk's own User-Agent product token.
+    target_compile_definitions(${app} PRIVATE SHERCLAWK_APP=1)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/config.local.h")
         target_compile_definitions(${app} PRIVATE SHERCLAWK_HAS_LOCAL_CONFIG=1)
     endif()

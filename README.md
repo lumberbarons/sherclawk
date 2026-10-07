@@ -37,6 +37,12 @@ A local config was copied from HelloChat for this workspace and renamed to
 Sherclawk's macros. It is ignored, and credentials are embedded only in local
 binaries. Builds without credentials still launch. Quit a running copy before
 publishing/relaunching. Normal runtime uses no host executor or model relay.
+Model requests identify the client as `Sherclawk/1.0 (Certainly; Mac OS 9)`;
+Sherclawk's build defines `SHERCLAWK_APP`, which selects that User-Agent in the
+shared HelloHTTPS POST builder while the other apps keep their own defaults.
+Set `SHERCLAWK_APP_URL` in `config.local.h` to a public app URL to also send
+OpenRouter's `HTTP-Referer` and `X-OpenRouter-Title: Sherclawk` attribution
+headers; an empty value sends neither.
 
 The default workspace is `Retro68:`. Configure a native MacRoman path ending
 in a colon. Tool paths are relative to it, for example `Spikes:ccapp:hello.c`;
