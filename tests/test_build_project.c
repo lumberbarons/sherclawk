@@ -1,5 +1,6 @@
 /* Reuse the File Manager fault model to check descriptor rejection and source
  * revision binding before publication. Native compiler behavior is guest-tested. */
+#define TEST_EXTERNAL_PROCESS_INFO 1
 #define FSRead model_FSRead
 #define FSClose model_FSClose
 #define SetFPos model_SetFPos

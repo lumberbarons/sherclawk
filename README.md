@@ -6,8 +6,13 @@ HTTPS, a Finder icon based on `../sherclawk.png`, and that character in the main
 window. [PLAN.md](PLAN.md) tracks the full coding-harness roadmap.
 
 The installed tools are `get_environment`, `list_files`, `read_text`,
-`search_text`, create-only `write_text`, create-only `create_folder`, template-backed `create_project`, revision-guarded `edit_text`, `build_project`,
-`read_build_log`, and `run_application`. Builds self-execute through asynchronous ToolServer commands when the queue is unowned.
+`search_text`, create-only `write_text`, create-only `create_folder`,
+template-backed `create_project`, revision-guarded `edit_text`,
+`build_project`, `read_build_log`, `run_application`, and the read-only
+inspection set `get_file_info`, `resolve_alias`, `list_processes`,
+`list_fonts`, `measure_text`, `list_resources` and `read_resource`
+(see "Inspecting resources and identity"). Builds self-execute through
+asynchronous ToolServer commands when the queue is unowned.
 The MacRelix worker remains an exclusive-owner fallback. Authorized artifacts launch through the native Process Manager. The [native PowerPC template](templates/ppc-toolbox/README.md)
 captures a guest-verified MrC/PPCLink/Rez recipe and installed versions;
 the [MacRelix job worker](worker/README.md) now implements complete-file
@@ -377,6 +382,52 @@ Inspect the journal and both paths before recovery. FlushVol does not establish
 power-loss durability over AFP. This fixed small template executes synchronously;
 Stop prevents the next tool call and does not undo a completed project.
 
+## Inspecting resources and identity
+
+Seven read-only tools report what the workspace and the running system
+actually contain; none of them writes to a volume, changes Finder state or
+authorizes execution. Results use the same bounds and pagination conventions
+as the other tools.
+
+`get_file_info(path)` reports kind, four-character type and creator, the raw
+Finder flags plus named alias/custom-icon/bundle/invisible/locked booleans,
+the label, both fork sizes and created/modified catalog dates formatted as
+`YYYY-MM-DD HH:MM:SS` (converted locally, not through International
+Utilities). Folders omit the file-only fields.
+
+`resolve_alias(path)` reads an HFS alias file's record, resolves it, and
+reports the target's leaf name, kind, existence and whether the record was
+updated. A bounded catalog walk (512 entries, depth 8) finds the target's
+parent so an inside-workspace `relative_path` can be returned;
+`relative_path` is null for outside targets, and `outside_workspace` is
+true, false or null when the walk was incomplete. Non-alias files are
+refused with `NOT_ALIAS`.
+
+`list_processes(cursor, limit)` pages the native Process Manager with each
+name, `high:low` ProcessSerialNumber and front/self flags. `list_fonts`
+pages installed families as family id and name from the Mac OS 9 Font
+Manager. `measure_text(text, font or font_id, size, style)` measures one
+printable MacRoman line (controls refused) while saving and restoring the
+current port's font state; bold, italic, underline, outline, shadow,
+condense and extend combine comma-separated. It returns the pixel width and
+ascent/descent/leading/line height for classic layout checks. A name and an
+id may be supplied together when they resolve to the same family; an empty
+name string counts as absent.
+
+`list_resources(path, cursor, limit)` pages a file's resource map with type,
+signed id, byte size and name; the cursor is a returned `type:resource`
+pair. `read_resource(path, type, id, start_byte, max_bytes)` reads at most
+256 bytes per call: `TEXT` and `STR ` decode to MacRoman text (a string's
+length prefix is excluded from the page cursor), `vers` decodes to version,
+stage, prerelease, region and short/long strings (resources over 256 bytes
+are refused), and every other type returns uppercase hex. Handles open with
+automatic loading disabled: sizes come from the map and bytes arrive through
+`ReadPartialResource`, so a resource fork is never loaded whole. Aliases,
+folders, files without resource forks and types that are not four printable
+characters are refused. A file that changes during a listing or read is
+reported as `CHANGED` instead of returning mixed evidence; cursors are
+observational catalog positions.
+
 ## Editing text
 
 `edit_text(path, expected_revision, old_text, new_text)` replaces exactly one
@@ -506,6 +557,7 @@ model history is not silently dropped.
 | `main.c`, `hello.r` | Toolbox UI, character artwork, live history indicator, session journal, cooperative scheduling |
 | `agent.c`, `agent.h` | Typed provider history, tool-call/result pairing, bounds and Stop |
 | `tools.c`, `tools.h` | Native environment/catalog/text executors, journaled creates and guarded exact edits |
+| `inspect.c`, `inspect.h` | Read-only resource, Finder identity, alias, process and text-metric executors |
 | `json.c`, `text.c`, `network.c`, `chat.c` | Copied protocol/transport/display foundation and baseline checks |
 | `tools/embed-project-template.py` | Embed the verified C/Rez source and protocol-2 descriptor under ignored `build/` |
 | `tools/project-check.c` | Native create_project publication, exact bytes, metadata and collision diagnostic |
@@ -517,7 +569,8 @@ model history is not silently dropped.
 | `tools/write-check.c` | Native create/read/collision, MacRoman/CR/TEXT and size-boundary diagnostic |
 | `tools/search-check.c` | Native recursive search, continuation, MacRoman and discovery/read/edit/read diagnostic |
 | `tools/edit-check.c` | Native guarded replacement, backup, pagination, busy-file, encoding and boundary diagnostic |
-| `tests/toolbox/`, `tests/test_tools.c` | File Manager model for mutation journal barriers, I/O faults and rename races |
+| `tools/inspect-check.c` | Native read-only inspection acceptance with retained alias/resource fixtures |
+| `tests/toolbox/`, `tests/test_tools.c` | File Manager model for mutation journal barriers, I/O faults and rename races; read-only model for resource maps, aliases, processes, fonts and text metrics |
 | `tools/scroll-check.c` | Copied actual Toolbox scrollbar diagnostic |
 | `tools/guest-input.py` | Non-overlapping QMP typing and 250ms control clicks through the UTM helper |
 | `PLAN.md` | Artwork requirements and remaining coding-harness milestones |
@@ -565,6 +618,9 @@ ssh beardmore 'cat /srv/retro68/SherclawkSearchCheck.log'
 APP=SherclawkEditCheck sherclawk/tools/deploy-to-share.sh
 # Launch SherclawkEditCheck in OS 9; preserves its unique fixture and backups.
 ssh beardmore 'cat /srv/retro68/SherclawkEditCheck.log'
+APP=SherclawkInspectCheck sherclawk/tools/deploy-to-share.sh
+# Launch SherclawkInspectCheck in OS 9; retains alias/resource fixtures.
+ssh beardmore 'cat /srv/retro68/SherclawkInspectCheck.log'
 ```
 
 The cursor matcher can mistake highlights in the lobster artwork for the arrow.
@@ -783,3 +839,25 @@ abandoned, late status-0 reply drained, no subsequent command/result/authority/
 success/launch, and lock released after draining. Its retained ID is
 `build-00013dab-0001`; `native-unknown`, `native-drained` and the claim remain.
 This demonstrates observation stopping and safe draining, not cancellation.
+
+
+Read-only inspection verification, October 6, 2026: the PowerPC main app,
+`SherclawkProbe` and `SherclawkInspectCheck` builds passed along with the
+ASan/UBSan host suite, whose File Manager model now also covers resource
+maps, alias records, Process Manager paging, Font Manager families and
+QuickDraw text metrics. The guest diagnostic reported `RESULT failures=0`
+(49 PASS, 0 FAIL) in OS 9.2.2 against the retained
+`Retro68:Sherclawk Inspect 0003933d:` fixtures: Finder identity, flags and
+deterministic dates; alias resolution to sibling and folder targets; Process
+Manager paging including self/front; 24 installed families including Chicago;
+pixel metrics and style bits; resource-map paging; `STR `, `TEXT`, `vers`
+and hex reads including a 300-byte two-page continuation; plus missing-file,
+non-alias, no-fork, malformed-type and out-of-range refusals. The live
+`openai/gpt-6-luna` guest probe then reported `RESULT failures=0` for a
+six-tool conversation (`get_environment`, `list_files`, `read_text`,
+`get_file_info`, `list_fonts`, `measure_text`) over TLS; the model supplied
+both `font` (empty) and `font_id`, which drove the accept-when-consistent
+rule and the empty-name-as-absent handling. Logs are retained locally under
+ignored `build/inspect-check-verified.log` and `build/probe-verified.log`.
+Resource reads never load a whole fork, and inspection results are evidence,
+never launch authority.

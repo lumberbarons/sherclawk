@@ -2,13 +2,21 @@
 #ifndef TEST_FILES_H
 #define TEST_FILES_H
 #include <stddef.h>
+#ifndef TEST_MACTYPES_MIN
+#define TEST_MACTYPES_MIN
+typedef unsigned char Boolean;
+typedef void *Handle;
+typedef char *Ptr;
+typedef long Size;
+#endif
 typedef unsigned char Str255[256];
 typedef short OSErr;
 typedef struct { short vRefNum; long parID; Str255 name; } FSSpec;
 typedef struct { unsigned long fdType, fdCreator; unsigned short fdFlags; } FInfo;
 typedef union {
     struct { unsigned char *ioNamePtr; short ioVRefNum; long ioDirID; short ioFDirIndex;
-        unsigned char ioFlAttrib; FInfo ioFlFndrInfo; long ioFlLgLen, ioFlRLgLen; unsigned long ioFlMdDat; } hFileInfo;
+        unsigned char ioFlAttrib; FInfo ioFlFndrInfo; long ioFlLgLen, ioFlRLgLen;
+        unsigned long ioFlCrDat, ioFlMdDat, ioFlBkDat; } hFileInfo;
     struct { unsigned char *ioNamePtr; short ioVRefNum; long ioDirID; short ioFDirIndex;
         unsigned char ioFlAttrib; FInfo unused; long ioDrDirID; } dirInfo;
 } CInfoPBRec;

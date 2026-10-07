@@ -81,6 +81,18 @@ void tools_execute(const AgentCall *call, char *out, size_t cap)
         snprintf(out, cap, "{\"status\":\"ok\",\"files\":[{\"path\":\"Sherclawk Fixture.txt\",\"kind\":\"file\"}],\"truncated\":false}");
     else if (!strcmp(call->name, "read_text"))
         snprintf(out, cap, "{\"status\":\"ok\",\"text\":\"The diagnostic codeword is copper-crab.\",\"truncated\":false}");
+    else if (!strcmp(call->name, "get_file_info"))
+        snprintf(out, cap, "{\"status\":\"ok\",\"path\":\"Sherclawk Fixture.txt\",\"kind\":\"file\",\"file_type\":\"TEXT\",\"creator\":\"ttxt\"}");
+    else if (!strcmp(call->name, "list_fonts"))
+        snprintf(out, cap, "{\"status\":\"ok\",\"fonts\":[{\"id\":16383,\"name\":\"Chicago\"},{\"id\":3,\"name\":\"Geneva\"}],\"truncated\":false,\"next_cursor\":null}");
+    else if (!strcmp(call->name, "measure_text"))
+        snprintf(out, cap, "{\"status\":\"ok\",\"font\":\"Chicago\",\"font_id\":16383,\"size\":12,\"width\":63,\"line_height\":14}");
+    else if (!strcmp(call->name, "list_processes"))
+        snprintf(out, cap, "{\"status\":\"ok\",\"processes\":[{\"name\":\"SherclawkProbe\",\"psn\":\"00000000:00000001\",\"front\":true,\"self\":true}],\"truncated\":false,\"next_cursor\":null}");
+    else if (!strcmp(call->name, "list_resources"))
+        snprintf(out, cap, "{\"status\":\"ok\",\"resources\":[{\"type\":\"SIZE\",\"id\":-1,\"bytes\":16,\"name\":\"\"}],\"truncated\":false,\"next_cursor\":null}");
+    else if (!strcmp(call->name, "read_resource"))
+        snprintf(out, cap, "{\"status\":\"ok\",\"type\":\"SIZE\",\"id\":-1,\"format\":\"hex\",\"hex\":\"0000001000000010\",\"truncated\":false}");
     else snprintf(out, cap, "{\"status\":\"error\",\"code\":\"UNKNOWN_TOOL\"}");
 }
 #else
@@ -118,6 +130,30 @@ static int native_checks(void)
     strcpy(call.name, "not_installed"); strcpy(call.arguments, "{}");
     tools_execute(&call, tool_result, sizeof(tool_result));
     if (!strstr(tool_result, "UNKNOWN_TOOL")) failures++;
+    strcpy(call.name, "get_file_info"); strcpy(call.arguments, "{\"path\":\"Sherclawk Fixture.txt\"}");
+    tools_execute(&call, tool_result, sizeof(tool_result));
+    fprintf(logfile, "NATIVE file_info %s\n", tool_result);
+    if (!strstr(tool_result, "\"file_type\":\"TEXT\"") || !strstr(tool_result, "\"status\":\"ok\"")) failures++;
+    strcpy(call.name, "list_fonts"); strcpy(call.arguments, "{\"limit\":24}");
+    tools_execute(&call, tool_result, sizeof(tool_result));
+    fprintf(logfile, "NATIVE fonts %s\n", tool_result);
+    if (!strstr(tool_result, "\"fonts\":[{") || strstr(tool_result, "\"status\":\"error\"")) failures++;
+    strcpy(call.name, "measure_text"); strcpy(call.arguments, "{\"text\":\"Sherclawk\",\"font\":\"Chicago\",\"size\":12}");
+    tools_execute(&call, tool_result, sizeof(tool_result));
+    fprintf(logfile, "NATIVE measure %s\n", tool_result);
+    if (!strstr(tool_result, "\"width\":") || strstr(tool_result, "\"status\":\"error\"")) failures++;
+    strcpy(call.name, "list_processes"); strcpy(call.arguments, "{}");
+    tools_execute(&call, tool_result, sizeof(tool_result));
+    fprintf(logfile, "NATIVE processes %s\n", tool_result);
+    if (!strstr(tool_result, "\"self\":true")) failures++;
+    strcpy(call.name, "list_resources"); strcpy(call.arguments, "{\"path\":\"Sherclawk\",\"limit\":4}");
+    tools_execute(&call, tool_result, sizeof(tool_result));
+    fprintf(logfile, "NATIVE resources %s\n", tool_result);
+    if (!strstr(tool_result, "\"resources\":[{") || strstr(tool_result, "\"status\":\"error\"")) failures++;
+    strcpy(call.name, "read_resource"); strcpy(call.arguments, "{\"path\":\"Sherclawk\",\"type\":\"SIZE\",\"id\":-1}");
+    tools_execute(&call, tool_result, sizeof(tool_result));
+    fprintf(logfile, "NATIVE resource %s\n", tool_result);
+    if (!strstr(tool_result, "\"format\":\"hex\"") || strstr(tool_result, "\"status\":\"error\"")) failures++;
     fprintf(logfile, "NATIVE checks failures=%d\n", failures); fflush(logfile);
     return failures;
 }
@@ -132,7 +168,9 @@ static int run_agent(void)
     }
     if (agent_begin(&agent, "Use get_environment, then list_files for the workspace root (empty root). "
         "Then use read_text on Sherclawk Fixture.txt. If the listing is paginated you may read that exact path directly. "
-        "Report the diagnostic codeword from the file. You must use all three tools.", error, sizeof(error))) return 1;
+        "Report the diagnostic codeword from the file. Then call get_file_info on that same file and state its Finder type. "
+        "Then call list_fonts with limit 24, and call measure_text with the first font id from that list, text \"Sherclawk\" and size 12, and state its width. "
+        "You must use all six tools.", error, sizeof(error))) return 1;
     while (agent.active && rounds++ < 8) {
         length = agent_request(&agent, SHERCLAWK_MODEL, body, sizeof(body));
         if (length < 0) return 1;
@@ -147,6 +185,9 @@ static int run_agent(void)
             if (!strcmp(call->name, "get_environment")) seen |= 1;
             if (!strcmp(call->name, "list_files")) seen |= 2;
             if (!strcmp(call->name, "read_text")) seen |= 4;
+            if (!strcmp(call->name, "get_file_info")) seen |= 8;
+            if (!strcmp(call->name, "list_fonts")) seen |= 16;
+            if (!strcmp(call->name, "measure_text")) seen |= 32;
             tools_execute(call, tool_result, sizeof(tool_result));
             fprintf(logfile, "TOOL %s\n", tool_result);
             if (agent_tool_result(&agent, tool_result, error, sizeof(error))) return 1;
@@ -154,8 +195,8 @@ static int run_agent(void)
         fflush(logfile);
     }
     fprintf(logfile, "FINAL %s\n", agent.text);
-    if (agent.active || seen != 7 || !strstr(agent.text, "copper-crab")) return 1;
-    fprintf(logfile, "PASS real three-tool conversation and model follow-up\n");
+    if (agent.active || seen != 63 || !strstr(agent.text, "copper-crab")) return 1;
+    fprintf(logfile, "PASS real six-tool conversation and model follow-up\n");
     return 0;
 }
 int main(void)

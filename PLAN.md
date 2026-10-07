@@ -108,6 +108,12 @@ This establishes flexibility before adding more application-specific fixtures.
 5. Counter application acceptance task, compiler-error repair, then a file
    transformer and drawing application. Validate logic automatically and
    appearance manually. Add stronger recovery and context compaction later.
+6. Read-only platform inspection (idea 004 step 1) is implemented and
+   guest-verified: Finder identity and deterministic dates, alias targets,
+   Process Manager paging, Font Manager families and pixel metrics, and
+   bounded resource-map and byte reads that never load a whole resource.
+   Journaled catalog mutations, process-quit integration and the remaining
+   idea-004 tools stay future work.
 
 ## Boundaries and verification
 

@@ -5,10 +5,18 @@
 #include "json.h"
 #include "build/project-template.h"
 #include <Files.h>
+#include <Resources.h>
+#include <Aliases.h>
+#include <Processes.h>
+#include <Fonts.h>
+#include <Quickdraw.h>
+#include <QuickdrawText.h>
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-static struct File { int used, dir; long parent, id; char name[32], bytes[20000]; long size, resource; FInfo info; } files[64];
+static struct File { int used, dir; long parent, id; char name[32], bytes[20000]; long size, resource; FInfo info;
+    unsigned long crdat, mddat; } files[64];
 static long positions[64];
 static int dir_error, dir_leftover, dir_race;
 static int short_write, bad_read, bad_close, rename_race, rename_error, published, flush_error;
@@ -28,7 +36,8 @@ static int add(long parent, const char *name, int dir)
 {
     int i; for(i=0;i<64;i++) if(!files[i].used) {
         memset(&files[i],0,sizeof(files[i])); files[i].used=1; files[i].parent=parent;
-        files[i].id=i+10; files[i].dir=dir; strcpy(files[i].name,name); return i;
+        files[i].id=i+10; files[i].dir=dir; strcpy(files[i].name,name);
+        files[i].crdat=1111; files[i].mddat=1234; return i;
     }
     assert(0); return -1;
 }
@@ -57,7 +66,8 @@ OSErr PBGetCatInfoSync(CInfoPBRec *pb)
     if(i<0) return fnfErr;
     pb->hFileInfo.ioFlAttrib=files[i].dir ? 16 : 0;
     pb->hFileInfo.ioFlFndrInfo=files[i].info;
-    pb->hFileInfo.ioFlRLgLen=files[i].resource; pb->hFileInfo.ioFlMdDat=1234;
+    pb->hFileInfo.ioFlRLgLen=files[i].resource; pb->hFileInfo.ioFlMdDat=files[i].mddat;
+    pb->hFileInfo.ioFlCrDat=files[i].crdat; pb->hFileInfo.ioFlBkDat=files[i].mddat;
     if(files[i].dir) pb->dirInfo.ioDrDirID=files[i].id;
     else { pb->hFileInfo.ioFlLgLen=files[i].size;pb->hFileInfo.ioDirID=files[i].id; }
     return 0;
@@ -112,6 +122,216 @@ OSErr FSpRename(const FSSpec *s, const unsigned char *name)
     if((editing && renames==2 && swapped_publish) || (!strcmp(call.name,"create_project") && swapped_publish)) files[i].id++;
     return 0;
 }
+/* ---------- Read-only inspection model: resources, aliases, processes,
+ * fonts and QuickDraw text state. A test alias record is one byte: index+1
+ * selects a file and 0xFE means a target outside the workspace volume. ----- */
+struct Resource { int used, file; ResType type; short id; unsigned char rname[256]; long size; unsigned char data[1024]; };
+static struct Resource resources[16];
+static short res_ref, res_error;
+static struct TestProcess { unsigned long hi, lo; const char *name, *app; } processes[4];
+static int process_count, process_self, process_front;
+static struct TestFont { FMFontFamily id; const char *name; } test_fonts[8];
+static int test_font_count;
+static GrafPort test_port;
+static int add_resource(int file, ResType type, short id, const char *name, const void *data, long size)
+{
+    int r; for(r=0;r<16;r++) if(!resources[r].used) {
+        memset(&resources[r],0,sizeof(resources[r]));
+        resources[r].used=1; resources[r].file=file; resources[r].type=type; resources[r].id=id;
+        if(name){resources[r].rname[0]=(unsigned char)strlen(name);memcpy(resources[r].rname+1,name,resources[r].rname[0]);}
+        resources[r].size=size; assert(size<=(long)sizeof(resources[r].data));
+        if(size)memcpy(resources[r].data,data,(size_t)size);
+        return r;
+    }
+    assert(0); return -1;
+}
+static int res_file(void) { return res_ref>=100 ? res_ref-100 : -1; }
+static int res_index(int file, ResType type, short which, int by_id)
+{
+    int r, n=0;
+    for(r=0;r<16;r++) if(resources[r].used && resources[r].file==file && resources[r].type==type) {
+        if(by_id){ if(resources[r].id==which) return r; }
+        else if(++n==which) return r;
+    }
+    return -1;
+}
+short FSpOpenResFile(const FSSpec *s, signed char permission)
+{
+    int i=find(s->parID,s->name), r, count=0;
+    (void)permission; res_error=0;
+    if(i<0){res_error=fnfErr;return fnfErr;}
+    for(r=0;r<16;r++)if(resources[r].used && resources[r].file==i)count++;
+    if(!count){res_error=resNotFound;return resNotFound;}
+    return (short)(100+i);
+}
+short CurResFile(void) { return res_ref; }
+void UseResFile(short ref) { res_ref=ref; }
+void CloseResFile(short ref) { (void)ref; res_error=0; }
+void SetResLoad(Boolean load) { (void)load; }
+short ResError(void) { short e=res_error; res_error=0; return e; }
+short Count1Types(void)
+{
+    int f=res_file(), r, k; short n=0;
+    if(f<0)return 0; res_error=0;
+    for(r=0;r<16;r++) if(resources[r].used && resources[r].file==f) {
+        for(k=0;k<r;k++) if(resources[k].used && resources[k].file==f && resources[k].type==resources[r].type) break;
+        if(k==r)n++;
+    }
+    return n;
+}
+void Get1IndType(ResType *type, short index)
+{
+    int f=res_file(), r, k; short n=0;
+    *type=0; res_error=0;
+    if(f<0){res_error=resNotFound;return;}
+    for(r=0;r<16;r++) if(resources[r].used && resources[r].file==f) {
+        for(k=0;k<r;k++) if(resources[k].used && resources[k].file==f && resources[k].type==resources[r].type) break;
+        if(k!=r)continue;
+        if(++n==index){*type=resources[r].type;return;}
+    }
+    res_error=resNotFound;
+}
+short Count1Resources(ResType type)
+{
+    int f=res_file(), r; short n=0;
+    if(f<0)return 0; res_error=0;
+    for(r=0;r<16;r++)if(resources[r].used && resources[r].file==f && resources[r].type==type)n++;
+    return n;
+}
+Handle Get1IndResource(ResType type, short index)
+{
+    int f=res_file(), r; res_error=0;
+    r=res_index(f,type,index,0);
+    if(r<0){res_error=resNotFound;return (Handle)0;}
+    return (Handle)&resources[r];
+}
+Handle Get1Resource(ResType type, short id)
+{
+    int f=res_file(), r; res_error=0;
+    r=res_index(f,type,id,1);
+    if(r<0){res_error=resNotFound;return (Handle)0;}
+    return (Handle)&resources[r];
+}
+void GetResInfo(Handle h, short *id, ResType *type, Str255 name)
+{
+    struct Resource *r=(struct Resource *)h;
+    res_error=0;
+    if(!r){res_error=paramErr;return;}
+    *id=r->id; *type=r->type;
+    memcpy(name,r->rname,(size_t)r->rname[0]+1);
+}
+long GetResourceSizeOnDisk(Handle h)
+{
+    struct Resource *r=(struct Resource *)h;
+    res_error=0; return r ? r->size : -1;
+}
+void ReadPartialResource(Handle h, long offset, void *buffer, long count)
+{
+    struct Resource *r=(struct Resource *)h;
+    res_error=0;
+    if(!r || offset<0 || count<0 || offset+count>r->size){res_error=paramErr;return;}
+    memcpy(buffer,r->data+offset,(size_t)count);
+}
+void ReleaseResource(Handle h) { (void)h; res_error=0; }
+OSErr PtrToHand(const void *source, Handle *destination, Size count)
+{
+    unsigned char *block=malloc((size_t)count+1);
+    if(!block)return -108;
+    memcpy(block,source,(size_t)count); *destination=block; return 0;
+}
+void DisposeHandle(Handle value) { free(value); }
+OSErr ResolveAlias(const FSSpec *from, AliasHandle alias, FSSpec *target, Boolean *changed)
+{
+    unsigned char *record=(unsigned char *)alias;
+    (void)from; *changed=0;
+    if(!record)return paramErr;
+    if(record[0]==0xFE){target->vRefNum=2;target->parID=99;target->name[0]=8;memcpy(target->name+1,"External",8);return 0;}
+    if(record[0]==0 || record[0]>64)return -1;
+    { int i=record[0]-1; if(!files[i].used)return -1;
+      target->vRefNum=1; target->parID=files[i].parent;
+      target->name[0]=(unsigned char)strlen(files[i].name);
+      memcpy(target->name+1,files[i].name,target->name[0]); }
+    return 0;
+}
+OSErr GetNextProcess(ProcessSerialNumber *psn)
+{
+    int i;
+    if(!psn->highLongOfPSN && !psn->lowLongOfPSN) {
+        if(process_count<1)return procNotFound;
+        psn->highLongOfPSN=processes[0].hi; psn->lowLongOfPSN=processes[0].lo; return 0;
+    }
+    for(i=0;i<process_count;i++)if(processes[i].hi==psn->highLongOfPSN && processes[i].lo==psn->lowLongOfPSN)break;
+    if(i>=process_count-1)return procNotFound;
+    psn->highLongOfPSN=processes[i+1].hi; psn->lowLongOfPSN=processes[i+1].lo; return 0;
+}
+OSErr GetFrontProcess(ProcessSerialNumber *psn)
+{
+    if(process_count<1)return procNotFound;
+    psn->highLongOfPSN=processes[process_front].hi; psn->lowLongOfPSN=processes[process_front].lo; return 0;
+}
+OSErr GetCurrentProcess(ProcessSerialNumber *psn)
+{
+    if(process_count<1)return procNotFound;
+    psn->highLongOfPSN=processes[process_self].hi; psn->lowLongOfPSN=processes[process_self].lo; return 0;
+}
+#ifndef TEST_EXTERNAL_PROCESS_INFO
+OSErr GetProcessInformation(const ProcessSerialNumber *psn, ProcessInfoRec *info)
+{
+    int i;
+    for(i=0;i<process_count;i++)if(processes[i].hi==psn->highLongOfPSN && processes[i].lo==psn->lowLongOfPSN)break;
+    if(i>=process_count)return procNotFound;
+    info->processName[0]=(unsigned char)strlen(processes[i].name);
+    memcpy(info->processName+1,processes[i].name,info->processName[0]);
+    if(info->processAppSpec) {
+        if(processes[i].app){
+            info->processAppSpec->name[0]=(unsigned char)strlen(processes[i].app);
+            memcpy(info->processAppSpec->name+1,processes[i].app,info->processAppSpec->name[0]);
+        } else info->processAppSpec->name[0]=0;
+    }
+    return 0;
+}
+#endif
+void GetPort(GrafPtr *port) { *port=&test_port; }
+void TextFont(short font) { test_port.txFont=font; }
+void TextSize(short size) { test_port.txSize=size; }
+void TextFace(StyleParameter face) { test_port.txFace=(Style)face; }
+short TextWidth(const void *text, short first, short count)
+{
+    (void)text;
+    if(count<=first)return 0;
+    return (short)((count-first)*(test_port.txSize/2+1));
+}
+void GetFontInfo(FontInfo *info)
+{
+    info->ascent=(short)(test_port.txSize-3); info->descent=3;
+    info->widMax=test_port.txSize; info->leading=1;
+}
+OSStatus FMCreateFontFamilyIterator(const FMFilter *filter, void *ref, OptionBits options, FMFontFamilyIterator *iterator)
+{ (void)filter;(void)ref;(void)options; memset(iterator,0,sizeof(*iterator)); return 0; }
+OSStatus FMGetNextFontFamily(FMFontFamilyIterator *iterator, FMFontFamily *family)
+{
+    unsigned long i=iterator->reserved[0];
+    if(i>=(unsigned long)test_font_count)return -1;
+    *family=test_fonts[i].id; iterator->reserved[0]++; return 0;
+}
+OSStatus FMDisposeFontFamilyIterator(FMFontFamilyIterator *iterator) { (void)iterator; return 0; }
+OSStatus FMGetFontFamilyName(FMFontFamily family, Str255 name)
+{
+    int i;
+    for(i=0;i<test_font_count;i++)if(test_fonts[i].id==family){
+        name[0]=(unsigned char)strlen(test_fonts[i].name);
+        memcpy(name+1,test_fonts[i].name,name[0]); return 0;
+    }
+    name[0]=0; return -1;
+}
+FMFontFamily FMGetFontFamilyFromName(const unsigned char *name)
+{
+    int i;
+    for(i=0;i<test_font_count;i++)
+        if((unsigned char)strlen(test_fonts[i].name)==name[0] && !memcmp(test_fonts[i].name,name+1,name[0]))
+            return test_fonts[i].id;
+    return -1;
+}
 long FreeMem(void) { return 100000; }
 short Gestalt(long selector, long *v) { (void)selector;*v=0x922;return 0; }
 unsigned long TickCount(void) { return 42; }
@@ -143,6 +363,7 @@ static int journal(void *ctx, const char *event, const char *json)
 static void reset(void)
 {
     memset(files,0,sizeof(files)); add(1,"Retro68",1);
+    memset(resources,0,sizeof(resources)); res_ref=0; res_error=0;
     dir_error=dir_leftover=dir_race=0;
     short_write=bad_read=bad_close=rename_race=rename_error=published=flush_error=0;
     journals=fail_journal=creates=0;longest_temporary=0;
@@ -353,6 +574,182 @@ static void project_checks(void)
     reset();strcpy(call.name,"create_project");strcpy(call.arguments,"{\"path\":\"Project\"}");tools_execute(&call,result,sizeof(result));assert(strstr(result,"JOURNAL") && !creates);
     puts("PASS create_project: exact template, CR/TEXT, collisions, path/alias refusal, stage faults, journal barriers and uncertain publication");
 }
+/* Read-only inspection tools share this File Manager model: Finder identity,
+ * formatted dates, process paging, font iteration and metrics, alias targets,
+ * and bounded resource map/byte reads including 'STR ' and 'vers' decoding. */
+static void inspect_checks(void)
+{
+    int i, dir, file, alias;
+    char cursor[64];
+    reset(); i=add(10,"hello.c",0);
+    files[i].info.fdType='TEXT'; files[i].info.fdCreator='ttxt';
+    files[i].info.fdFlags=0x2400; files[i].crdat=0; files[i].mddat=2082844800UL;
+    strcpy(call.name,"get_file_info"); strcpy(call.arguments,"{\"path\":\"hello.c\"}");
+    tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"kind\":\"file\"") && strstr(result,"\"file_type\":\"TEXT\""));
+    assert(strstr(result,"\"creator\":\"ttxt\"") && strstr(result,"\"custom_icon\":true"));
+    assert(strstr(result,"\"bundle\":true") && strstr(result,"\"invisible\":false") && strstr(result,"\"locked\":false"));
+    assert(strstr(result,"\"created\":\"1904-01-01 00:00:00\"") && strstr(result,"\"modified\":\"1970-01-01 00:00:00\""));
+    assert(strstr(result,"\"alias\":false") && strstr(result,"\"label\":0"));
+    dir=add(10,"Folder",1); strcpy(call.arguments,"{\"path\":\"Folder\"}");
+    tools_execute(&call,result,sizeof(result)); assert(strstr(result,"\"kind\":\"folder\""));
+    strcpy(call.arguments,"{\"path\":\"missing.c\"}");
+    tools_execute(&call,result,sizeof(result)); assert(strstr(result,"\"code\":\"FILE\""));
+    strcpy(call.arguments,"{\"path\":\"hello.c\",\"path\":\"other\"}");
+    tools_execute(&call,result,sizeof(result)); assert(strstr(result,"ARGUMENTS"));
+
+    reset();
+    process_count=3; process_self=1; process_front=0;
+    processes[0].hi=0;processes[0].lo=1;processes[0].name="Finder";processes[0].app=NULL;
+    processes[1].hi=0;processes[1].lo=2;processes[1].name="Sherclawk";processes[1].app=NULL;
+    processes[2].hi=0;processes[2].lo=3;processes[2].name="Worker";processes[2].app="Worker01";
+    strcpy(call.name,"list_processes");strcpy(call.arguments,"{\"limit\":2}");
+    tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"name\":\"Finder\"")&&strstr(result,"\"front\":true"));
+    assert(strstr(result,"\"name\":\"Sherclawk\"")&&strstr(result,"\"self\":true"));
+    assert(strstr(result,"\"truncated\":true")&&strstr(result,"\"next_cursor\":\"00000000:00000002\""));
+    strcpy(call.arguments,"{\"limit\":2,\"cursor\":\"00000000:00000002\"}");
+    tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"name\":\"Worker\"")&&strstr(result,"\"app\":\"Worker01\""));
+    assert(strstr(result,"\"truncated\":false")&&strstr(result,"\"next_cursor\":null"));
+    strcpy(call.arguments,"{\"cursor\":\"bogus\"}");
+    tools_execute(&call,result,sizeof(result));assert(strstr(result,"ARGUMENTS"));
+    process_count=0;
+
+    reset();
+    test_font_count=3;
+    test_fonts[0].id=0;test_fonts[0].name="Chicago";
+    test_fonts[1].id=3;test_fonts[1].name="Geneva";
+    test_fonts[2].id=4;test_fonts[2].name="Monaco";
+    test_port.txFont=0;test_port.txSize=12;test_port.txFace=0;
+    strcpy(call.name,"list_fonts");strcpy(call.arguments,"{\"limit\":2}");
+    tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"id\":0")&&strstr(result,"\"name\":\"Chicago\"")&&strstr(result,"\"id\":3"));
+    assert(strstr(result,"\"truncated\":true")&&strstr(result,"\"next_cursor\":2"));
+    strcpy(call.arguments,"{\"limit\":2,\"cursor\":2}");
+    tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"id\":4")&&strstr(result,"\"name\":\"Monaco\"")&&strstr(result,"\"truncated\":false"));
+    strcpy(call.name,"measure_text");
+    strcpy(call.arguments,"{\"text\":\"ABC\",\"font_id\":0,\"size\":12,\"style\":\"plain\"}");
+    tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"font\":\"Chicago\"")&&strstr(result,"\"width\":21"));
+    assert(strstr(result,"\"ascent\":9")&&strstr(result,"\"descent\":3")&&strstr(result,"\"leading\":1"));
+    assert(strstr(result,"\"line_height\":13")&&strstr(result,"\"style_bits\":0"));
+    strcpy(call.arguments,"{\"text\":\"ABC\",\"font\":\"Geneva\",\"style\":\"bold, italic\"}");
+    tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"font_id\":3")&&strstr(result,"\"style\":\"bold,italic\"")&&strstr(result,"\"style_bits\":3"));
+    strcpy(call.arguments,"{\"text\":\"ABC\",\"font\":\"Nope\"}");
+    tools_execute(&call,result,sizeof(result));assert(strstr(result,"NOT_FOUND"));
+    strcpy(call.arguments,"{\"text\":\"ABC\"}");
+    tools_execute(&call,result,sizeof(result));assert(strstr(result,"ARGUMENTS"));
+    strcpy(call.arguments,"{\"text\":\"ABC\",\"font\":\"Chicago\",\"font_id\":0}");
+    tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"font_id\":0") && !strstr(result,"\"status\":\"error\""));
+    strcpy(call.arguments,"{\"text\":\"ABC\",\"font\":\"\",\"font_id\":0}");
+    tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"font_id\":0") && !strstr(result,"\"status\":\"error\""));
+    strcpy(call.arguments,"{\"text\":\"ABC\",\"font\":\"Chicago\",\"font_id\":3}");
+    tools_execute(&call,result,sizeof(result));assert(strstr(result,"ARGUMENTS"));
+    strcpy(call.arguments,"{\"text\":\"ABC\",\"font_id\":0,\"style\":\"loud\"}");
+    tools_execute(&call,result,sizeof(result));assert(strstr(result,"ARGUMENTS"));
+    strcpy(call.arguments,"{\"text\":\"line\\nbreak\",\"font_id\":0}");
+    tools_execute(&call,result,sizeof(result));assert(strstr(result,"NOT_TEXT"));
+    test_font_count=0;
+
+    reset();
+    file=add(10,"Target.c",0); alias=add(10,"Alias to Target",0);
+    files[alias].info.fdType='alis';files[alias].info.fdFlags=0x8000;
+    files[alias].bytes[0]=(char)(file+1);files[alias].size=1;
+    strcpy(call.name,"resolve_alias");strcpy(call.arguments,"{\"path\":\"Alias to Target\"}");
+    tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"was_changed\":false")&&strstr(result,"\"target_name\":\"Target.c\""));
+    assert(strstr(result,"\"target_kind\":\"file\"")&&strstr(result,"\"target_exists\":true"));
+    assert(strstr(result,"\"relative_path\":\"Target.c\"")&&strstr(result,"\"outside_workspace\":false"));
+    dir=add(10,"Sub",1); file=add(files[dir].id,"Deep.c",0); alias=add(10,"Deep Alias",0);
+    files[alias].info.fdType='alis';files[alias].info.fdFlags=0x8000;
+    files[alias].bytes[0]=(char)(file+1);files[alias].size=1;
+    strcpy(call.arguments,"{\"path\":\"Deep Alias\"}");
+    tools_execute(&call,result,sizeof(result));assert(strstr(result,"\"relative_path\":\"Sub:Deep.c\""));
+    alias=add(10,"External Alias",0);files[alias].info.fdType='alis';files[alias].info.fdFlags=0x8000;
+    files[alias].bytes[0]=(char)0xFE;files[alias].size=1;
+    strcpy(call.arguments,"{\"path\":\"External Alias\"}");
+    tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"target_name\":\"External\"")&&strstr(result,"\"relative_path\":null"));
+    assert(strstr(result,"\"outside_workspace\":true"));
+    strcpy(call.arguments,"{\"path\":\"Target.c\"}");
+    tools_execute(&call,result,sizeof(result));assert(strstr(result,"NOT_ALIAS"));
+    strcpy(call.arguments,"{\"path\":\"Alias to Target\",\"cursor\":\"x\"}");
+    tools_execute(&call,result,sizeof(result));assert(strstr(result,"ARGUMENTS"));
+
+    reset();
+    file=add(10,"Res.bin",0); files[file].info.fdType='TEST'; files[file].resource=400;
+    add(10,"NoFork.c",0);
+    { const unsigned char str_data[]={5,'H','e','l','l','o'};
+      const unsigned char text_data[]="line one\rline two";
+      const unsigned char test_data[]={1,0,127,255};
+      const unsigned char vers_data[]={0x01,0x00,0x80,0x00,0x00,0x00,10,'1','.','0','.','2',' ','t','e','s','t',
+          16,'b','u','i','l','t',' ','f','o','r',' ','c','h','e','c','k','s'};
+      unsigned char blob[300]; int k; for(k=0;k<300;k++)blob[k]=(unsigned char)(k*7+3);
+      add_resource(file,'STR ',128,"greeting",str_data,(long)sizeof(str_data));
+      add_resource(file,'TEXT',129,"",text_data,(long)sizeof(text_data)-1);
+      add_resource(file,'TEST',-2,"",test_data,(long)sizeof(test_data));
+      add_resource(file,'BLOB',300,"long blob",blob,300);
+      add_resource(file,'vers',1,"",vers_data,(long)sizeof(vers_data));
+    }
+    strcpy(call.name,"list_resources");strcpy(call.arguments,"{\"path\":\"Res.bin\",\"limit\":16}");
+    tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"type\":\"STR \"")&&strstr(result,"\"type\":\"TEXT\"")&&strstr(result,"\"type\":\"vers\""));
+    assert(strstr(result,"\"id\":128")&&strstr(result,"\"id\":-2")&&strstr(result,"\"id\":300"));
+    assert(strstr(result,"\"name\":\"greeting\"")&&strstr(result,"\"bytes\":6"));
+    assert(strstr(result,"\"types\":5")&&strstr(result,"\"truncated\":false")&&strstr(result,"\"next_cursor\":null"));
+    strcpy(call.arguments,"{\"path\":\"Res.bin\",\"limit\":1}");
+    { int pages=0,total=0;
+      do { JsonToken tokens[128];
+          tools_execute(&call,result,sizeof(result));
+          assert(!strstr(result,"\"status\":\"error\""));
+          total++;
+          if(strstr(result,"\"truncated\":false"))break;
+          assert(json_parse(result,strlen(result),tokens,128)>0);
+          assert(json_string(result,tokens,json_member(result,tokens,0,"next_cursor"),cursor,sizeof(cursor))>0);
+          snprintf(call.arguments,sizeof(call.arguments),"{\"path\":\"Res.bin\",\"limit\":1,\"cursor\":\"%s\"}",cursor);
+          assert(++pages<8);
+      } while(1);
+      assert(total==5);
+    }
+    strcpy(call.name,"read_resource");
+    strcpy(call.arguments,"{\"path\":\"Res.bin\",\"type\":\"STR \",\"id\":128}");
+    tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"format\":\"text\"")&&strstr(result,"\"text\":\"Hello\""));
+    assert(strstr(result,"\"resource_bytes\":6")&&strstr(result,"\"content_bytes\":5")&&strstr(result,"\"truncated\":false"));
+    strcpy(call.arguments,"{\"path\":\"Res.bin\",\"type\":\"TEST\",\"id\":-2}");
+    tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"format\":\"hex\"")&&strstr(result,"\"hex\":\"01007FFF\""));
+    strcpy(call.arguments,"{\"path\":\"Res.bin\",\"type\":\"0x54455354\",\"id\":-2}");
+    tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"format\":\"hex\"")&&strstr(result,"\"type\":\"TEST\""));
+    strcpy(call.arguments,"{\"path\":\"Res.bin\",\"type\":\"TEXT\",\"id\":129}");
+    tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"format\":\"text\"")&&strstr(result,"line one")&&strstr(result,"line two"));
+    strcpy(call.arguments,"{\"path\":\"Res.bin\",\"type\":\"BLOB\",\"id\":300,\"start_byte\":0,\"max_bytes\":256}");
+    tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"truncated\":true")&&strstr(result,"\"next_byte\":256"));
+    strcpy(call.arguments,"{\"path\":\"Res.bin\",\"type\":\"BLOB\",\"id\":300,\"start_byte\":256,\"max_bytes\":256}");
+    tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"truncated\":false")&&strstr(result,"\"next_byte\":300"));
+    strcpy(call.arguments,"{\"path\":\"Res.bin\",\"type\":\"vers\",\"id\":1}");
+    tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"format\":\"vers\"")&&strstr(result,"\"version\":\"1.0\"")&&strstr(result,"\"stage\":\"release\""));
+    assert(strstr(result,"\"short\":\"1.0.2 test\"")&&strstr(result,"\"long\":\"built for checks\""));
+    strcpy(call.arguments,"{\"path\":\"Res.bin\",\"type\":\"STR \",\"id\":999}");
+    tools_execute(&call,result,sizeof(result));assert(strstr(result,"NOT_FOUND"));
+    strcpy(call.arguments,"{\"path\":\"NoFork.c\",\"type\":\"STR \",\"id\":128}");
+    tools_execute(&call,result,sizeof(result));assert(strstr(result,"NO_RESOURCE_FORK"));
+    strcpy(call.arguments,"{\"path\":\"Res.bin\",\"type\":\"TOOLONG\",\"id\":1}");
+    tools_execute(&call,result,sizeof(result));assert(strstr(result,"ARGUMENTS"));
+    strcpy(call.arguments,"{\"path\":\"Res.bin\",\"type\":\"BLOB\",\"id\":300,\"start_byte\":301}");
+    tools_execute(&call,result,sizeof(result));assert(strstr(result,"RANGE"));
+    puts("PASS read-only inspection: Finder identity, process paging, font metrics, alias targets, resource maps and bounded reads");
+}
 int main(void)
 {
     project_checks();
@@ -406,5 +803,6 @@ int main(void)
     folder_checks();
     puts("PASS native executor: create/read/collision, encoding, bounds, journal barriers, I/O faults, rename races and uncertain outcomes");
     edit_checks();
+    inspect_checks();
     return 0;
 }
