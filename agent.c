@@ -225,16 +225,23 @@ int agent_response(Agent *a, const char *body, size_t len, int status, char *err
     snprintf(error, cap, "HTTP %d: invalid, truncated, or unsupported model response.", status);
     if (!a->active || a->next < a->count) return -1;
     parsed = json_parse(body, len, tokens, 4096);
-    if (parsed < 1 || tokens[0].type != JSON_OBJECT) return -1;
+    if (parsed < 1 || tokens[0].type != JSON_OBJECT) {
+        snprintf(error, cap, "HTTP %d: response is not a bounded JSON object (%lu bytes).", status, (unsigned long)len);
+        return -1;
+    }
     i = json_member(body, tokens, 0, "error");
     if (status < 200 || status >= 300 || i >= 0) {
         char detail[180];
         if (json_string(body, tokens, json_member(body, tokens, i, "message"), detail, sizeof(detail)) >= 0)
             snprintf(error, cap, "HTTP %d: %s", status, detail);
+        else snprintf(error, cap, "HTTP %d: provider error without a message.", status);
         return -1;
     }
     i = json_member(body, tokens, 0, "choices");
-    if (i < 0 || tokens[i].type != JSON_ARRAY || tokens[i].next == i + 1) return -1;
+    if (i < 0 || tokens[i].type != JSON_ARRAY || tokens[i].next == i + 1) {
+        snprintf(error, cap, "HTTP %d: response has no choices.", status);
+        return -1;
+    }
     choice = i + 1; msg = json_member(body, tokens, choice, "message");
     if (msg < 0 || tokens[msg].type != JSON_OBJECT ||
         json_string(body, tokens, json_member(body, tokens, msg, "role"), role, sizeof(role)) < 0 ||
@@ -262,8 +269,22 @@ int agent_response(Agent *a, const char *body, size_t len, int status, char *err
         }
     }
     a->limited = !strcmp(finish, "length");
-    if (strcmp(finish, "stop") && strcmp(finish, "tool_calls") && !a->limited) return -1;
-    if ((count && a->limited) || (!count && (!*a->text || !strcmp(finish, "tool_calls")))) return -1;
+    if (strcmp(finish, "stop") && strcmp(finish, "tool_calls") && !a->limited) {
+        snprintf(error, cap, "HTTP %d: unsupported finish_reason \"%s\".", status, finish);
+        return -1;
+    }
+    if (count && a->limited) {
+        snprintf(error, cap, "HTTP %d: output token limit reached with %d pending tool call(s); none executed.", status, count);
+        return -1;
+    }
+    if (!count && !*a->text) {
+        snprintf(error, cap, "HTTP %d: no usable text or tool calls (finish_reason \"%s\").", status, finish);
+        return -1;
+    }
+    if (!count && !strcmp(finish, "tool_calls")) {
+        snprintf(error, cap, "HTTP %d: finish_reason \"tool_calls\" with no calls.", status);
+        return -1;
+    }
     length = (size_t)(tokens[msg].end - tokens[msg].start);
     if (length >= sizeof(message) || length + (size_t)count * AGENT_RESULT_WIRE_CAP + 2 >= sizeof(a->history) - a->used) {
         snprintf(error, cap, "History capacity reached; no tools executed. Start a new session."); return -1;

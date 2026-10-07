@@ -53,7 +53,7 @@ int main(void)
     assert(agent_response(&a, "{}", 2, 503, error, sizeof(error)) == -1 && a.used == used);
     assert(!agent_stop(&a, "network failed") && a.used == used);
     begin(); call("length"); used = a.used;
-    assert(agent_response(&a, response, strlen(response), 200, error, sizeof(error)) == -1 && a.used == used);
+    assert(agent_response(&a, response, strlen(response), 200, error, sizeof(error)) == -1 && a.used == used && strstr(error, "token limit"));
     begin(); call("stop");
     assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)) && a.count == 1);
     assert(!agent_stop(&a, "user stopped"));

@@ -544,11 +544,14 @@ capacity. The 30,001-byte TextEdit transcript remains independently bounded.
 Before execution, complete assistant responses and tool-start records are
 saved to unique UTF-8 JSON-lines files in `Retro68:Sherclawk Sessions:`.
 Results and user messages are saved there too. These files contain conversation
-and file contents; lifecycle logs omit them and credentials. A recording failure
-stops execution. Journals are preserved across relaunches; automatic session
-reloading/recovery is not implemented yet. When display limits are reached,
-earlier visible text is replaced with a notice referring to the saved session;
-model history is not silently dropped.
+and file contents; lifecycle logs omit them and credentials. Rejected model
+responses never enter the conversation: a `model_error` journal record keeps
+their HTTP status, received body size and reason, and every stopped run appends
+its reason to the lifecycle log so failures stay diagnosable after relaunch.
+A recording failure stops execution. Journals are preserved across relaunches;
+automatic session reloading/recovery is not implemented yet. When display
+limits are reached, earlier visible text is replaced with a notice referring to
+the saved session; model history is not silently dropped.
 
 ## Files and verification
 

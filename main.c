@@ -929,6 +929,14 @@ static void StartHandoff(void)
     if (network_start(&gNet, gNet.request, (size_t)length) < 0) { AbortChat(gNet.error); return; }
     SetStatus("Summarizing for handoff; current conversation retained...");
 }
+/* Abort reasons otherwise survive only in the on-screen transcript; keep a
+ * stable marker plus the actual reason in the share lifecycle log. */
+static void LogAbort(const char *prefix, const char *reason)
+{
+    char line[320];
+    snprintf(line, sizeof(line), "%s: %s", prefix, reason);
+    LogLine(line);
+}
 static void AbortChat(const char *reason)
 {
     if (gHandoff) {
@@ -937,6 +945,7 @@ static void AbortChat(const char *reason)
         ShowMessage("Handoff stopped; conversation retained", reason);
         if (*gHandoffPath) ShowMessage("Retained handoff file (may be incomplete)", gHandoffPath);
         SetStatus("Handoff stopped; conversation retained. %s", reason);
+        LogAbort("Handoff stopped; conversation retained. Reason", reason);
         return;
     }
     if (gSending == 4 || gSending == 5) {
@@ -952,7 +961,8 @@ static void AbortChat(const char *reason)
         SessionClose();
     } else SetStatus("%s", reason);
     gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
-    ShowMessage("Stopped", reason); LogLine("Agent stopped; completed records retained.");
+    ShowMessage("Stopped", reason);
+    LogAbort("Agent stopped; completed records retained. Reason", reason);
 }
 static void PauseRunAtLimit(void)
 {
@@ -962,6 +972,17 @@ static void PauseRunAtLimit(void)
         gAgent.rounds, gAgent.tool_count,
         (unsigned long)(gAgent.used * 100 / AGENT_HISTORY_CAP));
     AbortChat(reason);
+}
+/* agent_response rejects a bad body before recording it, so the history and
+ * session journal would keep no trace of the failed request. Journal its HTTP
+ * status, received body size and reason instead. */
+static void JournalModelError(const char *reason)
+{
+    static char quoted[1600], detail[1700];
+    if (!gSessionOpen || json_quote(reason, quoted, sizeof(quoted)) < 0) return;
+    snprintf(detail, sizeof(detail), "{\"http_status\":%d,\"received_bytes\":%lu,\"error\":%s}",
+        gNet.status, (unsigned long)gNet.body_len, quoted);
+    Journal(NULL, "model_error", detail);
 }
 static int StartModelRequest(void)
 {
@@ -1061,7 +1082,7 @@ static void DriveChatStep(void)
     }
     if (gHandoff) {
         if (agent_handoff_response(gNet.body, gNet.body_len, gNet.status, gHandoffSummary,
-            sizeof(gHandoffSummary), error, sizeof(error))) { AbortChat(error); return; }
+            sizeof(gHandoffSummary), error, sizeof(error))) { JournalModelError(error); AbortChat(error); return; }
         CloseChatContext();
         if (CommitHandoff()) { AbortChat("Could not save/verify handoff and new journal. History was not cleared."); return; }
         gHandoff = 0; gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
@@ -1070,7 +1091,7 @@ static void DriveChatStep(void)
         SetStatus("Handoff saved; fresh history is ready. Send a message to continue.");
         return;
     }
-    if (agent_response(&gAgent, gNet.body, gNet.body_len, gNet.status, error, sizeof(error))) { AbortChat(error); return; }
+    if (agent_response(&gAgent, gNet.body, gNet.body_len, gNet.status, error, sizeof(error))) { JournalModelError(error); AbortChat(error); return; }
     CloseChatContext();
     if (*gAgent.text) ShowMessage("Sherclawk", gAgent.text);
     if (gAgent.count) {
