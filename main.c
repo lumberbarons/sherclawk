@@ -210,9 +210,10 @@ static void PrefsLoad(void)
     prefs_defaults(&gPrefs);
     gPrefsUnreadable = 0;
     err = PrefsSpec(&spec);
+    if (err == fnfErr) return;               /* first run: compiled defaults */
     if (err) { gPrefsUnreadable = 1; return; }
     err = FSpOpenDF(&spec, fsRdPerm, &ref);
-    if (err == fnfErr) return;               /* first run: compiled defaults */
+    if (err == fnfErr) return;               /* file disappeared after the probe */
     if (err) { gPrefsUnreadable = 1; return; }
     err = GetEOF(ref, &length);
     if (err || length < 0 || length > (long)sizeof(bytes)) err = ioErr;
@@ -240,6 +241,7 @@ static int PrefsSave(const Prefs *p)
     length = prefs_format(p, bytes, sizeof(bytes));
     if (length < 0) return -1;
     err = PrefsSpec(&spec);
+    if (err == fnfErr) err = noErr;          /* create below; spec is usable */
     if (!err) {
         err = FSpCreate(&spec, kPrefsCreator, kPrefsFileType, smSystemScript);
         if (err == dupFNErr) err = noErr;
