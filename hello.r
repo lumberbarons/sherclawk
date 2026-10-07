@@ -72,7 +72,7 @@ resource 'MENU' (130, "Edit") {
  * template string: model and key 255 characters, workspace 192 (the
  * validator's cap), limits 3. main.c seeds every field from the live values. */
 resource 'DLOG' (128, "Preferences") {
-    {70, 60, 320, 480},
+    {64, 56, 300, 496},
     movableDBoxProc,
     visible,
     noGoAway,
@@ -84,21 +84,21 @@ resource 'DLOG' (128, "Preferences") {
 
 resource 'DITL' (128, "Preferences") {
     {
-        /* [1] OK */            {222, 262, 242, 324}, Button { enabled, "OK" };
-        /* [2] Cancel */        {222, 332, 242, 404}, Button { enabled, "Cancel" };
-        /* [3] Model */         {12, 12, 28, 100},   StaticText { disabled, "Model:" };
-        /* [4] */               {28, 10, 46, 408},   EditText { enabled, "                                                                                                                                                                                                                                                               " };
-        /* [5] API key */       {53, 12, 69, 100},   StaticText { disabled, "API key:" };
-        /* [6] */               {69, 10, 87, 408},   EditText { enabled, "                                                                                                                                                                                                                                                               " };
-        /* [7] Workspace */     {94, 12, 110, 100},  StaticText { disabled, "Workspace:" };
-        /* [8] */               {110, 10, 128, 408}, EditText { enabled, "                                                                                                                                                                                                " };
-        /* [9] Rounds */        {136, 12, 152, 130}, StaticText { disabled, "Max model rounds:" };
-        /* [10] */              {134, 135, 152, 195}, EditText { enabled, "128" };
-        /* [11] Tools */        {136, 215, 152, 325}, StaticText { disabled, "Max tool calls:" };
-        /* [12] */              {134, 330, 152, 390}, EditText { enabled, "128" };
-        /* [13] Debug toggle */ {162, 12, 178, 28},  CheckBox { enabled, "" };
-        /* [14] Debug label */  {162, 32, 178, 408}, StaticText { disabled, "Show tool debug in Conversation" };
-        /* [15] Hint */         {192, 12, 208, 408}, StaticText { disabled, "Stored in System Folder:Preferences. Limits apply to each run." };
+        /* [1] OK */                 {202, 282, 222, 344}, Button { enabled, "OK" };
+        /* [2] Cancel */             {202, 352, 222, 424}, Button { enabled, "Cancel" };
+        /* [3] Model */              {16, 16, 32, 140}, StaticText { disabled, "Model:" };
+        /* [4] */                    {14, 144, 32, 424}, EditText { enabled, "                                                                                                                                                                                                                                                               " };
+        /* [5] API key */            {44, 16, 60, 140}, StaticText { disabled, "API key:" };
+        /* [6] */                    {42, 144, 60, 424}, EditText { enabled, "                                                                                                                                                                                                                                                               " };
+        /* [7] Workspace */          {72, 16, 88, 140}, StaticText { disabled, "Workspace:" };
+        /* [8] */                    {70, 144, 88, 424}, EditText { enabled, "                                                                                                                                                                                                " };
+        /* [9] Rounds */             {100, 16, 116, 140}, StaticText { disabled, "Max rounds:" };
+        /* [10] */                   {98, 144, 116, 224}, EditText { enabled, "128" };
+        /* [11] Tools */             {128, 16, 144, 140}, StaticText { disabled, "Max tool calls:" };
+        /* [12] */                   {126, 144, 144, 224}, EditText { enabled, "128" };
+        /* [13] Debug toggle */      {152, 16, 168, 32}, CheckBox { enabled, "" };
+        /* [14] Debug label */       {152, 36, 168, 424}, StaticText { disabled, "Show tool debug in Conversation" };
+        /* [15] Hint */              {178, 16, 194, 424}, StaticText { disabled, "Stored in System Folder:Preferences. Limits apply to each run." };
     }
 };
 
