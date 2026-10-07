@@ -2,8 +2,8 @@
 
 The name is Sherclawk (Sherlock + claw); the mascot is a lobster.
 
-Sherclawk is an independent source copy of HelloChat in this directory.
-HelloChat remains unchanged. Build Sherclawk with Retro68; execute its agent
+Sherclawk began as an independent source copy of HelloChat and now lives in
+its own repository. Build Sherclawk with Retro68; execute its agent
 loop and tools in the classic Mac application.
 
 ## Harness direction
