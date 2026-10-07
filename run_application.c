@@ -4,11 +4,12 @@
  * FNV hashes detect changes, not hostile AFP-server writes or power loss. */
 #include "run_application.h"
 #include "json.h"
+#include "config.h"
 #include <Processes.h>
 #include <Script.h>
 #include <stdio.h>
 #include <string.h>
-#define QUEUE "Worker01:buildjobs"
+#define QUEUE SHERCLAWK_BUILD_QUEUE
 #define FORK_LIMIT (1024L*1024L)
 typedef struct {
     uint32_t magic;

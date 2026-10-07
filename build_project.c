@@ -7,19 +7,16 @@
 #include "json.h"
 #include "text.h"
 #include "config.h"
+#include "selfbuild.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
-#define INPUTS 5
+#define INPUTS BUILD_INPUTS
 #define FILE_BYTES 4096
 #define RECIPE_BYTES 12288
-#define QUEUE "Worker01:buildjobs"
+#define QUEUE SHERCLAWK_BUILD_QUEUE
 #define ADAPTER "mpw-ppc-v2"
-typedef struct {
-    char paths[INPUTS][96], staged[INPUTS][32], includes[3][96];
-    int count, sources, resources, include_count, stdclib;
-    char output[32], creator[5];
-} Descriptor;
+typedef BuildPlan Descriptor;
 static Descriptor descriptor;
 static NativeJob job;
 static char data[INPUTS+1][FILE_BYTES+1], recipe[RECIPE_BYTES], manifest[4096];
@@ -28,7 +25,8 @@ static size_t diagnostic_size;
 static FSSpec specs[INPUTS+1];
 static CInfoPBRec infos[INPUTS+1];
 static long sizes[INPUTS+1];
-static int active, phase, file_index, second_pass;
+static int active, phase, file_index, second_pass, native_attempted, native_claimed;
+static FSSpec build_queue;
 static long offset;
 static uint32_t start_ticks;
 static AgentJournal journal_fn;
@@ -168,6 +166,30 @@ static void unix_path(const char *s,char *out)
 {
     while(*s) { *out++=*s==':' ? '/' : *s; s++; } *out=0;
 }
+int build_project_plan(const char *s,BuildPlan *p) { return parse(s,p); }
+int build_project_command(const BuildPlan *d,int step,char *out,size_t cap,
+                          char *stage,size_t stage_cap)
+{
+    size_t at=0; int i;
+    if(step<0 || step>=d->sources+1+d->resources)return -1;
+    out[0]=0;
+    if(step<d->sources) {
+        snprintf(stage,stage_cap,"stage=compile source=%s",d->paths[step]);
+        if(add(out,cap,&at,"MrC \":%s\" -o obj%d.o -i \"{CIncludes}\" -w off",d->paths[step],step))return -1;
+    } else if(step==d->sources) {
+        snprintf(stage,stage_cap,"stage=link started");
+        if(add(out,cap,&at,"PPCLink -o %s",d->output))return -1;
+        for(i=0;i<d->sources;i++)if(add(out,cap,&at," obj%d.o",i))return -1;
+        return add(out,cap,&at," \"{SharedLibraries}\"InterfaceLib%s \"{PPCLibraries}\"StdCRuntime.o \"{PPCLibraries}\"PPCCRuntime.o -t APPL",d->stdclib ? " \"{SharedLibraries}\"StdCLib" : "");
+    } else {
+        i=step-1;
+        snprintf(stage,stage_cap,"stage=resources source=%s",d->paths[i]);
+        if(add(out,cap,&at,"Rez \":%s\" -o %s -append -i \"{RIncludes}\"",d->paths[i],d->output))return -1;
+    }
+    for(i=0;i<d->include_count;i++)
+        if(add(out,cap,&at," -i \"%s%s\"",!strcmp(d->includes[i],".") ? "" : ":",!strcmp(d->includes[i],".") ? ":" : d->includes[i]))return -1;
+    return 0;
+}
 int build_project_recipe(const char *s,char *out,size_t cap)
 {
     Descriptor d; size_t at=0; int i; char path[96],parent[96],*slash;
@@ -178,19 +200,24 @@ int build_project_recipe(const char *s,char *out,size_t cap)
         if(slash) { *slash=0; if(add(out,cap,&at,"mkdir -p '%s'\n",parent))return -1; }
         if(add(out,cap,&at,"cp '../../%s' '%s'\n/Developer/Tools/SetFile -t TEXT -c ttxt '%s'\n",d.staged[i],path,path))return -1;
     }
-    for(i=0;i<d.sources;i++) {
-        if(add(out,cap,&at,"echo 'stage=compile source=%s'\n/Developer/Tools/tlsrvr -- MrC '\":%s\"' -o obj%d.o -i '\"{CIncludes}\"' -w off",d.paths[i],d.paths[i],i))return -1;
-        for(int k=0;k<d.include_count;k++)
-            if(add(out,cap,&at," -i '\"%s%s\"'",!strcmp(d.includes[k],".") ? "" : ":",!strcmp(d.includes[k],".") ? ":" : d.includes[k]))return -1;
-        if(add(out,cap,&at,"\n"))return -1;
-    }
-    if(add(out,cap,&at,"echo 'stage=link started'\n/Developer/Tools/tlsrvr -- PPCLink -o %s",d.output))return -1;
-    for(i=0;i<d.sources;i++)if(add(out,cap,&at," obj%d.o",i))return -1;
-    if(add(out,cap,&at," '\"{SharedLibraries}\"InterfaceLib'%s '\"{PPCLibraries}\"StdCRuntime.o' '\"{PPCLibraries}\"PPCCRuntime.o' -t APPL\n",d.stdclib ? " '\"{SharedLibraries}\"StdCLib'" : ""))return -1;
-    for(i=d.sources;i<d.sources+d.resources;i++) {
-        if(add(out,cap,&at,"echo 'stage=resources source=%s'\n/Developer/Tools/tlsrvr -- Rez '\":%s\"' -o %s -append -i '\"{RIncludes}\"'",d.paths[i],d.paths[i],d.output))return -1;
-        for(int k=0;k<d.include_count;k++)if(add(out,cap,&at," -i '\"%s%s\"'",!strcmp(d.includes[k],".") ? "" : ":",!strcmp(d.includes[k],".") ? ":" : d.includes[k]))return -1;
-        if(add(out,cap,&at,"\n"))return -1;
+    for(i=0;i<d.sources+1+d.resources;i++) {
+        char command[2048],stage[160];
+        if(build_project_command(&d,i,command,sizeof(command),stage,sizeof(stage)))return -1;
+        /* Commands contain only validated names and fixed MPW syntax. Shell
+         * single quotes preserve MPW's double quotes without expansion. */
+        if(add(out,cap,&at,"echo '%s'\n/Developer/Tools/tlsrvr -- ",stage))return -1;
+        /* Preserve MPW quotes through the shell. Portable validated names
+         * contain no spaces/apostrophes; fixed macro arguments need quoting. */
+        { char *word=command,*end;
+          while(*word) {
+            end=strchr(word,' '); if(end)*end=0;
+            if(add(out,cap,&at,strchr(word,'"') ? "'%s'" : "%s",word))return -1;
+            if(!end)break;
+            if(add(out,cap,&at," "))return -1;
+            word=end+1;
+          }
+          if(add(out,cap,&at,"\n"))return -1;
+        }
     }
     return add(out,cap,&at,"/Developer/Tools/SetFile -t APPL -c %s %s\ntest -s %s\necho 'artifact=%s' > success.txt\necho 'stage=complete status=0'\n",d.creator,d.output,d.output,d.output);
 }
@@ -223,7 +250,7 @@ int build_project_begin(const AgentCall *call,char *out,size_t cap,AgentJournal 
     journal_fn=journal; journal_context=ctx; start_ticks=now;
     if(resolve_input(0))return error(out,cap,"DESCRIPTOR_TEXT_OR_SIZE",0);
     sizes[0]=infos[0].hFileInfo.ioFlLgLen;
-    diagnostic_size=0; diagnostic[0]=0; phase=0; file_index=0; offset=0; second_pass=0; active=1;
+    native_attempted=native_claimed=0; diagnostic_size=0; diagnostic[0]=0; phase=0; file_index=0; offset=0; second_pass=0; active=1;
     return 2;
 }
 static int read_step(int i)
@@ -312,6 +339,7 @@ int build_project_step(char *out,size_t cap,uint32_t now,int stop)
             if(add(manifest,sizeof(manifest),&at,"]}") || journal_fn(journal_context,"build_snapshot",manifest))return error(out,cap,"JOURNAL_SNAPSHOT",1);
             inputs[i].name="manifest.json"; inputs[i].bytes=manifest; inputs[i++].size=strlen(manifest);
             inputs[i].name="script"; inputs[i].bytes=recipe; inputs[i++].size=strlen(recipe);
+            build_queue=queue;
             if(jobs_begin(&job,&queue,id,inputs,i,now,300UL*60UL,journal_fn,journal_context))return error(out,cap,"JOB_RESERVATION_FAILED",1);
             phase=2; return 2;
         }
@@ -322,6 +350,14 @@ int build_project_step(char *out,size_t cap,uint32_t now,int stop)
         if(r || !strstr(out,"\"status\":\"ok\""))return error(out,cap,"ARTIFACT_AUTHORIZATION_FAILED",1);
         phase=4; return finish(out,cap,now);
     }
+    if(job.state==JOB_WAITING && !native_attempted && !stop) {
+        native_attempted=1;
+        int claimed=selfbuild_begin(&job,&build_queue,&descriptor);
+        native_claimed=claimed==1;
+        if(claimed<0)job.state=JOB_UNKNOWN;
+    }
+    if(native_claimed)selfbuild_step(now,stop);
+    if(native_claimed && selfbuild_unknown())job.state=JOB_UNKNOWN;
     jobs_step(&job,now,stop);
     if(job.stderr_size && diagnostic_size<128) {
         size_t n=job.stderr_size;

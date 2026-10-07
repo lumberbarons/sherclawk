@@ -25,5 +25,8 @@ OSErr FSWrite(short, long *, const void *);
 OSErr FSClose(short);
 OSErr SetFPos(short, short, long);
 OSErr FlushVol(const unsigned char *, short);
+OSErr FSpDelete(const FSSpec *);
+OSErr FSpGetFInfo(const FSSpec *,FInfo *);
+OSErr FSpSetFInfo(const FSSpec *,const FInfo *);
 OSErr FSpRename(const FSSpec *, const unsigned char *);
 #endif

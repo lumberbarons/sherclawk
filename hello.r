@@ -21,7 +21,7 @@ resource 'SIZE' (-1) {
     dontGetFrontClicks,
     ignoreChildDiedEvents,
     is32BitCompatible,
-    notHighLevelEventAware,
+    isHighLevelEventAware,
     onlyLocalHLEvents,
     notStationeryAware,
     dontUseTextEditServices,

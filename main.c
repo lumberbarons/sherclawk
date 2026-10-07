@@ -25,6 +25,8 @@
 #include "json.h"
 #include "tools.h"
 #include "build_project.h"
+#include "selfbuild.h"
+#include <AppleEvents.h>
 #include "run_application.h"
 #include <QDOffscreen.h>
 #include <Resources.h>
@@ -588,6 +590,7 @@ static void UIDispose(void)
 static void HandleEvent(const EventRecord *event)
 {
     switch (event->what) {
+    case kHighLevelEvent: AEProcessAppleEvent(event); break;
     case updateEvt:
         if ((WindowPtr)event->message == gWindow) {
             SetPort(gWindow);
@@ -1065,16 +1068,19 @@ int main(void)
     chat_reset(&gChat); agent_reset(&gAgent, Journal, NULL);
     SetStatus("Ready. What shall we investigate?");
     LogOpen(); LogLine("Sherclawk session started.");
+    if(selfbuild_init())SetStatus("Native executor unavailable; builds require the external worker.");
     while (!gQuit) {
         WaitNextEvent(everyEvent, &event, gSending ? 1 : 10, NULL);
         SetPort(gWindow); HandleEvent(&event);
         if (gSending) DriveChatStep();
+        selfbuild_drain((uint32_t)TickCount());
         /* History changes during sends, tool results, New Chat and handoff.
          * Keep its indicator current even when the ordinary status is unchanged. */
         if (gDisplayedHistory != gAgent.used) InvalRect(&gHistoryRect);
     }
     if (gNet.ctx || gOTOpen) CloseChatContext();
     if (gAgent.active) AbortChat("Application quit.");
+    selfbuild_close();
     SessionClose();
     LogLine("Sherclawk session ended."); LogClose(); UIDispose();
     MacTLS_Shutdown(); return 0;

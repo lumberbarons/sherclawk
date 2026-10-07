@@ -4,6 +4,7 @@
  * AEProcessAppleEvent must be called by the owner's cooperative event loop.
  */
 #include "toolserver.h"
+#include <AppleEvents.h>
 #include <Processes.h>
 #include <AERegistry.h>
 #include <Events.h>
@@ -69,6 +70,7 @@ static OSErr text_param(const AppleEvent *event,AEKeyword key,char *buf)
     }
     e=AEGetParamPtr(event,key,typeChar,&type,buf,TEXT_LIMIT,&got);
     if(e || got!=size) return e ? e : paramErr;
+    if(memchr(buf,0,(size_t)got))return paramErr;
     buf[got]=0; return noErr;
 }
 static pascal OSErr answer(const AppleEvent *event,AppleEvent *reply,long refcon)
@@ -141,10 +143,11 @@ OSErr toolserver_send(const char *directory,const char *command,uint32_t now)
     e=find_or_launch(); if(e)return e;
     pending_id=++next_id; abandoned=received=uncertain_reported=0;
     memset(&result,0,sizeof(result)); result.status=-999; sent_at=now;
+    /* A transport error may follow delivery; reserve the return ID even then. */
+    waiting=1;
     e=send_event(kAEMiscStandards,kAEDoScript,script,pending_id,kAEQueueReply);
     record("send id=%d error=%d duration_ticks=%lu command=[%s]",pending_id,e,
         (unsigned long)(TickCount()-now),command);
-    if(!e)waiting=1;
     return e;
 }
 int toolserver_poll(uint32_t now,int stop,ToolServerReply *reply)

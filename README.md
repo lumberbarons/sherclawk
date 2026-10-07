@@ -7,8 +7,8 @@ window. [PLAN.md](PLAN.md) tracks the full coding-harness roadmap.
 
 The installed tools are `get_environment`, `list_files`, `read_text`,
 `search_text`, create-only `write_text`, create-only `create_folder`, template-backed `create_project`, revision-guarded `edit_text`, `build_project`,
-`read_build_log`, and `run_application`. Builds execute natively through the MacRelix worker;
-authorized artifacts launch through the native Process Manager. The [native PowerPC template](templates/ppc-toolbox/README.md)
+`read_build_log`, and `run_application`. Builds self-execute through asynchronous ToolServer commands when the queue is unowned.
+The MacRelix worker remains an exclusive-owner fallback. Authorized artifacts launch through the native Process Manager. The [native PowerPC template](templates/ppc-toolbox/README.md)
 captures a guest-verified MrC/PPCLink/Rez recipe and installed versions;
 the [MacRelix job worker](worker/README.md) now implements complete-file
 publication, rename claims, output capture and completion records. The native
@@ -174,23 +174,31 @@ components are 1–31 bytes, cannot start with dot/dash, and paths are at most
 allow up to three directories or `.`. Only declared inputs are copied into the
 fresh build working directory. Standard SDK includes are supplied by the adapter.
 
-Prepare the queue once on the mounted AFP volume, then run the existing worker
-in MacRelix while using the app. On this installation an idle background worker
-may need foreground activation to resume polling; a lock is not liveness evidence:
+Prepare the queue once on the mounted AFP volume. Sherclawk now acquires the
+existing `worker-lock` and executes its current snapshot itself when unowned.
+ToolServer and its installed SDK are still required; MacRelix is unnecessary
+for this path. Queue creation and general queue service belong to increment 4:
 
 ```bash
 ssh beardmore 'sudo -n install -d -o macos9 -g macos9 -m 775 /srv/retro68/Worker01/buildjobs'
 ```
 
+For the existing fallback, start the worker before publishing builds:
+
 ```sh
 perl -w /Volumes/Retro68/Worker01/worker05.pl /Volumes/Retro68/Worker01/buildjobs
 ```
+
+An external lock makes Sherclawk poll without claiming or executing. Locks are
+not liveness evidence and are never stolen automatically. Quit the external
+worker normally before switching executors; inspect orphaned claims and locks
+before manual recovery. An idle background MacRelix worker may require activation.
 
 `build_project` reads/compares closed input pages before reserving a fresh build
 ID. Its snapshot retains the descriptor, generated trusted recipe and manifest
 with whole-file revisions and recipe hash. Snapshot publication and polling
 service events between bounded steps. Five-minute snapshot/job phase deadlines and Stop abandon
-observation; they never cancel, replay, or modify a published worker job. An
+observation; they never prove cancellation or replay a published job. An
 uncertain result stops the agent run. Keep the queue/journals for inspection.
 Revision hashes are observational FNV tokens, not cryptographic attestations;
 external server writes are outside File Manager locking guarantees.
@@ -252,6 +260,45 @@ The window can be dragged, but ordinary Toolbox `DragWindow` tracking can defer
 reply handling; production code must account for this before promising latency.
 This spike does not build C projects or claim queue jobs.
 
+### Integrated self-builds (idea 005, increment 3)
+
+`build_project` publishes the same protocol-1 snapshot, then attempts exclusive
+ownership once. `selfbuild.c` renames `ready` to `claimed`, retains the unchanged
+`started` record plus `native-executor`, and compares every staged input against
+the published representation in 1 KiB pages. It revalidates `project.json`, copies
+only declared inputs into a fresh `build:native` tree as TEXT/ttxt, and uses the
+same `BuildPlan` command generator as the fallback shell recipe. No extra job
+input or model-supplied shell command is introduced.
+
+MrC/PPCLink/Rez run one at a time through queued Apple events. Replies retain raw
+statuses in stdout; MPW status 2 maps to failure 1 and -1 to 127. Other statuses
+outside 0–255, malformed/oversized/binary text replies, disappearance, send errors,
+Stop and deadlines produce uncertainty, with no subsequent command or replay.
+Logs are appended/read back in bounded pages. Success requires the PowerPC PEF
+header, both forks, Finder APPL metadata, a verified success marker, and the
+existing persisted artifact authorization. `read_build_log` and `run_application`
+retain their envelopes and authority checks.
+
+The executor outlives the observing chat run. An abandoned in-flight request
+holds the worker lock until its late reply drains or ToolServer disappears.
+`native-unknown` and the claim stay as evidence without a terminal result;
+`native-drained` records an abandoned late reply. Quitting
+Sherclawk with an outstanding command leaves the lock for manual inspection.
+The app never scans or replays old jobs. Queue preferences, queue creation,
+status UI and a Serve Build Queue toggle remain later increments.
+
+Build/publish the integrated error–repair–rebuild and authorized-launch fixture:
+
+```bash
+APP=SherclawkSelfBuildCheck tools/deploy-to-share.sh
+APP=SherclawkSelfBuildStopCheck tools/deploy-to-share.sh
+```
+
+Run with MacRelix quit and the queue unowned. It checks independent and starter
+projects with multiple sources, explicit native ownership, resource structure,
+compiler failures, revision-bound edits and fresh build IDs. Evidence is recorded
+in `Retro68:SherclawkSelfBuildCheck.log`; acceptance is recorded below.
+
 ### Fixed native build diagnostic (idea 005, increment 2)
 
 With MacRelix quit and ToolServer idle, publish and launch:
@@ -283,8 +330,7 @@ Both success runs, compiler failure and Stop/late-reply behavior passed in OS 9.
 The repeated artifact payloads matched except for a PEF timestamp; full resource
 maps also differed, so complete fork determinism is not claimed. Detailed
 fixtures and timings are in [idea 005](../ideas/005-sherclawk-queue-mode.md).
-This fixed executor is separate from `build_project`, which still requires the
-MacRelix worker. Queue integration is increment 3.
+This fixed diagnostic remains separate from the integrated self-build executor above.
 
 ### Running applications
 
@@ -469,8 +515,11 @@ model history is not silently dropped.
 | `tools/native-build-check.c` | Fixed native compile/link/Rez/verify/launch and deliberately failing compiler acceptance fixtures |
 | `tools/toolserver-check.c`, `tools/toolserver-check.r` | Standalone queued ToolServer replies, native discovery/launch, retained Rez fixtures and explicit unknown-outcome fault controls |
 | `tools/native-process-check.c` | Native Process Manager diagnostic for executor paths |
+| `selfbuild.c`, `selfbuild.h`, `build_plan.h` | Exclusive current-snapshot executor, bounded copies/logs, compatible results, unknown-outcome draining |
+| `toolserver.c`, `toolserver.h` | Single-command queued Apple-event client with sender/return-ID correlation |
+| `tests/test_selfbuild.c` | Ownership races, snapshot changes, command failures, Stop/deadline, late replies and authorization fault model |
 | `build_project.c`, `build_project.h` | Descriptor validation, trusted recipe, revision snapshot, cooperative build and log pages |
-| `tools/build-check.c`, `tests/test_build_project.c` | Native multi-source/error-repair/build-and-launch diagnostics and host fault checks |
+| `tools/build-check.c`, `tests/test_build_project.c` | Multi-source/error–repair–rebuild/self-build-and-launch diagnostics and host fault checks |
 | `run_application.c`, `run_application.h` | Persisted artifact authority, bounded fork verification, native launch and run observations |
 | `jobs.c`, `jobs.h` | Native trusted snapshot publication and bounded completion/log polling |
 | `tools/job-check.c`, `tests/test_jobs.c` | Event-driven guest diagnostic and publication/polling fault checks |
@@ -705,3 +754,20 @@ reply without Rez or launch. The reusable ToolServer client and fixed diagnostic
 are separate from the queue and model tools. Retained fixture IDs, repeat-byte
 comparison limits and ignored raw evidence are in
 [idea 005](../ideas/005-sherclawk-queue-mode.md#increment-2-guest-evidence--october-6-2026).
+
+Integrated self-build verification, October 6, 2026: `SherclawkSelfBuildCheck`
+reported `RESULT failures=0` in OS 9.2.2 with MacRelix absent before each build.
+Independent and starter projects each passed compiler-error, repair, authorized
+launch and fresh revision-bound rebuild fixtures: six retained build IDs, four
+successful launches, two correctly refused failed builds. Resource checks read
+`cfrg`/0 and `SIZE`/-1 for every successful artifact. The independent window showed
+both the original text and the edited “Fresh revision compiled natively” text.
+The detailed build IDs and retained evidence are in
+[idea 005](../ideas/005-sherclawk-queue-mode.md#increment-3-guest-evidence--october-6-2026).
+Host ASan/UBSan checks and all seven Python worker compatibility tests pass.
+
+The integrated Stop fixture also reported `RESULT failures=0`: first MrC command
+abandoned, late status-0 reply drained, no subsequent command/result/authority/
+success/launch, and lock released after draining. Its retained ID is
+`build-00013dab-0001`; `native-unknown`, `native-drained` and the claim remain.
+This demonstrates observation stopping and safe draining, not cancellation.

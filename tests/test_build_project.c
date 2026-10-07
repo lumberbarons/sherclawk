@@ -11,7 +11,31 @@
 #undef SetFPos
 #include "build_project.h"
 #include "run_application.h"
+#include "toolserver.h"
+#include "selfbuild.h"
 #include <Processes.h>
+/* Queued transport model: replies arrive only when explicitly released. */
+static int ts_busy,ts_ready,ts_sends,ts_abandoned,ts_failure,ts_malformed,ts_send_error;
+static char ts_directory[256],ts_command[2048];
+OSErr toolserver_init(ToolServerLog log) { (void)log;return 0; }
+void toolserver_close(void) { ts_busy=ts_ready=0; }
+int toolserver_busy(void) { return ts_busy; }
+OSErr toolserver_send(const char *directory,const char *command,uint32_t now)
+{ (void)now;assert(!ts_busy);ts_sends++;strcpy(ts_directory,directory);strcpy(ts_command,command);ts_busy=1;ts_abandoned=0;return ts_send_error ? ioErr : 0; }
+int toolserver_poll(uint32_t now,int stop,ToolServerReply *reply)
+{
+    (void)now;
+    if(ts_busy && stop && !ts_abandoned) {ts_abandoned=1;return -1;}
+    if(ts_busy && ts_ready) {
+        memset(reply,0,sizeof(*reply));reply->abandoned=ts_abandoned;reply->malformed=ts_malformed;
+        reply->status=ts_failure;strcpy(reply->diagnostic,ts_failure ? "compiler failure\r" : "");
+        ts_busy=ts_ready=0;return 1;
+    }
+    return 0;
+}
+OSErr FSpDelete(const FSSpec *s) {int i=find(s->parID,s->name);if(i<0)return fnfErr;files[i].used=0;return 0;}
+OSErr FSpGetFInfo(const FSSpec *s,FInfo *p) {int i=find(s->parID,s->name);if(i<0)return fnfErr;*p=files[i].info;return 0;}
+OSErr FSpSetFInfo(const FSSpec *s,const FInfo *p) {int i=find(s->parID,s->name);if(i<0)return fnfErr;files[i].info=*p;return 0;}
 static int launches,launch_error,process_error,run_journal_error;
 static FSSpec launched;
 static unsigned char resource_bytes[64][4096];
@@ -77,6 +101,10 @@ static void terminal_check(const char *good,int artifact_ok)
         for(int k=0;k<64;k++)assert(!files[k].used || strcmp(files[k].name,"launch.rec"));return; }
     assert(artifact_ok ? r==0 && strstr(result,"\"status\":\"ok\"") && strstr(result,"native:sample") : r==1 && strstr(result,"ARTIFACT_INVALID"));
 }
+
+#ifdef TEST_SELFBUILD
+#define main build_contract_main
+#endif
 int main(void)
 {
     const char *good="{\"protocol\":2,\"toolchain\":\"mpw-ppc-v2\",\"sources\":[\"main.c\"],\"output\":\"sample\"}\r";

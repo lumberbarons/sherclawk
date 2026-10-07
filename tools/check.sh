@@ -40,6 +40,14 @@ mkdir -p "$HERE/build/tests"
 "${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror -Wno-multichar \
     -fsanitize=address,undefined -fno-omit-frame-pointer \
     -I"$HERE/tests/toolbox" -I"$HERE" \
-    "$HERE/tests/test_build_project.c" "$HERE/build_project.c" "$HERE/run_application.c" "$HERE/jobs.c" \
+    "$HERE/tests/test_build_project.c" "$HERE/selfbuild.c" "$HERE/build_project.c" "$HERE/run_application.c" "$HERE/jobs.c" \
     "$HERE/tools.c" "$HERE/json.c" "$HERE/text.c" -o "$HERE/build/tests/test-build-project"
 "$HERE/build/tests/test-build-project"
+
+"${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror -Wno-multichar \
+    -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -I"$HERE/tests/toolbox" -I"$HERE" \
+    "$HERE/tests/test_selfbuild.c" "$HERE/selfbuild.c" "$HERE/build_project.c" \
+    "$HERE/run_application.c" "$HERE/jobs.c" "$HERE/tools.c" "$HERE/json.c" "$HERE/text.c" \
+    -o "$HERE/build/tests/test-selfbuild"
+"$HERE/build/tests/test-selfbuild"

@@ -112,7 +112,9 @@ This establishes flexibility before adding more application-specific fixtures.
 ## Boundaries and verification
 
 The native app owns prompts, tool validation, sessions, and execution. Direct
-OpenRouter HTTPS provides inference. MacRelix is only the later build executor.
+OpenRouter HTTPS provides inference. Native ToolServer self-builds implement idea
+005 increment 3; MacRelix remains the exclusive-owner build fallback. Queue
+creation, generalized queue service and convenience features remain later work.
 No generic shell, desktop control, streaming, MCP, or subagents in this pass.
 
 Run host protocol/transport checks under ASan/UBSan. Build and publish

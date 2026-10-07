@@ -14,4 +14,7 @@
 #define SHERCLAWK_WORKSPACE "Retro68:"
 #endif
 
+/* Fixed originating queue shared by build publication and retained authority. */
+#define SHERCLAWK_BUILD_QUEUE "Worker01:buildjobs"
+
 #endif /* SHERCLAWK_CONFIG_H */
