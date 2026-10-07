@@ -26,6 +26,10 @@
 #define ALIAS_BYTES_MAX 32768
 #define WALK_BUDGET 512
 
+static int resource_open(const FSSpec *spec, short *ref);
+static void resource_close(short ref, short previous);
+static int resource_read(Handle resource, long offset, long count, char *buffer);
+
 static int fail(char *out, size_t cap, const char *code, const char *message, int native)
 {
     char q[512];
@@ -557,11 +561,11 @@ static void resolve_alias(const AgentCall *call, const JsonToken *tokens, char *
     Str255 workspace_name;
     FSSpec spec, workspace, target;
     CInfoPBRec pb, target_pb, workspace_pb;
-    Handle record = NULL;
+    Handle record = NULL, resource;
     Boolean changed = 0;
     OSErr err, target_err;
-    short ref = -1;
-    long size, count;
+    short ref = -1, previous;
+    long size;
     int budget = WALK_BUDGET, complete = 1, have_relative = 0, outside = -1;
     if (valid_keys(call->arguments, tokens, "|path|") ||
         string_arg(call->arguments, tokens, "path", path, sizeof(path)) < 0) {
@@ -572,14 +576,29 @@ static void resolve_alias(const AgentCall *call, const JsonToken *tokens, char *
     if (err) { fail(out, cap, "FILE", "Cannot resolve the workspace alias file.", err); return; }
     if (pb.hFileInfo.ioFlAttrib & 16) { fail(out, cap, "FOLDER", "Expected an alias file, not a folder.", 0); return; }
     if (!is_alias(&pb)) { fail(out, cap, "NOT_ALIAS", "This file is not an alias between its Finder type and flags.", 0); return; }
-    size = pb.hFileInfo.ioFlLgLen;
+    /* Finder aliases keep their record in 'alis'/0, not the data fork.
+     * Read a bounded copy so ResolveAlias cannot update the stored record. */
+    previous = CurResFile();
+    err = resource_open(&spec, &ref);
+    if (err) { fail(out, cap, "ALIAS", "Cannot open the alias resource map.", err); return; }
+    resource = Get1Resource('alis', 0);
+    if (!resource) {
+        resource_close(ref, previous);
+        fail(out, cap, "ALIAS", "Alias file has no alis/0 resource.", 0); return;
+    }
+    size = GetResourceSizeOnDisk(resource);
+    err = ResError();
+    if (err) {
+        ReleaseResource(resource); resource_close(ref, previous);
+        fail(out, cap, "ALIAS", "Cannot determine the alias record size.", err); return;
+    }
     if (size < 1 || size > ALIAS_BYTES_MAX) {
+        ReleaseResource(resource); resource_close(ref, previous);
         fail(out, cap, "ALIAS_LIMIT", "Alias record is empty or larger than 32768 bytes.", 0); return;
     }
-    err = FSpOpenDF(&spec, fsRdPerm, &ref);
-    if (!err) { count = size; err = FSRead(ref, &count, alias_bytes); if (!err && count != size) err = ioErr; }
-    { OSErr closed = ref >= 0 ? FSClose(ref) : 0; ref = -1; if (!err) err = closed; }
-    if (err) { fail(out, cap, "ALIAS", "Cannot read the alias record from the data fork.", err); return; }
+    err = resource_read(resource, 0, size, alias_bytes) ? ioErr : noErr;
+    ReleaseResource(resource); resource_close(ref, previous);
+    if (err) { fail(out, cap, "ALIAS", "Cannot read the alias resource record.", err); return; }
     err = PtrToHand(alias_bytes, &record, size);
     if (!err) err = ResolveAlias(NULL, (AliasHandle)record, &target, &changed);
     if (record) DisposeHandle(record);
@@ -778,19 +797,13 @@ static int resource_read(Handle resource, long offset, long count, char *buffer)
  * content, not the resource's raw bytes. */
 static int string_bounds(Handle resource, long size, long *offset, long *length)
 {
-    unsigned char head[2];
+    unsigned char head;
     long declared;
     *offset = 0; *length = size;
-    if (size == 0) return 0;
-    if (resource_read(resource, 0, 1, (char *)head)) return -1;
-    if (head[0] <= 127) { declared = head[0]; *offset = 1; }
-    else {
-        if (size < 2) return -1;
-        if (resource_read(resource, 1, 1, (char *)head + 1)) return -1;
-        declared = ((long)head[0] << 8) | head[1];
-        *offset = 2;
-    }
-    if (declared > size - *offset) declared = size - *offset;
+    if (size == 0) return -1;
+    if (resource_read(resource, 0, 1, (char *)&head)) return -1;
+    declared = head; *offset = 1;
+    if (declared > size - *offset) return -1;
     *length = declared;
     return 0;
 }
@@ -800,7 +813,8 @@ static void read_vers(Handle resource, short id, const Str255 name, long size,
     static char whole[257];
     char short_utf[400], long_utf[400], short_q[820], long_q[820], name_q[600];
     unsigned char *b = (unsigned char *)whole;
-    int version_major, version_minor, strings_cut = 0, name_cut = 0;
+    int version_major, version_minor, version_bugfix, strings_cut = 0, name_cut = 0;
+    char version[32];
     long short_len, long_len, long_at;
     const char *stage;
     size_t at = 0;
@@ -808,9 +822,12 @@ static void read_vers(Handle resource, short id, const Str255 name, long size,
         fail(out, cap, "RESOURCE_MAP", "Resource read failed.", 0); return;
     }
     version_major = ((b[0] >> 4) & 15) * 10 + (b[0] & 15);
-    version_minor = ((b[1] >> 4) & 15) * 10 + (b[1] & 15);
-    stage = b[2] == 0x20 ? "alpha" : b[2] == 0x40 ? "beta" :
-            b[2] == 0x60 ? "final" : b[2] == 0x80 ? "release" : "development";
+    version_minor = (b[1] >> 4) & 15;
+    version_bugfix = b[1] & 15;
+    if (version_bugfix) snprintf(version, sizeof(version), "%d.%d.%d", version_major, version_minor, version_bugfix);
+    else snprintf(version, sizeof(version), "%d.%d", version_major, version_minor);
+    stage = b[2] == 0x40 ? "alpha" : b[2] == 0x60 ? "beta" :
+            b[2] == 0x80 ? "release" : "development";
     short_len = b[6];
     if (7 + short_len > size) { fail(out, cap, "MALFORMED", "Version resource string bounds are invalid.", 0); return; }
     if (short_len > 120) { short_len = 120; strings_cut = 1; }
@@ -836,8 +853,8 @@ static void read_vers(Handle resource, short id, const Str255 name, long size,
         char fields[256];
         snprintf(fields, sizeof(fields), ",\"id\":%d,\"resource_bytes\":%ld,\"format\":\"vers\","
             "\"content_bytes\":%ld,\"start_byte\":0,\"next_byte\":%ld,\"truncated\":false,"
-            "\"version\":\"%d.%d\",\"stage\":\"%s\",\"prerelease\":%d,\"region\":%d,\"short\":",
-            (int)id, size, size, size, version_major, version_minor, stage,
+            "\"version\":\"%s\",\"stage\":\"%s\",\"prerelease\":%d,\"region\":%d,\"short\":",
+            (int)id, size, size, size, version, stage,
             (int)b[3], (int)((b[4] << 8) | b[5]));
         if (append(out, cap, &at, fields) || append(out, cap, &at, short_q) ||
             append(out, cap, &at, ",\"long\":") || append(out, cap, &at, long_q)) goto limit;

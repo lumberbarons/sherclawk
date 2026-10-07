@@ -659,7 +659,8 @@ static void inspect_checks(void)
     reset();
     file=add(10,"Target.c",0); alias=add(10,"Alias to Target",0);
     files[alias].info.fdType='alis';files[alias].info.fdFlags=0x8000;
-    files[alias].bytes[0]=(char)(file+1);files[alias].size=1;
+    { unsigned char record=(unsigned char)(file+1);
+      add_resource(alias,'alis',0,"",&record,1); files[alias].resource=1; }
     strcpy(call.name,"resolve_alias");strcpy(call.arguments,"{\"path\":\"Alias to Target\"}");
     tools_execute(&call,result,sizeof(result));
     assert(strstr(result,"\"was_changed\":false")&&strstr(result,"\"target_name\":\"Target.c\""));
@@ -667,15 +668,25 @@ static void inspect_checks(void)
     assert(strstr(result,"\"relative_path\":\"Target.c\"")&&strstr(result,"\"outside_workspace\":false"));
     dir=add(10,"Sub",1); file=add(files[dir].id,"Deep.c",0); alias=add(10,"Deep Alias",0);
     files[alias].info.fdType='alis';files[alias].info.fdFlags=0x8000;
-    files[alias].bytes[0]=(char)(file+1);files[alias].size=1;
+    { unsigned char record=(unsigned char)(file+1);
+      add_resource(alias,'alis',0,"",&record,1); files[alias].resource=1; }
     strcpy(call.arguments,"{\"path\":\"Deep Alias\"}");
     tools_execute(&call,result,sizeof(result));assert(strstr(result,"\"relative_path\":\"Sub:Deep.c\""));
     alias=add(10,"External Alias",0);files[alias].info.fdType='alis';files[alias].info.fdFlags=0x8000;
-    files[alias].bytes[0]=(char)0xFE;files[alias].size=1;
+    { unsigned char record=0xFE;
+      add_resource(alias,'alis',0,"",&record,1); files[alias].resource=1; }
     strcpy(call.arguments,"{\"path\":\"External Alias\"}");
     tools_execute(&call,result,sizeof(result));
     assert(strstr(result,"\"target_name\":\"External\"")&&strstr(result,"\"relative_path\":null"));
     assert(strstr(result,"\"outside_workspace\":true"));
+    alias=add(10,"Missing Record",0);files[alias].info.fdFlags=0x8000;
+    { unsigned char record=1; add_resource(alias,'alis',1,"",&record,1);files[alias].resource=1; }
+    strcpy(call.arguments,"{\"path\":\"Missing Record\"}");
+    tools_execute(&call,result,sizeof(result));assert(strstr(result,"\"code\":\"ALIAS\""));
+    alias=add(10,"Empty Record",0);files[alias].info.fdFlags=0x8000;
+    add_resource(alias,'alis',0,"",NULL,0);files[alias].resource=1;
+    strcpy(call.arguments,"{\"path\":\"Empty Record\"}");
+    tools_execute(&call,result,sizeof(result));assert(strstr(result,"ALIAS_LIMIT"));
     strcpy(call.arguments,"{\"path\":\"Target.c\"}");
     tools_execute(&call,result,sizeof(result));assert(strstr(result,"NOT_ALIAS"));
     strcpy(call.arguments,"{\"path\":\"Alias to Target\",\"cursor\":\"x\"}");
@@ -687,7 +698,7 @@ static void inspect_checks(void)
     { const unsigned char str_data[]={5,'H','e','l','l','o'};
       const unsigned char text_data[]="line one\rline two";
       const unsigned char test_data[]={1,0,127,255};
-      const unsigned char vers_data[]={0x01,0x00,0x80,0x00,0x00,0x00,10,'1','.','0','.','2',' ','t','e','s','t',
+      const unsigned char vers_data[]={0x01,0x02,0x80,0x00,0x00,0x00,10,'1','.','0','.','2',' ','t','e','s','t',
           16,'b','u','i','l','t',' ','f','o','r',' ','c','h','e','c','k','s'};
       unsigned char blob[300]; int k; for(k=0;k<300;k++)blob[k]=(unsigned char)(k*7+3);
       add_resource(file,'STR ',128,"greeting",str_data,(long)sizeof(str_data));
@@ -721,6 +732,55 @@ static void inspect_checks(void)
     tools_execute(&call,result,sizeof(result));
     assert(strstr(result,"\"format\":\"text\"")&&strstr(result,"\"text\":\"Hello\""));
     assert(strstr(result,"\"resource_bytes\":6")&&strstr(result,"\"content_bytes\":5")&&strstr(result,"\"truncated\":false"));
+    /* Pascal length is one unsigned byte, including the high-bit range. */
+    { unsigned char long_string[256]; int n;
+      for(n=127;n<=255;n++) {
+        JsonToken tokens[128]; char decoded[300];
+        long_string[0]=(unsigned char)n;memset(long_string+1,'A',(size_t)n);
+        long_string[1]='B';long_string[n]='Z';
+        int r=add_resource(file,'STR ',130,"long",long_string,n+1);
+        strcpy(call.arguments,"{\"path\":\"Res.bin\",\"type\":\"STR \",\"id\":130,\"max_bytes\":256}");
+        tools_execute(&call,result,sizeof(result));
+        assert(json_parse(result,strlen(result),tokens,128)>0);
+        assert(json_string(result,tokens,json_member(result,tokens,0,"text"),decoded,sizeof(decoded))==n);
+        assert(decoded[0]=='B'&&decoded[n-1]=='Z');
+        assert(strstr(result,"\"truncated\":false"));
+        if(n==255) {
+          strcpy(call.arguments,"{\"path\":\"Res.bin\",\"type\":\"STR \",\"id\":130,\"start_byte\":128,\"max_bytes\":128}");
+          tools_execute(&call,result,sizeof(result));
+          assert(strstr(result,"\"content_bytes\":255")&&strstr(result,"\"next_byte\":255"));
+          assert(json_parse(result,strlen(result),tokens,128)>0);
+          assert(json_string(result,tokens,json_member(result,tokens,0,"text"),decoded,sizeof(decoded))==127);
+          assert(decoded[126]=='Z');
+        }
+        resources[r].used=0;
+      }
+      { unsigned char malformed[]={5,'A'};
+        int r=add_resource(file,'STR ',130,"",malformed,sizeof(malformed));
+        strcpy(call.arguments,"{\"path\":\"Res.bin\",\"type\":\"STR \",\"id\":130}");
+        tools_execute(&call,result,sizeof(result));assert(strstr(result,"MALFORMED"));
+        resources[r].used=0;
+        r=add_resource(file,'STR ',130,"",NULL,0);
+        tools_execute(&call,result,sizeof(result));assert(strstr(result,"MALFORMED"));
+        resources[r].used=0;
+        long_string[0]=0;r=add_resource(file,'STR ',130,"",long_string,1);
+        tools_execute(&call,result,sizeof(result));assert(strstr(result,"\"content_bytes\":0"));
+        resources[r].used=0;
+      }
+    }
+    { unsigned char version[]={0x12,0x23,0x20,0,0,0,1,'x',1,'y'};
+      const unsigned char stages[]={0x20,0x40,0x60,0x80};
+      const char *labels[]={"development","alpha","beta","release"};int k;
+      for(k=0;k<4;k++) {
+        char expected[64];int r;
+        version[2]=stages[k];r=add_resource(file,'vers',2,"",version,sizeof(version));
+        strcpy(call.arguments,"{\"path\":\"Res.bin\",\"type\":\"vers\",\"id\":2}");
+        tools_execute(&call,result,sizeof(result));
+        assert(strstr(result,"\"version\":\"12.2.3\""));
+        snprintf(expected,sizeof(expected),"\"stage\":\"%s\"",labels[k]);assert(strstr(result,expected));
+        resources[r].used=0;
+      }
+    }
     strcpy(call.arguments,"{\"path\":\"Res.bin\",\"type\":\"TEST\",\"id\":-2}");
     tools_execute(&call,result,sizeof(result));
     assert(strstr(result,"\"format\":\"hex\"")&&strstr(result,"\"hex\":\"01007FFF\""));
@@ -738,7 +798,7 @@ static void inspect_checks(void)
     assert(strstr(result,"\"truncated\":false")&&strstr(result,"\"next_byte\":300"));
     strcpy(call.arguments,"{\"path\":\"Res.bin\",\"type\":\"vers\",\"id\":1}");
     tools_execute(&call,result,sizeof(result));
-    assert(strstr(result,"\"format\":\"vers\"")&&strstr(result,"\"version\":\"1.0\"")&&strstr(result,"\"stage\":\"release\""));
+    assert(strstr(result,"\"format\":\"vers\"")&&strstr(result,"\"version\":\"1.0.2\"")&&strstr(result,"\"stage\":\"release\""));
     assert(strstr(result,"\"short\":\"1.0.2 test\"")&&strstr(result,"\"long\":\"built for checks\""));
     strcpy(call.arguments,"{\"path\":\"Res.bin\",\"type\":\"STR \",\"id\":999}");
     tools_execute(&call,result,sizeof(result));assert(strstr(result,"NOT_FOUND"));

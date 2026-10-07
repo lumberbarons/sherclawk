@@ -395,7 +395,8 @@ the label, both fork sizes and created/modified catalog dates formatted as
 `YYYY-MM-DD HH:MM:SS` (converted locally, not through International
 Utilities). Folders omit the file-only fields.
 
-`resolve_alias(path)` reads an HFS alias file's record, resolves it, and
+`resolve_alias(path)` reads an HFS alias file's `alis`/0 resource into a
+bounded private copy (at most 32 KiB), resolves it, and
 reports the target's leaf name, kind, existence and whether the record was
 updated. A bounded catalog walk (512 entries, depth 8) finds the target's
 parent so an inside-workspace `relative_path` can be returned;
@@ -418,9 +419,12 @@ name string counts as absent.
 signed id, byte size and name; the cursor is a returned `type:resource`
 pair. `read_resource(path, type, id, start_byte, max_bytes)` reads at most
 256 bytes per call: `TEXT` and `STR ` decode to MacRoman text (a string's
-length prefix is excluded from the page cursor), `vers` decodes to version,
+one-byte Pascal length prefix supports 0–255 bytes and is excluded from the
+page cursor; missing or overstated prefixes are refused), `vers` decodes to version,
 stage, prerelease, region and short/long strings (resources over 256 bytes
-are refused), and every other type returns uppercase hex. Handles open with
+are refused). Versions include the bug-fix component when nonzero, and stages
+use the classic development/alpha/beta/release constants. Every other type
+returns uppercase hex. Handles open with
 automatic loading disabled: sizes come from the map and bytes arrive through
 `ReadPartialResource`, so a resource fork is never loaded whole. Aliases,
 folders, files without resource forks and types that are not four printable
@@ -572,7 +576,7 @@ the saved session; model history is not silently dropped.
 | `tools/write-check.c` | Native create/read/collision, MacRoman/CR/TEXT and size-boundary diagnostic |
 | `tools/search-check.c` | Native recursive search, continuation, MacRoman and discovery/read/edit/read diagnostic |
 | `tools/edit-check.c` | Native guarded replacement, backup, pagination, busy-file, encoding and boundary diagnostic |
-| `tools/inspect-check.c` | Native read-only inspection acceptance with retained alias/resource fixtures |
+| `tools/inspect-check.c` | Native read-only inspection acceptance with retained Finder-format `alis`/0 alias and resource fixtures |
 | `tests/toolbox/`, `tests/test_tools.c` | File Manager model for mutation journal barriers, I/O faults and rename races; read-only model for resource maps, aliases, processes, fonts and text metrics |
 | `tools/scroll-check.c` | Copied actual Toolbox scrollbar diagnostic |
 | `tools/guest-input.py` | Non-overlapping QMP typing and 250ms control clicks through the UTM helper |

@@ -102,23 +102,35 @@ static int make_alias(const char *relative, const FSSpec *target)
     AliasHandle alias = NULL;
     Handle record;
     OSErr err;
-    short ref = -1;
-    long count;
+    short ref = -1, previous = CurResFile();
+    Str255 name = {0};
     if (spec_for(relative, 0, &spec) != fnfErr) return -1;
     err = NewAlias(NULL, target, &alias);
     if (err) return -1;
     record = (Handle)alias;
-    err = FSpCreate(&spec, 'MACS', 'alis', smSystemScript);
-    if (!err) err = FSpOpenDF(&spec, fsWrPerm, &ref);
+    /* Use the real Finder alias layout: an empty data fork and alis/0. */
+    FSpCreateResFile(&spec, 'MACS', 'alis', smSystemScript);
+    err = ResError();
+    if (!err) { ref = FSpOpenResFile(&spec, fsWrPerm); err = ResError(); }
     if (!err) {
-        count = GetHandleSize(record);
-        HLock(record);
-        err = FSWrite(ref, &count, *record);
-        HUnlock(record);
-        if (!err && count != GetHandleSize(record)) err = ioErr;
+        UseResFile(ref);
+        AddResource(record, 'alis', 0, name);
+        err = ResError();
+        if (!err) {
+            WriteResource(record);
+            err = ResError();
+            ReleaseResource(record);
+            record = NULL;
+        }
     }
-    { OSErr closed = ref >= 0 ? FSClose(ref) : 0; if (!err) err = closed; }
+    UseResFile(previous);
+    if (ref >= 0) CloseResFile(ref);
     if (record) DisposeHandle(record);
+    if (!err) {
+        FInfo info;
+        err = FSpGetFInfo(&spec, &info);
+        if (!err) { info.fdFlags |= 0x8000; err = FSpSetFInfo(&spec, &info); }
+    }
     if (!err) err = FlushVol(NULL, spec.vRefNum);
     return err ? -1 : 0;
 }
@@ -249,7 +261,7 @@ int main(void)
         const unsigned char str_data[] = {16, 'H','e','l','l','o',',',' ','r','e','s','o','u','r','c','e','!'};
         const unsigned char text_data[] = "line one\rline two";
         const unsigned char test_data[] = {1, 0, 127, 255};
-        const unsigned char vers_data[] = {0x01,0x00,0x80,0x00,0x00,0x00,10,'1','.','0','.','2',' ','t','e','s','t',
+        const unsigned char vers_data[] = {0x01,0x02,0x80,0x00,0x00,0x00,10,'1','.','0','.','2',' ','t','e','s','t',
             16,'b','u','i','l','t',' ','f','o','r',' ','c','h','e','c','k','s'};
         unsigned char blob[300];
         for (i = 0; i < 300; i++) blob[i] = (unsigned char)(i * 7 + 3);
@@ -311,7 +323,7 @@ int main(void)
     check(strstr(result, "\"truncated\":false") && strstr(result, "\"next_byte\":300"), "large resource continuation");
     snprintf(call.arguments, sizeof(call.arguments), "{\"path\":\"%s\",\"type\":\"vers\",\"id\":1}", resource_path);
     execute();
-    check(strstr(result, "\"format\":\"vers\"") && strstr(result, "\"version\":\"1.0\"") &&
+    check(strstr(result, "\"format\":\"vers\"") && strstr(result, "\"version\":\"1.0.2\"") &&
         strstr(result, "\"stage\":\"release\"") && strstr(result, "\"short\":\"1.0.2 test\"") &&
         strstr(result, "\"long\":\"built for checks\""), "version resource decoded");
     snprintf(call.arguments, sizeof(call.arguments), "{\"path\":\"%s\",\"type\":\"STR \",\"id\":999}", resource_path);
