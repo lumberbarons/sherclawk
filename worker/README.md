@@ -91,10 +91,12 @@ the job's actual inputs, claim, logs and artifacts before manual recovery.
 
 Publish the LF `worker.pl` data fork to the AFP share under a fresh filename
 if replacing a previously read script (AFP caching was observed in template
-work). Do not restart netatalk. In MacRelix:
+work); the commands here and in `VERIFIED.md` use the published copy
+`worker05.pl`, so substitute the filename you actually published. Do not
+restart netatalk. In MacRelix:
 
 ```sh
-perl -w /Volumes/Retro68/Worker01/worker.pl /Volumes/Retro68/Worker01/jobs
+perl -w /Volumes/Retro68/Worker01/worker05.pl /Volumes/Retro68/Worker01/jobs
 ```
 
 Append `--once` to process one scan and exit. Normal mode polls every second;
