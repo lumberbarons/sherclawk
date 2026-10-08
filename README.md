@@ -512,11 +512,21 @@ synchronous edit already executing.
 
 ## Controls, limits and sessions
 
-The sidebar places the subtitle below Sherclawk's title and shows current
-model-history usage below the artwork as used/capacity KiB and a percentage.
-Usage updates during runs and resets with New Chat or a successful handoff.
+The compact mascot header leaves the conversation pane the full window width.
+The message box is one text line shorter, with Command-Return to send shown
+beside its label. Tab switches between the message and conversation panes.
+New Chat and Save Handoff are grouped at the left; Stop and Send are at the
+right, with a native default-button outline on Send while it is available.
 
-Directly under that indicator, a usage line reports provider accounting.
+A recessed two-row information strip below the message box groups status and
+the read-only model name above history, context and cost. Choose the model in
+**Edit > Preferences**; both sends and handoffs use that saved preference.
+Long labels are shortened to fit their columns; click the status row while
+idle to read the full status message. The status lamp is green while idle and amber during
+a run. History shows used/capacity KiB, a percentage and a small usage meter;
+it updates during runs and resets with New Chat or a successful handoff.
+
+The bottom row also reports provider accounting.
 `Context: 45.2k tokens (4%)` is the most recent model round's
 `usage.prompt_tokens` (cached input included) and its rounded share of that
 model's context window; before the first reply it reads `Context: -`, and the
@@ -534,8 +544,8 @@ The context window comes from the public
 model per launch, with a 30-second deadline and the same 64 KiB response
 bound. Any HTTP error, timeout, oversized body, or response beyond the
 4096-token JSON parser cap silently omits the percentage and proceeds with the
-send; there is no retry. The model field stays editable during the lookup; if
-it changes, the send is held and the typed prompt is kept. Stop during the
+send; there is no retry. Preferences are unavailable during a run, including
+the context lookup. Stop during the
 lookup leaves no session record and keeps the prompt; the stopped exchange
 continues to a terminal network state before it is closed, so a send in the
 next few seconds may briefly report that the lookup is still closing.
@@ -550,7 +560,7 @@ results, and requests another model response until it gets a final answer.
 Stop or Command-Period prevents new execution and records interrupted results
 for pending calls; completed results remain in history. New Chat starts a fresh session.
 
-**Save Handoff**, right-aligned beside the bottom controls, is also available
+**Save Handoff**, beside New Chat in the bottom controls, is also available
 as **File > Save Handoff (Command-H)**. The button and menu item are disabled
 during runs and when there is no conversation to summarize. It summarizes a
 stopped or completed conversation with a separate, tool-free model request. This still works when
