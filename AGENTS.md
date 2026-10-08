@@ -37,6 +37,8 @@ cp config.example.h config.local.h  # optional local config; gitignored
 ./build.sh [SherclawkFoo_APPL]      # default target Sherclawk_APPL; output in build/
 ```
 
+- All code changes must pass a Docker-based `./build.sh` before a PR is created:
+  the host checks do not compile `main.c` or the other Toolbox-only sources.
 - `build.sh` runs the `ghcr.io/autc04/retro68` image, swaps in the Universal
   Interfaces, stages Certainly and applies `patches/*.patch` to the staged copy
   (the upstream clone stays pristine), then builds with CMake.
