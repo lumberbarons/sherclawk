@@ -598,11 +598,12 @@ History buffers are static: the app allocates their full capacity at launch,
 not incrementally as messages arrive. With handoff enabled, each additional
 history byte costs roughly four RAM bytes (current history, candidate history,
 JSON request, and HTTP request). Per-response scratch is bounded separately.
-The 256 KiB build has 2,423,608 bytes (2.31 MiB) of linked code/static data;
+The 256 KiB build has 2,454,552 bytes (2.34 MiB) of linked code/static data
+(`powerpc-apple-macos-size build/Sherclawk.xcoff`: text, data and bss);
 this excludes dynamic TLS/UI allocations and the stack. Its `SIZE` resource
 still requests 8 MiB preferred / 4 MiB minimum. A 512 KiB history would raise
-that baseline to roughly 3.31 MiB, making the 4 MiB minimum tight; 1 MiB history
-would need roughly 5.31 MiB before dynamic allocations, and 2 MiB would exceed
+that baseline to roughly 3.34 MiB, making the 4 MiB minimum tight; 1 MiB history
+would need roughly 5.34 MiB before dynamic allocations, and 2 MiB would exceed
 the current 8 MiB preferred allocation. Re-measure and raise `SIZE` before such
 increases. Larger histories also upload more bytes and consume more model input
 tokens on every round; byte capacity is not a guarantee of provider context
