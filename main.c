@@ -1204,14 +1204,15 @@ static void RenderToolCall(const AgentCall *call, char *out, size_t cap)
     AppendText(out, cap, ")");
 }
 
-/* One tool message: with the toggle off, the plain result as before; with it
- * on, the call header, the result indented and the call's journal events. */
+/* One tool message: the compact call line always; with the display toggle on,
+ * the result indented under it and the call's journal events follow. */
 static void ShowToolResult(const AgentCall *call, const char *label, const char *text)
 {
     static char block[4096];
     char header[400];
-    if (!gPrefs.show_tool_debug || !call) { ShowMessage(label, text); return; }
+    if (!call) { ShowMessage(label, text); return; }
     RenderToolCall(call, header, sizeof(header));
+    if (!gPrefs.show_tool_debug) { ShowMessage(NULL, header); return; }
     snprintf(block, sizeof(block), "%s\r  \xC2\xBB %s\r  journal: %s",
         header, text, gToolEvents[0] ? gToolEvents : "(none)");
     ShowMessage(NULL, block);
