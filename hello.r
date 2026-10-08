@@ -75,7 +75,7 @@ resource 'MENU' (130, "Edit") {
  * limits 3. main.c seeds every field from the live values and creates the
  * Effort popup on the user item at [9]. */
 resource 'DLOG' (128, "Preferences") {
-    {64, 40, 434, 496},
+    {44, 40, 486, 496},
     movableDBoxProc,
     visible,
     noGoAway,
@@ -87,26 +87,26 @@ resource 'DLOG' (128, "Preferences") {
 
 resource 'DITL' (128, "Preferences") {
     {
-        /* [1] OK */                 {350, 282, 370, 344}, Button { enabled, "OK" };
-        /* [2] Cancel */             {350, 352, 370, 424}, Button { enabled, "Cancel" };
-        /* [3] Model */              {16, 16, 32, 80}, StaticText { disabled, "Model:" };
-        /* [4] */                    {14, 84, 32, 344}, EditText { enabled, "                                                                                                                                                                                                                                                               " };
-        /* [5] Find */               {14, 352, 32, 424}, Button { enabled, "Find" };
-        /* [6] Results (drawn) */    {34, 16, 158, 424}, UserItem { enabled };
-        /* [7] Hint */               {160, 16, 174, 424}, StaticText { disabled, "Loading the popular models..." };
-        /* [8] Effort */             {176, 16, 192, 80}, StaticText { disabled, "Effort:" };
-        /* [9] Effort popup */       {176, 84, 194, 262}, UserItem { enabled };
-        /* [10] API key */           {200, 16, 216, 80}, StaticText { disabled, "API key:" };
-        /* [11] */                   {198, 84, 216, 424}, EditText { enabled, "                                                                                                                                                                                                                                                               " };
-        /* [12] Workspace */         {226, 16, 242, 80}, StaticText { disabled, "Workspace:" };
-        /* [13] */                   {224, 84, 242, 424}, EditText { enabled, "                                                                                                                                                                                                " };
-        /* [14] Rounds */            {252, 16, 268, 140}, StaticText { disabled, "Max rounds:" };
-        /* [15] */                   {250, 144, 268, 224}, EditText { enabled, "128" };
-        /* [16] Tools */             {278, 16, 294, 140}, StaticText { disabled, "Max tool calls:" };
-        /* [17] */                   {276, 144, 294, 224}, EditText { enabled, "128" };
-        /* [18] Debug toggle */      {300, 16, 316, 32}, CheckBox { enabled, "" };
-        /* [19] Debug label */       {300, 36, 316, 424}, StaticText { disabled, "Show tool debug in Conversation" };
-        /* [20] Stored hint */       {322, 16, 338, 424}, StaticText { disabled, "Stored in System Folder:Preferences. Limits apply to each run." };
+        /* [1] OK */                 {408, 282, 428, 344}, Button { enabled, "OK" };
+        /* [2] Cancel */             {408, 352, 428, 424}, Button { enabled, "Cancel" };
+        /* [3] Model */              {16, 16, 32, 100}, StaticText { disabled, "Model:" };
+        /* [4] */                    {12, 104, 30, 344}, EditText { enabled, "                                                                                                                                                                                                                                                               " };
+        /* [5] Find */               {12, 352, 30, 424}, Button { enabled, "Find" };
+        /* [6] Results (drawn) */    {38, 16, 194, 424}, UserItem { enabled };
+        /* [7] Hint */               {198, 16, 212, 424}, StaticText { disabled, "Loading the popular models..." };
+        /* [8] Effort */             {222, 16, 238, 100}, StaticText { disabled, "Effort:" };
+        /* [9] Effort popup */       {220, 104, 240, 282}, UserItem { enabled };
+        /* [10] API key */           {252, 16, 268, 100}, StaticText { disabled, "API key:" };
+        /* [11] */                   {250, 104, 268, 424}, EditText { enabled, "                                                                                                                                                                                                                                                               " };
+        /* [12] Workspace */         {280, 16, 296, 100}, StaticText { disabled, "Workspace:" };
+        /* [13] */                   {278, 104, 296, 424}, EditText { enabled, "                                                                                                                                                                                                " };
+        /* [14] Rounds */            {308, 16, 324, 140}, StaticText { disabled, "Max rounds:" };
+        /* [15] */                   {306, 144, 324, 224}, EditText { enabled, "128" };
+        /* [16] Tools */             {336, 16, 352, 140}, StaticText { disabled, "Max tool calls:" };
+        /* [17] */                   {334, 144, 352, 224}, EditText { enabled, "128" };
+        /* [18] Debug toggle */      {364, 16, 380, 32}, CheckBox { enabled, "" };
+        /* [19] Debug label */       {364, 36, 380, 424}, StaticText { disabled, "Show tool debug in Conversation" };
+        /* [20] Stored hint */       {388, 16, 404, 424}, StaticText { disabled, "Stored in System Folder:Preferences. Limits apply to each run." };
     }
 };
 

@@ -498,7 +498,7 @@ enum {
     kPrefsFetchPopular,    /* the one auto-load per launch */
     kPrefsFetchSearch,     /* Find: list the matches for the typed text */
     kPrefsFetchValidate,   /* OK: the typed id must resolve exactly */
-    kPrefsRowHeight = 12,
+    kPrefsRowHeight = 15,
     kPrefsRowsMax = AGENT_MODEL_ROWS_MAX
 };
 
@@ -684,15 +684,11 @@ static void PrefsDrawRows(PrefsDialog *d)
     for (i = 0; i < d->visible_count; i++) {
         const AgentModelRow *row = &d->rows[d->visible[i]];
         Rect r = PrefsRowRect(&box, i);
-        char label[CHAT_MODEL_CAP + AGENT_MODEL_NAME_CAP + 4];
         if (d->visible[i] == d->selected) {
             RGBColor shade = { 0xDDDD, 0xDDDD, 0xDDDD };
             RGBForeColor(&shade); PaintRect(&r); ForeColor(blackColor);
         }
-        if (row->info.name[0] && strcmp(row->info.name, row->id))
-            snprintf(label, sizeof(label), "%s - %s", row->info.name, row->id);
-        else snprintf(label, sizeof(label), "%s", row->id);
-        DrawFittedLabel(&r, label, truncMiddle);
+        DrawFittedLabel(&r, row->id, truncMiddle);
     }
 }
 
