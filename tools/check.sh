@@ -19,6 +19,11 @@ fi
     "$HERE/vendor/http.c" -o "$HERE/build/tests/test-core"
 "$HERE/build/tests/test-core"
 
+"${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror \
+    -fsanitize=address,undefined -fno-omit-frame-pointer -I"$HERE" \
+    "$HERE/tests/test_timing.c" "$HERE/timing.c" -o "$HERE/build/tests/test-timing"
+"$HERE/build/tests/test-timing"
+
 # Preferences parser/formatter: pure code, no Toolbox stubs needed.
 "${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror \
     -fsanitize=address,undefined -fno-omit-frame-pointer -DSHERCLAWK_APP=1 \
