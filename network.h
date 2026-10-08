@@ -13,6 +13,8 @@ typedef struct {
     char error[256];
 } ChatNetwork;
 int network_start(ChatNetwork *n, const char *request, size_t len);
+int network_start_at(ChatNetwork *n, const char *host, unsigned short port,
+                     const char *request, size_t len);
 int network_step(ChatNetwork *n);
 void network_close(ChatNetwork *n);
 #endif

@@ -738,3 +738,11 @@ a unique fixture folder; its log includes flushed mutation recovery records.
 
 MIT, see [LICENSE](LICENSE). Bundled and fetched third-party code is listed in
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+## Remote MCP development
+
+Single-server remote MCP support is under implementation in #76. The current
+code provides a host-tested protocol core and the `SherclawkMCPCheck` native
+Tavily diagnostic; the application does not yet expose MCP tools or an MCP
+configuration editor. See [the diagnostic instructions and remaining acceptance
+gates](docs/mcp.md). Live acceptance uses Tavily only.

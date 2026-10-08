@@ -32,6 +32,15 @@ fi
     -o "$HERE/build/tests/test-preferences"
 "$HERE/build/tests/test-preferences"
 
+# MCP pure configuration/protocol/streaming fixtures, independent of keys.
+"${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" \
+    -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -I"$HERE" -I"$HERE/vendor" \
+    "$HERE/tests/test_mcp.c" "$HERE/mcp_config.c" "$HERE/mcp_protocol.c" \
+    "$HERE/mcp_stream.c" "$HERE/json.c" "$HERE/text.c" "$HERE/vendor/http.c" \
+    -o "$HERE/build/tests/test-mcp"
+"$HERE/build/tests/test-mcp"
+
 # The network test needs a Certainly clone (fetch-only, see README).
 CERTAINLY_DIR="${CERTAINLY_DIR:-$HERE/../Certainly}"
 if [ -d "$CERTAINLY_DIR/include" ]; then
@@ -42,6 +51,14 @@ if [ -d "$CERTAINLY_DIR/include" ]; then
         "$HERE/tests/test_network.c" "$HERE/network.c" "$HERE/vendor/http.c" \
         -o "$HERE/build/tests/test-network"
     "$HERE/build/tests/test-network"
+    "${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" \
+        -fsanitize=address,undefined -fno-omit-frame-pointer \
+        -I"$HERE" -I"$HERE/vendor" -I"$CERTAINLY_DIR/include" \
+        -I"$HERE/vendor/host-tls/shim" \
+        "$HERE/tests/test_mcp_client.c" "$HERE/mcp_client.c" \
+        "$HERE/mcp_config.c" "$HERE/mcp_protocol.c" "$HERE/mcp_stream.c" \
+        "$HERE/json.c" "$HERE/vendor/http.c" -o "$HERE/build/tests/test-mcp-client"
+    "$HERE/build/tests/test-mcp-client"
 else
     echo "skip: network test needs a Certainly clone at $CERTAINLY_DIR" >&2
     echo "      git clone --recursive --depth 1 https://github.com/minorbug/certainly.git Certainly" >&2
