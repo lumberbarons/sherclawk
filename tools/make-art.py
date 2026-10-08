@@ -3,7 +3,7 @@
 
 Stdlib-only PNG decoding avoids a runtime imaging dependency. Rez output is
 build data, not a checked-in bitmap. Pixel colors use the classic 6x6x6 cube
-for Finder icons; the window uses full RGB with transparency composited white.
+for Finder icons; window art uses full RGB composited over white or Platinum gray.
 """
 import argparse
 import struct
@@ -131,6 +131,13 @@ def main():
                       (g * a + 255 * (255 - a)) // 255,
                       (b * a + 255 * (255 - a)) // 255))
     out += resource('sART', 128, art)
+    # Native-size header art avoids runtime resampling of the large mascot.
+    art = struct.pack('>HH', 52, 52)
+    for r, g, b, a in scale(w, h, rgba, 52):
+        art += bytes((0, (r * a + 221 * (255 - a)) // 255,
+                      (g * a + 221 * (255 - a)) // 255,
+                      (b * a + 221 * (255 - a)) // 255))
+    out += resource('sART', 129, art)
     # Raw resource bytes avoid toolchain-specific BNDL/FREF Rez templates.
     out += resource('ShCk', 0, b'\0')
     out += resource('FREF', 128, b'APPL\0\0\0')
@@ -140,7 +147,7 @@ def main():
     out += resource('BNDL', 128, bundle)
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     Path(args.output).write_text(out)
-    print(f'Generated Finder icon family and 156px window artwork: {args.output}')
+    print(f'Generated Finder icons and 156px/52px window artwork: {args.output}')
 
 
 if __name__ == '__main__':

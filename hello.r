@@ -123,3 +123,23 @@ resource 'DITL' (129, "Preferences Error") {
         /* [3] Icon */ {12, 12, 44, 44},    Icon { disabled, 2 };
     }
 };
+
+/* Full status text on demand, without adding UI messages to the transcript. */
+resource 'ALRT' (129, "Status") {
+    {80, 60, 220, 580},
+    130,
+    {
+        OK, visible, silent,
+        OK, visible, silent,
+        OK, visible, silent,
+        OK, visible, silent
+    },
+    alertPositionMainScreen
+};
+
+resource 'DITL' (130, "Status") {
+    {
+        /* [1] OK */   {108, 440, 128, 500}, Button { enabled, "OK" };
+        /* [2] Text */ {14, 18, 96, 500},    StaticText { disabled, "^0" };
+    }
+};

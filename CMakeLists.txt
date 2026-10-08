@@ -46,3 +46,8 @@ foreach(app SherclawkSelfBuildStopCheck SherclawkSelfBuildCheck SherclawkNativeB
         target_compile_definitions(${app} PRIVATE SHERCLAWK_HAS_LOCAL_CONFIG=1)
     endif()
 endforeach()
+
+# Main-window controls use the OS 9 Appearance Manager's default-button ring.
+foreach(app Sherclawk SherclawkScrollCheck SherclawkHandoffCheck)
+    target_link_libraries(${app} AppearanceLib)
+endforeach()
