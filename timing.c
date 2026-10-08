@@ -25,6 +25,12 @@ void timing_set_bytes(RoundTiming *t, unsigned long up, unsigned long down)
     t->up = up; t->down = down;
 }
 
+void timing_set_tokens(RoundTiming *t, long completion, long reasoning, long limit)
+{
+    if (completion < 0) return;
+    t->completion = completion; t->reasoning = reasoning; t->limit = limit; t->tokens_seen = 1;
+}
+
 int timing_round_format(const RoundTiming *t, const char *outcome, char *out, size_t cap)
 {
     size_t used;
@@ -41,7 +47,20 @@ int timing_round_format(const RoundTiming *t, const char *outcome, char *out, si
         if (n < 0 || (size_t)n >= cap - used) return -1;
         used += (size_t)n;
     }
-    n = snprintf(out + used, cap - used, " up=%lu down=%lu end=%s", t->up, t->down, outcome);
+    n = snprintf(out + used, cap - used, " up=%lu down=%lu", t->up, t->down);
+    if (n < 0 || (size_t)n >= cap - used) return -1;
+    used += (size_t)n;
+    if (t->tokens_seen) {
+        n = snprintf(out + used, cap - used, " out=%ld/%ld", t->completion, t->limit);
+        if (n < 0 || (size_t)n >= cap - used) return -1;
+        used += (size_t)n;
+        if (t->reasoning >= 0) {
+            n = snprintf(out + used, cap - used, " reasoning=%ld", t->reasoning);
+            if (n < 0 || (size_t)n >= cap - used) return -1;
+            used += (size_t)n;
+        }
+    }
+    n = snprintf(out + used, cap - used, " end=%s", outcome);
     if (n < 0 || (size_t)n >= cap - used) return -1;
     return (int)(used + (size_t)n);
 }

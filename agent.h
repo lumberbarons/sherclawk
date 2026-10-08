@@ -10,6 +10,9 @@
 #define AGENT_TEXT_CAP 16384
 #define AGENT_TURN_MAX 32
 #define AGENT_TOOL_MAX 64
+/* Completion budget per agent request, reasoning included. */
+#define AGENT_MAX_TOKENS 3072
+#define AGENT_HANDOFF_MAX_TOKENS 1536
 /* Display-grade cost accumulator clamp, in millionths of a US dollar. */
 #define AGENT_COST_MICROS_MAX 9000000000000000LL
 
@@ -20,7 +23,7 @@ typedef struct {
     char text[AGENT_TEXT_CAP];
     AgentCall calls[AGENT_CALL_MAX];
     size_t used;
-    int messages, count, next, rounds, tool_count, active, limited;
+    int messages, count, next, rounds, tool_count, active, limited, truncated;
     long long cost_micros;
     long context_tokens;
     int cost_seen, context_seen;
@@ -37,7 +40,12 @@ int agent_handoff_response(const char *body, size_t len, int status, char *summa
                            size_t cap, char *error, size_t error_cap);
 int agent_handoff_seed(Agent *candidate, const char *summary, const char *source,
                        const char *path);
-/* Complete responses are recorded before any tool may execute. */
+/* Complete responses are recorded before any tool may execute. A reply cut off
+ * at the output limit with no usable text, or with tool calls, executes
+ * nothing: it is discarded, a user notice telling the model to retry smaller
+ * is recorded instead, and the run stays active with `truncated` set and no
+ * pending calls (the caller sends the next request). Text-only cut-offs end the
+ * run with `limited` set. */
 int agent_response(Agent *a, const char *body, size_t len, int status, char *error, size_t cap);
 int agent_tool_result(Agent *a, const char *result, char *error, size_t cap);
 int agent_stop(Agent *a, const char *reason);
@@ -46,5 +54,8 @@ int agent_stop(Agent *a, const char *reason);
  * data.endpoints[].context_length, or -1. */
 void agent_usage_absorb(Agent *a, const char *body, size_t len);
 long agent_context_limit(const char *body, size_t len);
+/* usage.completion_tokens, and reasoning_tokens (-1 when not reported). Returns
+ * 0 when the completion count is present, -1 otherwise. */
+int agent_usage_completion(const char *body, size_t len, long *completion, long *reasoning);
 const char *agent_tool_schemas(void);
 #endif

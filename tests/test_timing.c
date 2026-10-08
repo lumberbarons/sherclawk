@@ -23,6 +23,24 @@ static void test_full_round(void)
         "done=620 close=740 up=4096 down=812 end=ok"));
 }
 
+static void test_token_counts(void)
+{
+    RoundTiming t; char line[256];
+    memset(&t, 0, sizeof(t));
+    timing_round_begin(&t, 2, 0);
+    timing_set_bytes(&t, 100, 30347);
+    timing_set_tokens(&t, -1, -1, 3072);   /* not reported: line unchanged */
+    assert(timing_round_format(&t, "abort", line, sizeof(line)) > 0 && !strstr(line, "out="));
+    timing_set_tokens(&t, 3072, 3050, 3072);
+    assert(timing_round_format(&t, "abort", line, sizeof(line)) > 0);
+    assert(strstr(line, " up=100 down=30347 out=3072/3072 reasoning=3050 end=abort"));
+    timing_set_tokens(&t, 812, -1, 3072);  /* provider does not split reasoning out */
+    assert(timing_round_format(&t, "ok", line, sizeof(line)) > 0);
+    assert(strstr(line, " down=30347 out=812/3072 end=ok") && !strstr(line, "reasoning"));
+    timing_round_begin(&t, 3, 0);          /* a new round forgets the last counts */
+    assert(timing_round_format(&t, "ok", line, sizeof(line)) > 0 && !strstr(line, "out="));
+}
+
 static void test_unreached_phases_and_first_mark_wins(void)
 {
     RoundTiming t; char line[256];
@@ -76,6 +94,7 @@ int main(void)
 {
     test_full_round();
     test_unreached_phases_and_first_mark_wins();
+    test_token_counts();
     test_handoff_and_tick_wrap();
     test_idle_and_small_buffers();
     test_tool_line_sanitises_name();

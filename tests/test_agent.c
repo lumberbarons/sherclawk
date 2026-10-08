@@ -100,6 +100,57 @@ static void usage(void)
     assert(candidate.cost_micros == 34567 && candidate.cost_seen);
     assert(!candidate.context_seen && !candidate.context_tokens);
 }
+static const char *reasoning_only =
+    "{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"role\":\"assistant\",\"content\":null,\"reasoning\":\"Let me think...\"}}],"
+    "\"usage\":{\"prompt_tokens\":900,\"completion_tokens\":3072,\"cost\":0.01,"
+    "\"completion_tokens_details\":{\"reasoning_tokens\":3072}}}";
+static const char *cut_mid_call =
+    "{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"role\":\"assistant\",\"content\":\"Editing.\","
+    "\"tool_calls\":[{\"id\":\"c1\",\"type\":\"function\",\"function\":{\"arguments\":\"{\\\"path\\\":\"}}]}}]}";
+static const char *partial_text =
+    "{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"role\":\"assistant\",\"content\":\"Half an ans\"}}]}";
+/* A reply that hits the output limit is discarded and the model is told, so the
+ * run continues instead of stopping; nothing in a cut-off reply ever executes. */
+static void truncation(void)
+{
+    size_t used;
+    begin(); call("length"); used = a.used;
+    assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
+    assert(a.truncated && a.limited && a.active && !a.count && !a.next);
+    assert(a.rounds == 1 && !a.tool_count && records == 2 && a.messages == 2);
+    assert(a.used > used && !strstr(a.history, "get_environment") && strstr(a.history, "cut off"));
+    assert(agent_request(&a, "model", req, sizeof(req)) > 0 && strstr(req, "output token limit"));
+    /* The retry is an ordinary round and clears the flag. */
+    call("tool_calls");
+    assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
+    assert(!a.truncated && !a.limited && a.count == 1 && a.rounds == 2);
+    /* The logged failure: reasoning consumed the budget, so no call or text arrived. */
+    begin(); used = a.used;
+    assert(!agent_response(&a, reasoning_only, strlen(reasoning_only), 200, error, sizeof(error)));
+    assert(a.truncated && a.active && !a.count && a.used > used && !strstr(a.history, "think"));
+    assert(a.cost_seen && a.cost_micros == 10000 && a.context_tokens == 900);
+    /* A call cut off mid-structure is the truncation, not a protocol error... */
+    begin();
+    assert(!agent_response(&a, cut_mid_call, strlen(cut_mid_call), 200, error, sizeof(error)));
+    assert(a.truncated && !a.count && !*a.text && !strstr(a.history, "Editing"));
+    /* ...but only at the limit: the same shape under "stop" is still rejected. */
+    begin(); used = a.used;
+    {
+        char stopped[1024], *at = strstr(strcpy(stopped, cut_mid_call), "length");
+        memcpy(at, "stop  ", 6);
+        assert(agent_response(&a, stopped, strlen(stopped), 200, error, sizeof(error)) == -1);
+        assert(!a.truncated && a.used == used);
+    }
+    /* Visible text with no call is a partial answer: shown, run ends. */
+    begin();
+    assert(!agent_response(&a, partial_text, strlen(partial_text), 200, error, sizeof(error)));
+    assert(a.limited && !a.truncated && !a.active && !strcmp(a.text, "Half an ans"));
+    /* The notice must be journaled; if it cannot be, nothing advances. */
+    begin(); call("length"); used = a.used; fail_record = 1;
+    assert(agent_response(&a, response, strlen(response), 200, error, sizeof(error)) == -1);
+    assert(a.used == used && !a.truncated && !a.rounds && strstr(error, "truncation notice"));
+    fail_record = 0;
+}
 static void contexts(void)
 {
     static const char *body =
@@ -143,8 +194,7 @@ int main(void)
     used = a.used;
     assert(agent_response(&a, "{}", 2, 503, error, sizeof(error)) == -1 && a.used == used);
     assert(!agent_stop(&a, "network failed") && a.used == used);
-    begin(); call("length"); used = a.used;
-    assert(agent_response(&a, response, strlen(response), 200, error, sizeof(error)) == -1 && a.used == used && strstr(error, "token limit"));
+    truncation();
     begin(); call("stop");
     assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)) && a.count == 1);
     assert(!agent_stop(&a, "user stopped"));
@@ -165,13 +215,15 @@ int main(void)
     /* A truncated mutation is rejected; Stop pairs an unexecuted write with
      * an interrupted result instead of sending it to the executor. */
     begin(); named_call("length", "write_text", "{\"path\":\"new.c\",\"text\":\"source\"}");
-    assert(agent_response(&a, response, strlen(response), 200, error, sizeof(error)) == -1 && !a.count);
+    assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)) && !a.count && a.truncated);
+    assert(!strstr(a.history, "new.c") && !strstr(a.history, "\"tool_calls\""));
     named_call("tool_calls", "write_text", "{\"path\":\"new.c\",\"text\":\"source\"}");
     assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
     assert(!strcmp(a.calls[0].name, "write_text") && !agent_stop(&a, "Stop before create"));
     assert(a.next == a.count && strstr(a.history, "interrupted") && !a.active);
     begin(); named_call("length", "edit_text", "{\"path\":\"old.c\",\"expected_revision\":\"full-x\",\"old_text\":\"a\",\"new_text\":\"b\"}");
-    assert(agent_response(&a, response, strlen(response), 200, error, sizeof(error)) == -1 && !a.count);
+    assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)) && !a.count && a.truncated);
+    assert(!strstr(a.history, "full-x") && !strstr(a.history, "\"tool_calls\""));
     named_call("tool_calls", "edit_text", "{\"path\":\"old.c\",\"expected_revision\":\"full-x\",\"old_text\":\"a\",\"new_text\":\"b\"}");
     assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
     assert(!strcmp(a.calls[0].name, "edit_text") && !agent_stop(&a, "Stop before edit"));
@@ -236,6 +288,19 @@ int main(void)
     assert(text_to_macroman_strict("\xf0\x9f\xa6\x80", req, sizeof(req)) == -1);
     assert(text_to_macroman_strict("caf\xc3\xa9", req, sizeof(req)) == 4);
     usage();
+    {
+        long completion, reasoning;
+        const char *with_details = "{\"usage\":{\"completion_tokens\":1685,\"completion_tokens_details\":{\"reasoning_tokens\":1500}}}";
+        const char *plain = "{\"usage\":{\"completion_tokens\":30}}";
+        assert(!agent_usage_completion(with_details, strlen(with_details), &completion, &reasoning) && completion == 1685 && reasoning == 1500);
+        assert(!agent_usage_completion(plain, strlen(plain), &completion, &reasoning) && completion == 30 && reasoning == -1);
+        assert(agent_usage_completion("{\"usage\":{}}", 13, &completion, &reasoning) == -1 && completion == -1);
+        assert(agent_usage_completion("{}", 2, &completion, &reasoning) == -1);
+        assert(agent_usage_completion("nope", 4, &completion, &reasoning) == -1);
+    }
+    /* The wire request carries the named cap, so docs and code share one value. */
+    begin();
+    assert(agent_request(&a, "model", req, sizeof(req)) > 0 && strstr(req, "\"max_tokens\":3072,"));
     contexts();
     puts("PASS agent tools, usage accounting, history, truncation, Stop, persistence barriers and bounds");
     return 0;

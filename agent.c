@@ -11,6 +11,9 @@
  * its token indices: agent_response absorbs only after its own use has ended. */
 static JsonToken tokens[4096];
 
+#define STRINGIFY_(x) #x
+#define STRINGIFY(x) STRINGIFY_(x)
+
 static const char policy[] =
     "You are Sherclawk, a native assistant running on classic Mac OS 9.2.2. "
     "Inspect files using the actual tools. search_text locates literal matches; follow its cursor to completion and read matches before editing. write_text creates new plain text files; "
@@ -140,7 +143,7 @@ int agent_begin(Agent *a, const char *prompt, char *error, size_t cap)
         record(a, "user", message)) {
         snprintf(error, cap, "Session/history unavailable. Start a new session."); return -1;
     }
-    a->rounds = a->tool_count = a->count = a->next = 0;
+    a->rounds = a->tool_count = a->count = a->next = a->truncated = 0;
     a->active = 1; return 0;
 }
 int agent_request(const Agent *a, const char *model, char *out, size_t cap)
@@ -148,7 +151,7 @@ int agent_request(const Agent *a, const char *model, char *out, size_t cap)
     size_t at = 0;
     if (!a->active || a->next < a->count || !*model) return -1;
     if (append(out, cap, &at, "{\"model\":") || quote(out, cap, &at, model) ||
-        append(out, cap, &at, ",\"stream\":false,\"max_tokens\":3072,\"parallel_tool_calls\":false,\"messages\":[{\"role\":\"system\",\"content\":") ||
+        append(out, cap, &at, ",\"stream\":false,\"max_tokens\":" STRINGIFY(AGENT_MAX_TOKENS) ",\"parallel_tool_calls\":false,\"messages\":[{\"role\":\"system\",\"content\":") ||
         quote(out, cap, &at, policy) || append(out, cap, &at, "},") ||
         append(out, cap, &at, a->history) || append(out, cap, &at, "],\"tools\":") ||
         append(out, cap, &at, agent_tool_schemas()) || append(out, cap, &at, "}")) return -1;
@@ -167,7 +170,7 @@ int agent_handoff_request(const Agent *a, const char *model, char *out, size_t c
     size_t at = 0;
     if (a->active || a->next < a->count || !a->messages || !*model) return -1;
     if (append(out, cap, &at, "{\"model\":") || quote(out, cap, &at, model) ||
-        append(out, cap, &at, ",\"stream\":false,\"max_tokens\":1536,\"messages\":[{\"role\":\"system\",\"content\":") ||
+        append(out, cap, &at, ",\"stream\":false,\"max_tokens\":" STRINGIFY(AGENT_HANDOFF_MAX_TOKENS) ",\"messages\":[{\"role\":\"system\",\"content\":") ||
         quote(out, cap, &at, instructions) || append(out, cap, &at, "},") ||
         append(out, cap, &at, a->history) ||
         append(out, cap, &at, ",{\"role\":\"user\",\"content\":\"Write the handoff summary now.\"}]}")) return -1;
@@ -217,13 +220,32 @@ int agent_handoff_response(const char *body, size_t len, int status, char *summa
     if (json_string(body, tokens, json_member(body, tokens, msg, "content"), summary, cap) <= 0) return -1;
     error[0] = 0; return 0;
 }
+/* The reply hit the output limit before it could be used. Nothing in it is
+ * recorded or run: the model is told, as a user message, that its last reply
+ * was cut off and discarded, so it can retry with a smaller step. */
+static int discard_truncated(Agent *a, const char *body, size_t len, char *error, size_t cap)
+{
+    static const char notice[] =
+        "{\"role\":\"user\",\"content\":\"Your previous reply reached the output token limit and was cut off. "
+        "It was discarded and nothing in it was executed. Retry with a smaller step: shorten "
+        "edit_text old_text/new_text or write_text text, split the change into several calls, "
+        "and reason more briefly.\"}";
+    a->text[0] = 0;
+    if (record(a, "truncated", notice)) {
+        snprintf(error, cap, "Could not record truncation notice. Start a new session."); return -1;
+    }
+    /* The cut-off completion was still billed. */
+    agent_usage_absorb(a, body, len);
+    a->count = a->next = 0; a->rounds++; a->truncated = 1;
+    error[0] = 0; return 0;
+}
 int agent_response(Agent *a, const char *body, size_t len, int status, char *error, size_t cap)
 {
     /* One assistant response cannot exceed the transport response bound;
      * its scratch buffer need not grow with total conversation history. */
     static char message[CHAT_RESPONSE_CAP + 1];
     char finish[64], role[32], kind[32];
-    int parsed, choice, msg, content, calls, i, count = 0;
+    int parsed, choice, msg, content, calls, i, count = 0, limited;
     size_t length;
     snprintf(error, cap, "HTTP %d: invalid, truncated, or unsupported model response.", status);
     if (!a->active || a->next < a->count) return -1;
@@ -250,36 +272,35 @@ int agent_response(Agent *a, const char *body, size_t len, int status, char *err
         json_string(body, tokens, json_member(body, tokens, msg, "role"), role, sizeof(role)) < 0 ||
         strcmp(role, "assistant") ||
         json_string(body, tokens, json_member(body, tokens, choice, "finish_reason"), finish, sizeof(finish)) < 0) return -1;
+    limited = !strcmp(finish, "length"); a->truncated = 0;
     content = json_member(body, tokens, msg, "content"); a->text[0] = 0;
     if (content >= 0 && !null_token(body, tokens, content) &&
-        json_string(body, tokens, content, a->text, sizeof(a->text)) < 0) return -1;
+        json_string(body, tokens, content, a->text, sizeof(a->text)) < 0) goto malformed;
     calls = json_member(body, tokens, msg, "tool_calls");
     if (calls >= 0 && !null_token(body, tokens, calls)) {
-        if (tokens[calls].type != JSON_ARRAY) return -1;
+        if (tokens[calls].type != JSON_ARRAY) goto malformed;
         for (i = calls + 1; i < tokens[calls].next; i = tokens[i].next) {
             AgentCall *call;
             int f, j;
-            if (count == AGENT_CALL_MAX || tokens[i].type != JSON_OBJECT) return -1;
+            if (count == AGENT_CALL_MAX || tokens[i].type != JSON_OBJECT) goto malformed;
             call = &a->calls[count];
             f = json_member(body, tokens, i, "function");
             if (json_string(body, tokens, json_member(body, tokens, i, "type"), kind, sizeof(kind)) < 0 ||
                 strcmp(kind, "function") ||
                 json_string(body, tokens, json_member(body, tokens, i, "id"), call->id, sizeof(call->id)) <= 0 ||
                 json_string(body, tokens, json_member(body, tokens, f, "name"), call->name, sizeof(call->name)) <= 0 ||
-                json_string(body, tokens, json_member(body, tokens, f, "arguments"), call->arguments, sizeof(call->arguments)) < 0) return -1;
-            for (j = 0; j < count; j++) if (!strcmp(call->id, a->calls[j].id)) return -1;
+                json_string(body, tokens, json_member(body, tokens, f, "arguments"), call->arguments, sizeof(call->arguments)) < 0) goto malformed;
+            for (j = 0; j < count; j++) if (!strcmp(call->id, a->calls[j].id)) goto malformed;
             count++;
         }
     }
-    a->limited = !strcmp(finish, "length");
-    if (strcmp(finish, "stop") && strcmp(finish, "tool_calls") && !a->limited) {
+    a->limited = limited;
+    if (strcmp(finish, "stop") && strcmp(finish, "tool_calls") && !limited) {
         snprintf(error, cap, "HTTP %d: unsupported finish_reason \"%s\".", status, finish);
         return -1;
     }
-    if (count && a->limited) {
-        snprintf(error, cap, "HTTP %d: output token limit reached with %d pending tool call(s); none executed.", status, count);
-        return -1;
-    }
+    /* A cut-off tool call is incomplete by definition, so it never runs. */
+    if (limited && (count || !*a->text)) return discard_truncated(a, body, len, error, cap);
     if (!count && !*a->text) {
         snprintf(error, cap, "HTTP %d: no usable text or tool calls (finish_reason \"%s\").", status, finish);
         return -1;
@@ -299,6 +320,11 @@ int agent_response(Agent *a, const char *body, size_t len, int status, char *err
     a->count = count; a->next = 0; a->rounds++;
     if (!count) a->active = 0;
     error[0] = 0; return 0;
+malformed:
+    /* A cut-off reply may stop mid-structure; at the limit that is the
+     * truncation itself, not a protocol violation. */
+    if (limited) return discard_truncated(a, body, len, error, cap);
+    return -1;
 }
 int agent_tool_result(Agent *a, const char *result, char *error, size_t cap)
 {
@@ -343,6 +369,21 @@ void agent_usage_absorb(Agent *a, const char *body, size_t len)
         else a->cost_micros += micros;
         a->cost_seen = 1;
     }
+}
+int agent_usage_completion(const char *body, size_t len, long *completion, long *reasoning)
+{
+    int usage, details;
+    *completion = *reasoning = -1;
+    if (json_parse(body, len, tokens, 4096) < 1 || tokens[0].type != JSON_OBJECT) return -1;
+    usage = json_member(body, tokens, 0, "usage");
+    if (usage < 0 || tokens[usage].type != JSON_OBJECT ||
+        json_integer(body, tokens, json_member(body, tokens, usage, "completion_tokens"), completion)) {
+        *completion = -1; return -1;
+    }
+    details = json_member(body, tokens, usage, "completion_tokens_details");
+    if (details < 0 || tokens[details].type != JSON_OBJECT ||
+        json_integer(body, tokens, json_member(body, tokens, details, "reasoning_tokens"), reasoning)) *reasoning = -1;
+    return 0;
 }
 long agent_context_limit(const char *body, size_t len)
 {

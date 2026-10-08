@@ -579,6 +579,14 @@ static void LogToolTiming(int index, const char *name)
     char line[96];
     if (timing_tool_format(index, name, gToolStart, (uint32_t)TickCount(), line, sizeof(line)) > 0) LogLine(line);
 }
+/* Completion tokens against the request cap, from the provider's own usage,
+ * for every completed exchange (including ones agent_response will reject). */
+static void ObserveCompletionTokens(void)
+{
+    long completion, reasoning;
+    if (!gRoundTiming.active || agent_usage_completion(gNet.body, gNet.body_len, &completion, &reasoning)) return;
+    timing_set_tokens(&gRoundTiming, completion, reasoning, gRun == RUN_HANDOFF ? AGENT_HANDOFF_MAX_TOKENS : AGENT_MAX_TOKENS);
+}
 static void ObserveRound(void)
 {
     uint32_t now = (uint32_t)TickCount();
@@ -1634,6 +1642,7 @@ static void StepModelExchange(void)
         return;
     }
     if (gRun == RUN_HANDOFF) {
+        ObserveCompletionTokens();
         if (agent_handoff_response(gNet.body, gNet.body_len, gNet.status, gHandoffSummary,
             sizeof(gHandoffSummary), error, sizeof(error))) { JournalModelError(error); AbortChat(error); return; }
         FinishChatContext();
@@ -1649,9 +1658,17 @@ static void StepModelExchange(void)
         SetStatus("Handoff saved; fresh history is ready. Send a message to continue.");
         return;
     }
+    ObserveCompletionTokens();
     if (agent_response(&gAgent, gNet.body, gNet.body_len, gNet.status, error, sizeof(error))) { JournalModelError(error); AbortChat(error); return; }
     FinishChatContext();
-    LogRoundTiming("ok");
+    LogRoundTiming(gAgent.truncated ? "truncated" : "ok");
+    if (gAgent.truncated) {
+        gRun = RUN_NEXT_REQUEST;
+        ShowMessage("Notice", "Reply cut off at the output token limit; nothing in it ran. Asking the model to retry.");
+        SetStatus("Output token limit reached; asking the model to retry.");
+        LogLine("Reply truncated at the output token limit; model told to retry.");
+        return;
+    }
     if (*gAgent.text) ShowMessage("Sherclawk", gAgent.text);
     if (gAgent.count) {
         gRun = RUN_TOOLS; SetStatus("Model requested %d tool(s).", gAgent.count);
