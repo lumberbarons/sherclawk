@@ -29,9 +29,10 @@ if command -v cppcheck >/dev/null 2>&1; then
         --suppress=assertWithSideEffect:tests/test_build_project.c \
         -I tests/toolbox -I . -I vendor \
         tools.c inspect.c json.c text.c chat.c agent.c network.c jobs.c \
-        selfbuild.c build_project.c run_application.c vendor/http.c \
+        selfbuild.c build_project.c run_application.c session.c vendor/http.c \
         tests/test_core.c tests/test_tools.c tests/test_agent.c \
         tests/test_jobs.c tests/test_build_project.c tests/test_selfbuild.c \
+        tests/test_session.c \
         || status=1
 else
     echo "skip: cppcheck not installed" >&2

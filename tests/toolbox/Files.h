@@ -29,6 +29,7 @@ OSErr FSpDirCreate(const FSSpec *, short, long *);
 OSErr FSpOpenRF(const FSSpec *, short, short *);
 OSErr FSpOpenDF(const FSSpec *, short, short *);
 OSErr FSRead(short, long *, void *);
+OSErr GetEOF(short, long *);
 OSErr FSWrite(short, long *, const void *);
 OSErr FSClose(short);
 OSErr SetFPos(short, short, long);

@@ -24,6 +24,7 @@
 #include "network.h"
 #include "timing.h"
 #include "agent.h"
+#include "session.h"
 #include "json.h"
 #include "tools.h"
 #include "build_project.h"
@@ -101,18 +102,26 @@ static Chat gChat; /* Only the bounded native display is reused. */
 static Agent gAgent;
 static char gRunModel[CHAT_MODEL_CAP];
 static GWorldPtr gArt = NULL;
-static short gSessionRef = 0;
-static int gSessionOpen = 0;
-static char gSessionPath[256];
-static int Journal(void *context, const char *event, const char *json);
+static Session gSession;
 static ChatNetwork gNet;
 static char gPending[CHAT_PROMPT_CAP * 3];
 static char gJSON[CHAT_REQUEST_CAP];
 static char gToolResult[AGENT_RESULT_CAP];
-static int gSending = 0, gOTOpen = 0;
+/* What the run loop is waiting on. Everything but RUN_IDLE counts as busy. */
+typedef enum {
+    RUN_IDLE,
+    RUN_MODEL_REQUEST,   /* model HTTPS exchange in flight */
+    RUN_TOOLS,           /* executing the model's tool calls in order */
+    RUN_NEXT_REQUEST,    /* tools done; the next model request starts */
+    RUN_BUILD,           /* build_project pending */
+    RUN_LAUNCH,          /* run_application pending */
+    RUN_HANDOFF,         /* handoff summary HTTPS exchange in flight */
+    RUN_CONTEXT_LOOKUP   /* model context-window lookup in flight */
+} RunState;
+static RunState gRun = RUN_IDLE;
+static int RunBusy(void) { return gRun != RUN_IDLE; }
+static int gOTOpen = 0;
 static int gLookupDrain = 0;
-static int gHandoff = 0;
-static Agent gHandoffCandidate;
 static char gHandoffSummary[8192], gHandoffPath[256];
 static uint32_t gStartTicks;
 static RoundTiming gRoundTiming;
@@ -167,7 +176,7 @@ static const char *TLSVersionLabel(MacTLS_Version v)
 
 static void UpdateHandoffControls(void)
 {
-    int enabled = !gSending && !gLookupDrain && gSessionOpen && gAgent.messages &&
+    int enabled = !RunBusy() && !gLookupDrain && gSession.open && gAgent.messages &&
         !gAgent.active && gAgent.next >= gAgent.count;
     if (enabled == gHandoffEnabled) return;
     gHandoffEnabled = enabled;
@@ -683,12 +692,12 @@ static int HandleMenu(long menuChoice)
 
     case kEditMenuID:
         if (item == kEditPrefsItem) {
-            if (gSending) SetStatus("Finish the current run before changing Preferences.");
+            if (RunBusy()) SetStatus("Finish the current run before changing Preferences.");
             else ShowPreferences();
             break;
         }
         if (gFocusedTE && (item == 4 || item == 8 ||
-            (!gSending && gFocusedTE != gResponseTE))) {
+            (!RunBusy() && gFocusedTE != gResponseTE))) {
             switch (item) {
             case 3: ZeroScrap(); TECut(gFocusedTE);   TEToScrap(); break;
             case 4: ZeroScrap(); TECopy(gFocusedTE);  TEToScrap(); break;
@@ -989,7 +998,7 @@ static void HandleEvent(const EventRecord *event)
 
             /* Send button (ignored while a request is in flight). */
             if (cpart && ctl == gSendBtn) {
-                if (!gSending &&
+                if (!RunBusy() &&
                     TrackControl(ctl, local, NULL) == kControlButtonPart) {
                     SendChat();
                 }
@@ -997,12 +1006,12 @@ static void HandleEvent(const EventRecord *event)
             }
 
             if (cpart && ctl == gStopBtn) {
-                if (gSending && TrackControl(ctl, local, NULL) == kControlButtonPart)
+                if (RunBusy() && TrackControl(ctl, local, NULL) == kControlButtonPart)
                     AbortChat("Stopped. Completed tool results are retained.");
                 break;
             }
             if (cpart && ctl == gNewBtn) {
-                if (!gSending && TrackControl(ctl, local, NULL) == kControlButtonPart) NewChat();
+                if (!RunBusy() && TrackControl(ctl, local, NULL) == kControlButtonPart) NewChat();
                 break;
             }
             if (cpart && ctl == gHandoffBtn) {
@@ -1022,10 +1031,10 @@ static void HandleEvent(const EventRecord *event)
             }
         }
 
-        if (!gSending && gPromptTE && PtInRect(local, &(*gPromptTE)->viewRect)) {
+        if (!RunBusy() && gPromptTE && PtInRect(local, &(*gPromptTE)->viewRect)) {
             FocusSet(gPromptTE);
             TEClick(local, (event->modifiers & shiftKey) != 0, gPromptTE);
-        } else if ((!gSending || gSending == 6) && gModelTE && PtInRect(local, &(*gModelTE)->viewRect)) {
+        } else if ((!RunBusy() || gRun == RUN_CONTEXT_LOOKUP) && gModelTE && PtInRect(local, &(*gModelTE)->viewRect)) {
             FocusSet(gModelTE);
             TEClick(local, (event->modifiers & shiftKey) != 0, gModelTE);
         } else if (gResponseTE && PtInRect(local, &(*gResponseTE)->viewRect)) {
@@ -1040,7 +1049,7 @@ static void HandleEvent(const EventRecord *event)
         char c = (char)(event->message & charCodeMask);
 
         if ((event->modifiers & cmdKey) && c == '.') {
-            if (gSending) AbortChat("Stopped. Completed tool results are retained.");
+            if (RunBusy()) AbortChat("Stopped. Completed tool results are retained.");
             break;
         }
         if ((event->modifiers & cmdKey) && (c == '\r' || c == 0x03)) {
@@ -1057,11 +1066,11 @@ static void HandleEvent(const EventRecord *event)
         }
 
         if (c == 0x09) {
-            if (!gSending) FocusSet(gFocusedTE == gModelTE ? gPromptTE :
+            if (!RunBusy()) FocusSet(gFocusedTE == gModelTE ? gPromptTE :
                 gFocusedTE == gPromptTE ? gResponseTE : gModelTE);
             break;
         }
-        if ((!gSending || (gSending == 6 && gFocusedTE == gModelTE)) &&
+        if ((!RunBusy() || (gRun == RUN_CONTEXT_LOOKUP && gFocusedTE == gModelTE)) &&
             gFocusedTE && gFocusedTE != gResponseTE) {
             long limit = gFocusedTE == gModelTE ? CHAT_MODEL_CAP - 1 : CHAT_PROMPT_CAP - 1;
             long remaining = (*gFocusedTE)->teLength -
@@ -1091,62 +1100,7 @@ static void HandleEvent(const EventRecord *event)
 }
 
 /* ── Chat flow ───────────────────────────────────────────────────── */
-/* Session journals are UTF-8 JSON lines on the selected workspace. They are
- * private conversation records, separate from the credential-free app log. */
-static void SessionClose(void)
-{
-    if (gSessionOpen) { FSClose(gSessionRef); FlushVol(NULL, 0); gSessionOpen = 0; }
-}
-/* Create a candidate journal without closing the current one. Handoff
- * failures must leave the original history and its recording sink intact. */
-static int SessionCreate(char *out_path, size_t cap, short *out_ref)
-{
-    Str255 path;
-    FSSpec spec;
-    long dir;
-    OSErr err;
-    int attempt;
-    char folder[256];
-    snprintf(folder, sizeof(folder), "%sSherclawk Sessions:", tools_workspace());
-    PStr(path, folder);
-    err = FSMakeFSSpec(0, 0, path, &spec);
-    if (err == fnfErr) err = FSpDirCreate(&spec, smSystemScript, &dir);
-    if (err != noErr && err != dupFNErr) return -1;
-    for (attempt = 0; attempt < 100; attempt++) {
-        if (snprintf(out_path, cap, "%ss%08lx.jsonl", folder,
-                 ((unsigned long)TickCount() + (unsigned long)attempt) & 0xffffffffUL) >= (int)cap) return -1;
-        PStr(path, out_path);
-        err = FSMakeFSSpec(0, 0, path, &spec);
-        if (err == noErr) continue;
-        if (err != fnfErr || FSpCreate(&spec, 'ShCk', 'TEXT', smSystemScript) != noErr) return -1;
-        if (FSpOpenDF(&spec, fsWrPerm, out_ref)) return -1;
-        return 0;
-    }
-    return -1;
-}
-static int SessionStart(void)
-{
-    short ref;
-    char path[256];
-    if (SessionCreate(path, sizeof(path), &ref)) return -1;
-    SessionClose();
-    gSessionRef = ref; gSessionOpen = 1; strcpy(gSessionPath, path);
-    return 0;
-}
-static int SessionWrite(short ref, const char *text)
-{
-    long length = (long)strlen(text), written = length;
-    return FSWrite(ref, &written, text) != noErr || written != length ? -1 : 0;
-}
-static int Journal(void *context, const char *event, const char *json)
-{
-    char prefix[100];
-    short ref = context ? *(short *)context : gSessionRef;
-    if (!context && !gSessionOpen) return -1;
-    snprintf(prefix, sizeof(prefix), "{\"event\":\"%s\",\"message\":", event);
-    if (SessionWrite(ref, prefix) || SessionWrite(ref, json) || SessionWrite(ref, "}\n") || FlushVol(NULL, 0) != noErr) return -1;
-    return 0;
-}
+/* The session journal and handoff files live in session.c. */
 static void ShowMessage(const char *label, const char *text)
 {
     static char display[CHAT_TRANSCRIPT_CAP];
@@ -1193,7 +1147,7 @@ static void ToolEventsAppend(const char *event)
 static int ToolEventJournal(void *context, const char *event, const char *json)
 {
     ToolEventsAppend(event);
-    return Journal(context, event, json);
+    return session_journal(context, event, json);
 }
 
 static void AppendText(char *out, size_t cap, const char *s)
@@ -1264,72 +1218,59 @@ static void ShowToolResult(const AgentCall *call, const char *label, const char 
 }
 static void NewChat(void)
 {
-    if (gSending) return;
-    SessionClose(); agent_reset(&gAgent, Journal, NULL); chat_reset(&gChat);
+    if (RunBusy()) return;
+    session_close(&gSession); agent_reset(&gAgent, session_journal, &gSession); chat_reset(&gChat);
     ResponseSetText("", 0); TESetText("", 0, gPromptTE); InvalRect(&gPromptRect);
     FocusSet(gPromptTE); SetStatus("Ready. What shall we investigate?");
 }
-/* Native Markdown is MacRoman/CR/TEXT so read_text can read it in later
- * sessions. Never overwrite a handoff, and verify bytes after close/flush. */
-static int SaveHandoff(void)
+/* Long-running tools finish over many event-loop steps. A table row gives each
+ * its run state, start and step functions and messages; Stop and normal
+ * completion both finish it through PendingToolStep. A new one is a row here
+ * plus a RunState value. */
+typedef struct {
+    RunState state;
+    const char *name;
+    int (*begin)(const AgentCall *, char *, size_t, AgentJournal, void *, uint32_t);
+    int (*step)(char *, size_t, uint32_t, int stop);
+    const char *status;  /* shown while it is pending */
+    const char *failure; /* stop reason when the step reports failure */
+} PendingTool;
+static const PendingTool kPendingTools[] = {
+    { RUN_BUILD, "build_project", build_project_begin, build_project_step,
+      "Building snapshot; waiting for MacRelix worker...",
+      "Build observation stopped. Inspect retained snapshot and logs before another build." },
+    { RUN_LAUNCH, "run_application", run_application_begin, run_application_step,
+      "Verifying built application before launch...",
+      "Launch outcome uncertain. Inspect the run journal; do not retry automatically." }
+};
+static const PendingTool *PendingToolForCall(const char *name)
 {
-    static char utf8[10000], bytes[4097], verified[4097];
-    char folder[256];
-    Str255 path;
-    FSSpec spec;
-    short ref;
-    long length, written, actual;
-    int attempt, n;
-    OSErr err, close_err;
-    n = snprintf(utf8, sizeof(utf8), "# Sherclawk handoff\n\nOriginal journal: %s\n"
-        "This is a model-generated summary. Verify current files and observed results.\n\n%s\n",
-        gSessionPath, gHandoffSummary);
-    if (n < 0 || (size_t)n >= sizeof(utf8) ||
-        (n = text_to_macroman_strict(utf8, bytes, sizeof(bytes))) < 0) return -1;
-    length = n;
-    snprintf(folder, sizeof(folder), "%sSherclawk Sessions:", tools_workspace());
-    for (attempt = 0; attempt < 100; attempt++) {
-        char candidate[256];
-        if (snprintf(candidate, sizeof(candidate), "%sh%08lx.md", folder,
-            ((unsigned long)TickCount() + (unsigned long)attempt) & 0xffffffffUL) >= (int)sizeof(candidate)) return -1;
-        PStr(path, candidate);
-        err = FSMakeFSSpec(0, 0, path, &spec);
-        if (err == noErr) continue;
-        if (err != fnfErr || FSpCreate(&spec, 'ShCk', 'TEXT', smSystemScript)) return -1;
-        strcpy(gHandoffPath, candidate); /* Retain/report even partial files. */
-        if (FSpOpenDF(&spec, fsWrPerm, &ref)) return -1;
-        written = length; err = FSWrite(ref, &written, bytes);
-        close_err = FSClose(ref);
-        if (err || written != length || close_err || FlushVol(NULL, 0)) return -1;
-        if (FSpOpenDF(&spec, fsRdPerm, &ref)) return -1;
-        err = GetEOF(ref, &actual);
-        written = length;
-        if (!err && actual == length) err = FSRead(ref, &written, verified);
-        close_err = FSClose(ref);
-        if (err || actual != length || written != length || close_err || memcmp(bytes, verified, (size_t)length)) return -1;
-        return 0;
-    }
-    return -1;
+    size_t i;
+    for (i = 0; i < sizeof(kPendingTools) / sizeof(kPendingTools[0]); i++)
+        if (!strcmp(kPendingTools[i].name, name)) return &kPendingTools[i];
+    return NULL;
 }
-static int CommitHandoff(void)
+static const PendingTool *PendingToolForState(RunState state)
 {
-    char path[256];
-    short ref;
-    if (SaveHandoff()) return -1;
-    if (SessionCreate(path, sizeof(path), &ref)) return -1;
-    agent_reset(&gHandoffCandidate, Journal, &ref);
-    if (agent_handoff_seed(&gHandoffCandidate, gHandoffSummary, gSessionPath, gHandoffPath)) {
-        FSClose(ref); return -1;
-    }
-    /* Cost is a session total, not history: the fresh candidate keeps it and
-     * leaves the context line unset until the next reply. */
-    gHandoffCandidate.cost_micros = gAgent.cost_micros;
-    gHandoffCandidate.cost_seen = gAgent.cost_seen;
-    /* The old agent is untouched until both durable files exist. */
-    SessionClose();
-    gSessionRef = ref; gSessionOpen = 1; strcpy(gSessionPath, path);
-    gHandoffCandidate.journal_context = NULL;
-    gAgent = gHandoffCandidate;
+    size_t i;
+    for (i = 0; i < sizeof(kPendingTools) / sizeof(kPendingTools[0]); i++)
+        if (kPendingTools[i].state == state) return &kPendingTools[i];
+    return NULL;
+}
+/* Advance the pending tool; `stop` makes it conclude now. Returns 2 while it
+ * is still running. Otherwise the run returns to RUN_TOOLS (before recording,
+ * so a recording failure that aborts cannot finish the tool twice), the result
+ * is recorded and shown, and 0 comes back with the tool's own status in
+ * *result, or -1 with `error` if the result could not be recorded. */
+static int PendingToolStep(const PendingTool *tool, int stop, int *result, char *error, size_t cap)
+{
+    const AgentCall *call = gAgent.next < gAgent.count ? &gAgent.calls[gAgent.next] : NULL;
+    *result = tool->step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), stop);
+    if (!stop && *result == 2) return 2;
+    gRun = RUN_TOOLS;
+    if (!stop) LogToolTiming(gAgent.next + 1, tool->name);
+    if (agent_tool_result(&gAgent, gToolResult, error, cap)) return -1;
+    ShowToolResult(call, tool->name, gToolResult);
     return 0;
 }
 static void StartHandoff(void)
@@ -1337,9 +1278,9 @@ static void StartHandoff(void)
     int length;
     size_t i;
     char attribution[256];
-    if (gSending) return;
+    if (RunBusy()) return;
     if (gLookupDrain) { SetStatus("The stopped lookup is still closing; try again in a moment."); return; }
-    if (!gSessionOpen || !gAgent.messages || gAgent.active || gAgent.next < gAgent.count) {
+    if (!gSession.open || !gAgent.messages || gAgent.active || gAgent.next < gAgent.count) {
         SetStatus("Finish or stop the current run before saving a handoff."); return;
     }
     if (!gPrefs.api_key[0] || TEGetTextInto(gModelTE, gRunModel, sizeof(gRunModel)) < 0 || !*gRunModel) {
@@ -1356,9 +1297,9 @@ static void StartHandoff(void)
     length = http_build_post_with_headers("openrouter.ai", "/api/v1/chat/completions", gPrefs.api_key,
         attribution, gJSON, (size_t)length, gNet.request, sizeof(gNet.request));
     if (length < 0) { SetStatus("Could not prepare handoff request; conversation retained."); return; }
-    gHandoffPath[0] = 0; gHandoff = 1;
+    gHandoffPath[0] = 0; gRun = RUN_HANDOFF;
     timing_round_begin(&gRoundTiming, 0, (uint32_t)TickCount());
-    InitOpenTransport(); gOTOpen = 1; gStartTicks = (uint32_t)TickCount(); gSending = 1;
+    InitOpenTransport(); gOTOpen = 1; gStartTicks = (uint32_t)TickCount();
     timing_mark(&gRoundTiming, TIMING_INIT, gStartTicks);
     SetSendEnabled(0);
     if (network_start(&gNet, gNet.request, (size_t)length) < 0) { AbortChat(gNet.error); return; }
@@ -1374,41 +1315,39 @@ static void LogAbort(const char *prefix, const char *reason)
 }
 static void AbortChat(const char *reason)
 {
-    if (gHandoff) {
+    const PendingTool *pending = PendingToolForState(gRun);
+    if (gRun == RUN_HANDOFF) {
         if (gNet.ctx || gOTOpen) CloseChatContext();
         LogRoundTiming("abort");
-        gHandoff = 0; gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
+        gRun = RUN_IDLE; SetSendEnabled(1); FocusSet(gPromptTE);
         ShowMessage("Handoff stopped; conversation retained", reason);
         if (*gHandoffPath) ShowMessage("Retained handoff file (may be incomplete)", gHandoffPath);
         SetStatus("Handoff stopped; conversation retained. %s", reason);
         LogAbort("Handoff stopped; conversation retained. Reason", reason);
         return;
     }
-    if (gSending == 6) {
+    if (gRun == RUN_CONTEXT_LOOKUP) {
         /* Do not tear the TLS context down mid-connect: classic OT can fault
          * when an async connect is outstanding. Keep the exchange draining and
          * close it from the loop once network_step reaches a terminal state. */
         gLookupDrain = 1; gStartTicks = (uint32_t)TickCount();
-        gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
+        gRun = RUN_IDLE; SetSendEnabled(1); FocusSet(gPromptTE);
         SetStatus("Model context lookup stopped. Send again shortly.");
         LogAbort("Model context lookup stopped. Reason", reason);
         return;
     }
-    if (gSending == 4 || gSending == 5) {
+    if (pending) {
         char error[256];
-        const AgentCall *call = gAgent.next < gAgent.count ? &gAgent.calls[gAgent.next] : NULL;
-        if(gSending==5) run_application_step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), 1);
-        else build_project_step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), 1);
-        agent_tool_result(&gAgent, gToolResult, error, sizeof(error));
-        ShowToolResult(call, gSending==5 ? "run_application" : "build_project", gToolResult);
+        int result;
+        PendingToolStep(pending, 1, &result, error, sizeof(error));
     }
     if (gNet.ctx || gOTOpen) CloseChatContext();
     LogRoundTiming("abort");
     if (agent_stop(&gAgent, reason)) {
         SetStatus("Session recording failed. Start a new session before continuing.");
-        SessionClose();
+        session_close(&gSession);
     } else SetStatus("%s", reason);
-    gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
+    gRun = RUN_IDLE; SetSendEnabled(1); FocusSet(gPromptTE);
     ShowMessage("Stopped", reason);
     LogAbort("Agent stopped; completed records retained. Reason", reason);
 }
@@ -1428,10 +1367,10 @@ static void PauseRunAtLimit(void)
 static void JournalModelError(const char *reason)
 {
     static char quoted[1600], detail[1700];
-    if (!gSessionOpen || json_quote(reason, quoted, sizeof(quoted)) < 0) return;
+    if (!gSession.open || json_quote(reason, quoted, sizeof(quoted)) < 0) return;
     snprintf(detail, sizeof(detail), "{\"http_status\":%d,\"received_bytes\":%lu,\"error\":%s}",
         gNet.status, (unsigned long)gNet.body_len, quoted);
-    Journal(NULL, "model_error", detail);
+    session_journal(&gSession, "model_error", detail);
 }
 static int StartModelRequest(void)
 {
@@ -1450,7 +1389,7 @@ static int StartModelRequest(void)
     if (length < 0) { AbortChat("Request or API key is too long or invalid."); return -1; }
     timing_round_begin(&gRoundTiming, gAgent.rounds + 1, (uint32_t)TickCount());
     InitOpenTransport(); gOTOpen = 1;
-    gStartTicks = (uint32_t)TickCount(); gSending = 1;
+    gStartTicks = (uint32_t)TickCount(); gRun = RUN_MODEL_REQUEST;
     timing_mark(&gRoundTiming, TIMING_INIT, gStartTicks);
     if (network_start(&gNet, gNet.request, (size_t)length) < 0) { AbortChat(gNet.error); return -1; }
     SetStatus("Connecting to OpenRouter (round %d)...", gAgent.rounds + 1);
@@ -1462,8 +1401,8 @@ static int StartModelRequest(void)
 static void SendBegin(void)
 {
     char error[256];
-    gSending = 0;
-    if (!gSessionOpen && (gAgent.messages || SessionStart())) {
+    gRun = RUN_IDLE;
+    if (!gSession.open && (gAgent.messages || session_open(&gSession, tools_workspace()))) {
         SetStatus("Session file unavailable. Check %s or start a new session.", tools_workspace()); return;
     }
     if (agent_begin(&gAgent, gPending, error, sizeof(error))) { SetStatus("%s", error); return; }
@@ -1498,7 +1437,7 @@ static void StartContextLookup(void)
     if (network_start(&gNet, gNet.request, (size_t)length) < 0) {
         CloseChatContext(); SendBegin(); return;
     }
-    gSending = 6;
+    gRun = RUN_CONTEXT_LOOKUP;
     SetSendEnabled(0);
     SetStatus("Checking context window for %s...", gRunModel);
 }
@@ -1518,19 +1457,19 @@ static void FinishContextLookup(int completed)
     {
         char current[CHAT_MODEL_CAP];
         if (TEGetTextInto(gModelTE, current, sizeof(current)) < 0 || strcmp(current, gRunModel)) {
-            gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
+            gRun = RUN_IDLE; SetSendEnabled(1); FocusSet(gPromptTE);
             SetStatus("Model changed during the context lookup. Send again to continue.");
             return;
         }
     }
-    gSending = 0;
+    gRun = RUN_IDLE;
     SendAdvance();
 }
 static void SendChat(void)
 {
     char prompt[CHAT_PROMPT_CAP];
     size_t i;
-    if (gSending) return;
+    if (RunBusy()) return;
     if (gLookupDrain) { SetStatus("The stopped lookup is still closing; send again in a moment."); return; }
     if (!gPrefs.api_key[0]) { SetStatus("No API key: choose Preferences from the Edit menu."); return; }
     if (TEGetTextInto(gModelTE, gRunModel, sizeof(gRunModel)) < 0 ||
@@ -1543,70 +1482,69 @@ static void SendChat(void)
     if (text_to_utf8(prompt, strlen(prompt), gPending, sizeof(gPending)) < 0) { SetStatus("Could not convert message to UTF-8."); return; }
     SendAdvance();
 }
-static void DriveChatStep(void)
+static void StepContextLookup(void)
+{
+    int lookup;
+    if ((uint32_t)TickCount() - gStartTicks > 30UL * 60UL) { FinishContextLookup(0); return; }
+    lookup = network_step(&gNet);
+    if (lookup < 0) { FinishContextLookup(0); return; }
+    if (lookup == 0) {
+        MacTLS_State state = MacTLS_GetState(gNet.ctx);
+        if (state == kMacTLS_Handshaking) SetStatus("TLS handshake...");
+        else if (state == kMacTLS_Connected) SetStatus("Checking context window for %s...", gRunModel);
+        return;
+    }
+    FinishContextLookup(1);
+}
+static void StepPendingTool(void)
+{
+    const PendingTool *tool = PendingToolForState(gRun);
+    char error[256];
+    int result;
+    int status = PendingToolStep(tool, 0, &result, error, sizeof(error));
+    if (status == 2) return;
+    if (status) { AbortChat(error); return; }
+    if (result) AbortChat(tool->failure);
+}
+static void StepTools(void)
 {
     char error[256];
     int result;
-    if (!gSending) return;
-    if (gSending == 6) {
-        int lookup;
-        if ((uint32_t)TickCount() - gStartTicks > 30UL * 60UL) { FinishContextLookup(0); return; }
-        lookup = network_step(&gNet);
-        if (lookup < 0) { FinishContextLookup(0); return; }
-        if (lookup == 0) {
-            MacTLS_State state = MacTLS_GetState(gNet.ctx);
-            if (state == kMacTLS_Handshaking) SetStatus("TLS handshake...");
-            else if (state == kMacTLS_Connected) SetStatus("Checking context window for %s...", gRunModel);
-            return;
+    AgentCall *call;
+    const PendingTool *pending;
+    if (gAgent.next == gAgent.count) { gRun = RUN_NEXT_REQUEST; return; }
+    if (gAgent.tool_count >= gPrefs.max_tools) { PauseRunAtLimit(); return; }
+    call = &gAgent.calls[gAgent.next];
+    gToolStart = (uint32_t)TickCount();
+    SetStatus("Running %s (%d/%d)...", call->name, gAgent.next + 1, gAgent.count);
+    ToolEventsReset();
+    {
+        char id[800], name[400], started[1300];
+        if (json_quote(call->id, id, sizeof(id)) < 0 || json_quote(call->name, name, sizeof(name)) < 0) {
+            AbortChat("Could not encode tool start."); return;
         }
-        FinishContextLookup(1);
-        return;
+        snprintf(started, sizeof(started), "{\"call_id\":%s,\"name\":%s}", id, name);
+        if (session_journal(&gSession, "tool_started", started)) { AbortChat("Could not record tool start; no tool executed."); return; }
+        ToolEventsAppend("tool_started");
     }
-    if (gSending == 3) { StartModelRequest(); return; }
-    if (gSending == 4 || gSending == 5) {
-        int running=gSending==5;
-        const AgentCall *call = gAgent.next < gAgent.count ? &gAgent.calls[gAgent.next] : NULL;
-        result = running ? run_application_step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), 0) : build_project_step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), 0);
-        if (result == 2) return;
-        gSending = 2;
-        LogToolTiming(gAgent.next + 1, gAgent.calls[gAgent.next].name);
-        if (agent_tool_result(&gAgent, gToolResult, error, sizeof(error))) { AbortChat(error); return; }
-        ShowToolResult(call, running ? "run_application" : "build_project", gToolResult);
-        if (result) AbortChat(running ? "Launch outcome uncertain. Inspect the run journal; do not retry automatically." : "Build observation stopped. Inspect retained snapshot and logs before another build.");
-        return;
-    }
-    if (gSending == 2) {
-        AgentCall *call;
-        if (gAgent.next == gAgent.count) { gSending = 3; return; }
-        if (gAgent.tool_count >= gPrefs.max_tools) { PauseRunAtLimit(); return; }
-        call = &gAgent.calls[gAgent.next];
-        gToolStart = (uint32_t)TickCount();
-        SetStatus("Running %s (%d/%d)...", call->name, gAgent.next + 1, gAgent.count);
-        ToolEventsReset();
-        {
-            char id[800], name[400], started[1300];
-            if (json_quote(call->id, id, sizeof(id)) < 0 || json_quote(call->name, name, sizeof(name)) < 0) {
-                AbortChat("Could not encode tool start."); return;
-            }
-            snprintf(started, sizeof(started), "{\"call_id\":%s,\"name\":%s}", id, name);
-            if (Journal(NULL, "tool_started", started)) { AbortChat("Could not record tool start; no tool executed."); return; }
-            ToolEventsAppend("tool_started");
-        }
-        if (!strcmp(call->name, "build_project")) {
-            result = build_project_begin(call, gToolResult, sizeof(gToolResult), ToolEventJournal, NULL, (uint32_t)TickCount());
-            if (result == 2) { gSending = 4; SetStatus("Building snapshot; waiting for MacRelix worker..."); return; }
-        } else if (!strcmp(call->name, "run_application")) {
-            result = run_application_begin(call, gToolResult, sizeof(gToolResult), ToolEventJournal, NULL, (uint32_t)TickCount());
-            if (result == 2) { gSending = 5; SetStatus("Verifying built application before launch..."); return; }
-        } else if (!strcmp(call->name, "read_build_log")) {
-            build_project_log(call, gToolResult, sizeof(gToolResult)); result = 0;
-        } else result = tools_execute_recorded(call, gToolResult, sizeof(gToolResult), ToolEventJournal, NULL);
-        LogToolTiming(gAgent.next + 1, call->name);
-        if (agent_tool_result(&gAgent, gToolResult, error, sizeof(error))) { AbortChat(error); return; }
-        ShowToolResult(call, call->name, gToolResult);
-        if (result) AbortChat("Mutation stopped. Inspect the result and session recovery records; do not retry automatically.");
-        return;
-    }
+    pending = PendingToolForCall(call->name);
+    if (pending) {
+        result = pending->begin(call, gToolResult, sizeof(gToolResult), ToolEventJournal, &gSession, (uint32_t)TickCount());
+        if (result == 2) { gRun = pending->state; SetStatus("%s", pending->status); return; }
+    } else if (!strcmp(call->name, "read_build_log")) {
+        build_project_log(call, gToolResult, sizeof(gToolResult)); result = 0;
+    } else result = tools_execute_recorded(call, gToolResult, sizeof(gToolResult), ToolEventJournal, &gSession);
+    LogToolTiming(gAgent.next + 1, call->name);
+    if (agent_tool_result(&gAgent, gToolResult, error, sizeof(error))) { AbortChat(error); return; }
+    ShowToolResult(call, call->name, gToolResult);
+    if (result) AbortChat("Mutation stopped. Inspect the result and session recovery records; do not retry automatically.");
+}
+/* The model request and the handoff summary share one HTTPS exchange; only
+ * the completed response is handled differently. */
+static void StepModelExchange(void)
+{
+    char error[256];
+    int result;
     if ((uint32_t)TickCount() - gStartTicks > 120UL * 60UL) { AbortChat("Request timed out. Completed results retained."); return; }
     result = network_step(&gNet);
     ObserveRound();
@@ -1617,15 +1555,17 @@ static void DriveChatStep(void)
         else if (state == kMacTLS_Connected) SetStatus("Waiting for model (%s, %lu bytes)...", TLSVersionLabel(gNet.version), (unsigned long)gNet.received);
         return;
     }
-    if (gHandoff) {
+    if (gRun == RUN_HANDOFF) {
         if (agent_handoff_response(gNet.body, gNet.body_len, gNet.status, gHandoffSummary,
             sizeof(gHandoffSummary), error, sizeof(error))) { JournalModelError(error); AbortChat(error); return; }
         CloseChatContext();
         /* The summary completion is provider-billed like any other round. */
         agent_usage_absorb(&gAgent, gNet.body, gNet.body_len);
         LogRoundTiming("ok");
-        if (CommitHandoff()) { AbortChat("Could not save/verify handoff and new journal. History was not cleared."); return; }
-        gHandoff = 0; gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
+        if (session_commit_handoff(&gSession, &gAgent, gHandoffSummary, gHandoffPath, sizeof(gHandoffPath))) {
+            AbortChat("Could not save/verify handoff and new journal. History was not cleared."); return;
+        }
+        gRun = RUN_IDLE; SetSendEnabled(1); FocusSet(gPromptTE);
         ShowMessage("Saved handoff", gHandoffPath);
         ShowMessage("Handoff summary", gHandoffSummary);
         SetStatus("Handoff saved; fresh history is ready. Send a message to continue.");
@@ -1636,14 +1576,27 @@ static void DriveChatStep(void)
     LogRoundTiming("ok");
     if (*gAgent.text) ShowMessage("Sherclawk", gAgent.text);
     if (gAgent.count) {
-        gSending = 2; SetStatus("Model requested %d tool(s).", gAgent.count);
+        gRun = RUN_TOOLS; SetStatus("Model requested %d tool(s).", gAgent.count);
     } else {
-        gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
+        gRun = RUN_IDLE; SetSendEnabled(1); FocusSet(gPromptTE);
         if (gAgent.limited) ShowMessage("Notice", "Reply incomplete: output token limit reached.");
         if (gAgent.used >= AGENT_HISTORY_CAP * 3 / 4)
             SetStatus("History nearly full. Save Handoff (Command-H) to free history.");
         else SetStatus("Done - %d model rounds, %d tools. Session saved.", gAgent.rounds, gAgent.tool_count);
         LogLine("Agent run completed.");
+    }
+}
+static void DriveChatStep(void)
+{
+    switch (gRun) {
+    case RUN_IDLE: break;
+    case RUN_CONTEXT_LOOKUP: StepContextLookup(); break;
+    case RUN_NEXT_REQUEST: StartModelRequest(); break;
+    case RUN_BUILD:
+    case RUN_LAUNCH: StepPendingTool(); break;
+    case RUN_TOOLS: StepTools(); break;
+    case RUN_MODEL_REQUEST:
+    case RUN_HANDOFF: StepModelExchange(); break;
     }
 }
 /* A stopped context lookup keeps its exchange alive until network_step reaches
@@ -1671,15 +1624,15 @@ int main(void)
         !gSendBtn || !gStopBtn || !gNewBtn || !gHandoffBtn || !gResponseScroll || !gScrollActionUPP) {
         UIDispose(); MacTLS_Shutdown(); return 1;
     }
-    chat_reset(&gChat); agent_reset(&gAgent, Journal, NULL);
+    chat_reset(&gChat); agent_reset(&gAgent, session_journal, &gSession);
     SetStatus(gPrefsUnreadable ? "Preferences unreadable; using compiled defaults."
                                : "Ready. What shall we investigate?");
     LogOpen(); LogLine("Sherclawk session started.");
     if(selfbuild_init())SetStatus("Native executor unavailable; builds require the external worker.");
     while (!gQuit) {
-        WaitNextEvent(everyEvent, &event, gSending ? 1 : 10, NULL);
+        WaitNextEvent(everyEvent, &event, RunBusy() ? 1 : 10, NULL);
         SetPort(gWindow); HandleEvent(&event);
-        if (gSending) DriveChatStep();
+        if (RunBusy()) DriveChatStep();
         DrainAbandonedLookup();
         selfbuild_drain((uint32_t)TickCount());
         UpdateHandoffControls();
@@ -1694,7 +1647,7 @@ int main(void)
     LogRoundTiming("abort");
     if (gAgent.active) AbortChat("Application quit.");
     selfbuild_close();
-    SessionClose();
+    session_close(&gSession);
     LogLine("Sherclawk session ended."); LogClose(); UIDispose();
     MacTLS_Shutdown(); return 0;
 }
