@@ -540,13 +540,16 @@ handoff carries the cost total into the fresh history but leaves the context
 line unset until the next reply.
 
 The context window comes from the public
-`GET /api/v1/models/<model>/endpoints` metadata response: the largest
-`context_length` across its endpoints. The app requests it at most once per
-model per launch, with a 30-second deadline and the same 64 KiB response
-bound. Any HTTP error, timeout, oversized body, or response beyond the
-4096-token JSON parser cap silently omits the percentage and proceeds with the
-send; there is no retry. Preferences are unavailable during a run, including
-the context lookup. Stop during the
+`GET /api/v1/models?q=<model>&limit=10` catalog query: the row whose `id`
+exactly matches the model supplies `context_length`, and its optional
+`reasoning` metadata (`supported_efforts`, `default_effort`, `mandatory`,
+`default_enabled`) is kept with it. Substring matches such as `-pro` or
+`:batch` variants, dated aliases and other rows are ignored. The app requests
+it at most once per model per launch, with a 30-second deadline and the same
+64 KiB response bound. Any HTTP error, timeout, oversized body, a page with no
+exact row, or a response beyond the 4096-token JSON parser cap silently omits
+the percentage and proceeds with the send; there is no retry. Preferences are
+unavailable during a run, including the context lookup. Stop during the
 lookup leaves no session record and keeps the prompt; the stopped exchange
 continues to a terminal network state before it is closed, so a send in the
 next few seconds may briefly report that the lookup is still closing.

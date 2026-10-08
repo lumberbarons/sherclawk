@@ -100,26 +100,65 @@ static void usage(void)
     assert(candidate.cost_micros == 34567 && candidate.cost_seen);
     assert(!candidate.context_seen && !candidate.context_tokens);
 }
-static void contexts(void)
+static void model_metadata(void)
 {
-    static const char *body =
-        "{\"data\":{\"endpoints\":[{\"name\":\"a\",\"context_length\":8192},{\"name\":\"b\"},"
-        "{\"context_length\":131072,\"name\":\"c\"},{\"context_length\":32768}]}}";
-    static char big[65536];
+    static const char *page =
+        "{\"total_count\":4,\"data\":["
+        "{\"id\":\"openai/gpt-4o-pro\",\"name\":\"GPT-4o Pro\",\"context_length\":262144},"
+        "{\"id\":\"openai/gpt-4o-2024-08-06\",\"name\":\"GPT-4o (2024-08-06)\",\"context_length\":128000},"
+        "{\"id\":\"openai/gpt-4o\",\"name\":\"GPT-4o\",\"context_length\":131072,"
+        "\"reasoning\":{\"mandatory\":true,\"default_enabled\":false,\"default_effort\":\"medium\","
+        "\"supported_efforts\":[\"high\",\"medium\",\"low\",\"minimal\",\"none\"]}},"
+        "{\"id\":\"openai/gpt-4o:batch\",\"name\":\"GPT-4o (batch)\",\"context_length\":65536}]}";
+    static const char *minimal =
+        "{\"data\":[{\"id\":\"openai/o3\",\"name\":\"o3\",\"context_length\":200000,"
+        "\"reasoning\":{\"mandatory\":false}}]}";
+    static const char *plain =
+        "{\"data\":[{\"id\":\"z-ai/glm\",\"name\":\"GLM\",\"context_length\":8192}]}";
+    static char big[65536], query[CHAT_MODEL_CAP * 3 + 32];
+    AgentModelInfo info;
     size_t i, at = 0;
-    assert(agent_context_limit(body, strlen(body)) == 131072);
-    assert(agent_context_limit("{\"data\":{\"endpoints\":[]}}", strlen("{\"data\":{\"endpoints\":[]}}")) == -1);
-    assert(agent_context_limit("{\"error\":{\"message\":\"no\"}}", strlen("{\"error\":{\"message\":\"no\"}}")) == -1);
-    assert(agent_context_limit("{\"data\":{}}", strlen("{\"data\":{}}")) == -1);
-    assert(agent_context_limit("{\"data\":{\"endpoints\":{}}}", strlen("{\"data\":{\"endpoints\":{}}}")) == -1);
-    for (i = 0; i < strlen(body); i++) assert(agent_context_limit(body, i) == -1);
-    /* More endpoint tokens than the shared parser cap: quiet -1. */
-    at += (size_t)snprintf(big + at, sizeof(big) - at, "{\"data\":{\"endpoints\":[");
+    /* The lookup path percent-encodes the model and pins the page size. */
+    assert(agent_model_query(query, sizeof(query), "openai/gpt-4o:free") ==
+           (int)strlen("/api/v1/models?q=openai%2Fgpt-4o%3Afree&limit=10"));
+    assert(!strcmp(query, "/api/v1/models?q=openai%2Fgpt-4o%3Afree&limit=10"));
+    assert(agent_model_query(query, sizeof(query), "deepseek.v3_x-1") > 0);
+    assert(!strcmp(query, "/api/v1/models?q=deepseek.v3_x-1&limit=10"));
+    assert(agent_model_query(query, 8, "openai/gpt-4o") == -1);
+    /* Substring variants (-pro, dated alias, :batch) are returned with the
+     * exact row; only the exact id may supply the metadata. */
+    assert(!agent_model_info(page, strlen(page), "openai/gpt-4o", &info));
+    assert(!strcmp(info.name, "GPT-4o") && info.context_length == 131072);
+    assert(info.reasoning && info.mandatory && !info.default_enabled);
+    assert(!strcmp(info.default_effort, "medium") && info.effort_count == 5);
+    assert(!strcmp(info.supported_efforts[0], "high") && !strcmp(info.supported_efforts[4], "none"));
+    /* A dated alias row is selected only by its own id and keeps no metadata
+     * when the JSON object has no reasoning block. */
+    assert(!agent_model_info(page, strlen(page), "openai/gpt-4o-2024-08-06", &info));
+    assert(!strcmp(info.name, "GPT-4o (2024-08-06)") && info.context_length == 128000 && !info.reasoning);
+    /* Absent default_effort and supported_efforts stay empty; mandatory is
+     * read on its own. */
+    assert(!agent_model_info(minimal, strlen(minimal), "openai/o3", &info));
+    assert(info.reasoning && !info.mandatory && !info.default_enabled);
+    assert(!info.default_effort[0] && !info.effort_count);
+    assert(!agent_model_info(plain, strlen(plain), "z-ai/glm", &info));
+    assert(!info.reasoning && !info.mandatory && info.context_length == 8192);
+    /* No exact row, empty id, malformed or truncated pages: quiet -1. */
+    assert(agent_model_info(page, strlen(page), "openai/gpt-4o-mini", &info) == -1);
+    assert(agent_model_info(page, strlen(page), "", &info) == -1);
+    assert(agent_model_info("not json", strlen("not json"), "openai/gpt-4o", &info) == -1);
+    assert(agent_model_info("{\"data\":{}}", strlen("{\"data\":{}}"), "openai/gpt-4o", &info) == -1);
+    assert(agent_model_info("{\"data\":[]}", strlen("{\"data\":[]}"), "openai/gpt-4o", &info) == -1);
+    assert(agent_model_info("{\"error\":{\"message\":\"no\"}}", strlen("{\"error\":{\"message\":\"no\"}}"), "openai/gpt-4o", &info) == -1);
+    for (i = 1; i < strlen(page); i++) assert(agent_model_info(page, i, "openai/gpt-4o", &info) == -1);
+    /* More row tokens than the shared parser cap: quiet -1. */
+    at += (size_t)snprintf(big + at, sizeof(big) - at, "{\"data\":[");
     for (i = 0; i < 1500; i++)
-        at += (size_t)snprintf(big + at, sizeof(big) - at, "%s{\"context_length\":1024}", i ? "," : "");
-    at += (size_t)snprintf(big + at, sizeof(big) - at, "]}}");
+        at += (size_t)snprintf(big + at, sizeof(big) - at, "%s{\"id\":\"m%lu\",\"context_length\":1024}",
+                               i ? "," : "", (unsigned long)i);
+    at += (size_t)snprintf(big + at, sizeof(big) - at, "]}");
     assert(at < sizeof(big));
-    assert(agent_context_limit(big, at) == -1);
+    assert(agent_model_info(big, at, "m1", &info) == -1);
 }
 int main(void)
 {
@@ -236,7 +275,7 @@ int main(void)
     assert(text_to_macroman_strict("\xf0\x9f\xa6\x80", req, sizeof(req)) == -1);
     assert(text_to_macroman_strict("caf\xc3\xa9", req, sizeof(req)) == 4);
     usage();
-    contexts();
-    puts("PASS agent tools, usage accounting, history, truncation, Stop, persistence barriers and bounds");
+    model_metadata();
+    puts("PASS agent tools, usage accounting, history, truncation, Stop, persistence barriers, bounds and model metadata");
     return 0;
 }

@@ -344,20 +344,81 @@ void agent_usage_absorb(Agent *a, const char *body, size_t len)
         a->cost_seen = 1;
     }
 }
-long agent_context_limit(const char *body, size_t len)
+/* true/false primitives; null or anything else leaves the default. */
+static int json_boolean(const char *s, const JsonToken *t, int index, int *out)
 {
-    long best = -1, value;
-    int data, endpoints, i;
+    int length;
+    if (index < 0 || t[index].type != JSON_PRIMITIVE) return -1;
+    length = t[index].end - t[index].start;
+    if (length == 4 && !memcmp(s + t[index].start, "true", 4)) { *out = 1; return 0; }
+    if (length == 5 && !memcmp(s + t[index].start, "false", 5)) { *out = 0; return 0; }
+    return -1;
+}
+int agent_model_info(const char *body, size_t len, const char *model, AgentModelInfo *info)
+{
+    int data, i;
+    memset(info, 0, sizeof(*info));
+    info->context_length = -1;
+    if (!*model) return -1;
     if (json_parse(body, len, tokens, 4096) < 1 || tokens[0].type != JSON_OBJECT) return -1;
     data = json_member(body, tokens, 0, "data");
-    if (data < 0 || tokens[data].type != JSON_OBJECT) return -1;
-    endpoints = json_member(body, tokens, data, "endpoints");
-    if (endpoints < 0 || tokens[endpoints].type != JSON_ARRAY) return -1;
-    for (i = endpoints + 1; i < tokens[endpoints].next; i = tokens[i].next) {
-        int field;
+    if (data < 0 || tokens[data].type != JSON_ARRAY) return -1;
+    for (i = data + 1; i < tokens[data].next; i = tokens[i].next) {
+        char id[CHAT_MODEL_CAP];
+        int field, value;
         if (tokens[i].type != JSON_OBJECT) continue;
+        field = json_member(body, tokens, i, "id");
+        if (field < 0 || json_string(body, tokens, field, id, sizeof(id)) < 0 || strcmp(id, model)) continue;
+        field = json_member(body, tokens, i, "name");
+        if (json_string(body, tokens, field, info->name, sizeof(info->name)) < 0) info->name[0] = 0;
         field = json_member(body, tokens, i, "context_length");
-        if (!json_integer(body, tokens, field, &value) && value > best) best = value;
+        if (json_integer(body, tokens, field, &info->context_length)) info->context_length = -1;
+        field = json_member(body, tokens, i, "reasoning");
+        if (field >= 0 && tokens[field].type == JSON_OBJECT) {
+            int efforts, e;
+            info->reasoning = 1;
+            if (!json_boolean(body, tokens, json_member(body, tokens, field, "mandatory"), &value))
+                info->mandatory = value;
+            if (!json_boolean(body, tokens, json_member(body, tokens, field, "default_enabled"), &value))
+                info->default_enabled = value;
+            if (json_string(body, tokens, json_member(body, tokens, field, "default_effort"),
+                            info->default_effort, sizeof(info->default_effort)) < 0)
+                info->default_effort[0] = 0;
+            efforts = json_member(body, tokens, field, "supported_efforts");
+            if (efforts >= 0 && tokens[efforts].type == JSON_ARRAY) {
+                for (e = efforts + 1; e < tokens[efforts].next && info->effort_count < AGENT_EFFORT_MAX; e = tokens[e].next) {
+                    char name[AGENT_EFFORT_CAP];
+                    if (tokens[e].type != JSON_STRING) continue;
+                    if (json_string(body, tokens, e, name, sizeof(name)) < 0) continue;
+                    strcpy(info->supported_efforts[info->effort_count], name);
+                    info->effort_count++;
+                }
+            }
+        }
+        return 0;
     }
-    return best;
+    return -1;
+}
+int agent_model_query(char *out, size_t cap, const char *model)
+{
+    static const char prefix[] = "/api/v1/models?q=";
+    static const char suffix[] = "&limit=10";
+    static const char hex[] = "0123456789ABCDEF";
+    size_t used = sizeof(prefix) - 1, i;
+    if (cap < used + sizeof(suffix)) return -1;
+    memcpy(out, prefix, used);
+    for (i = 0; model[i]; i++) {
+        unsigned char c = (unsigned char)model[i];
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+            c == '-' || c == '.' || c == '_' || c == '~') {
+            if (used + 1 > cap) return -1;
+            out[used++] = (char)c;
+        } else {
+            if (used + 3 > cap) return -1;
+            out[used++] = '%'; out[used++] = hex[c >> 4]; out[used++] = hex[c & 15];
+        }
+    }
+    if (used + sizeof(suffix) > cap) return -1;
+    memcpy(out + used, suffix, sizeof(suffix));
+    return (int)(used + sizeof(suffix) - 1);
 }

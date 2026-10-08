@@ -76,7 +76,7 @@ static Rect gInfoRect, gStatusRect, gHistoryRect, gMeterRect;
 static size_t gDisplayedHistory = (size_t)-1;
 static Rect gUsageRect, gContextRect, gCostRect, gPromptHintRect;
 static char gModelInfoModel[CHAT_MODEL_CAP];
-static long gModelInfoLimit = -1;
+static AgentModelInfo gModelInfo;   /* Row behind gModelInfoModel; cleared per lookup. */
 static int  gModelInfoAttempted = 0;
 static long long gDisplayedCost = -1;
 static long gDisplayedTokens = -1;
@@ -879,8 +879,8 @@ static void DrawChrome(void)
     gDisplayedHistory = gAgent.used;
     if (gAgent.context_seen) FormatTokens(gAgent.context_tokens, count, sizeof(count));
     else strcpy(count, "-");
-    if (gAgent.context_seen && gModelInfoLimit > 0 && !strcmp(gModelInfoModel, gRunModel)) {
-        long long contextPercent = ((long long)gAgent.context_tokens * 100 + gModelInfoLimit / 2) / gModelInfoLimit;
+    if (gAgent.context_seen && gModelInfo.context_length > 0 && !strcmp(gModelInfoModel, gRunModel)) {
+        long long contextPercent = ((long long)gAgent.context_tokens * 100 + gModelInfo.context_length / 2) / gModelInfo.context_length;
         if (contextPercent > 100) contextPercent = 100;
         snprintf(line, sizeof(line), "Context: %s tokens (%ld%%)", count, (long)contextPercent);
     } else if (gAgent.context_seen) snprintf(line, sizeof(line), "Context: %s tokens", count);
@@ -894,7 +894,7 @@ static void DrawChrome(void)
     }
     gDisplayedCost = gAgent.cost_micros;
     gDisplayedTokens = gAgent.context_seen ? gAgent.context_tokens : -1;
-    gDisplayedLimit = gModelInfoLimit;
+    gDisplayedLimit = gModelInfo.context_length;
     TextSize(10);
     DrawControls(gWindow);
 }
@@ -1478,14 +1478,16 @@ static int ModelLookupAllowed(const char *model)
 }
 static void StartContextLookup(void)
 {
-    char path[CHAT_MODEL_CAP + 32];
+    char path[CHAT_MODEL_CAP * 3 + 32];
     int length;
-    if (snprintf(path, sizeof(path), "/api/v1/models/%s/endpoints", gRunModel) >= (int)sizeof(path)) { SendBegin(); return; }
+    length = agent_model_query(path, sizeof(path), gRunModel);
+    if (length < 0) { SendBegin(); return; }
     length = http_build_get("openrouter.ai", path, gNet.request, sizeof(gNet.request));
     if (length < 0) { SendBegin(); return; }
     /* Remember the attempt before the network: at most one lookup per model
      * per launch, whatever the outcome. */
-    strcpy(gModelInfoModel, gRunModel); gModelInfoLimit = -1; gModelInfoAttempted = 1;
+    strcpy(gModelInfoModel, gRunModel); memset(&gModelInfo, 0, sizeof(gModelInfo));
+    gModelInfo.context_length = -1; gModelInfoAttempted = 1;
     InitOpenTransport(); gOTOpen = 1;
     gStartTicks = (uint32_t)TickCount();
     if (network_start(&gNet, gNet.request, (size_t)length) < 0) {
@@ -1504,9 +1506,9 @@ static void SendAdvance(void)
 }
 static void FinishContextLookup(int completed)
 {
-    long limit = -1;
-    if (completed && gNet.status == 200) limit = agent_context_limit(gNet.body, gNet.body_len);
-    if (limit > 0) gModelInfoLimit = limit;
+    AgentModelInfo info;
+    if (completed && gNet.status == 200 && !agent_model_info(gNet.body, gNet.body_len, gRunModel, &info))
+        gModelInfo = info;
     if (gNet.ctx || gOTOpen) CloseChatContext();
     {
         if (strcmp(gPrefs.model, gRunModel)) {
@@ -1694,7 +1696,7 @@ int main(void)
         if (gDisplayedHistory != gAgent.used) InvalRect(&gHistoryRect);
         if (gDisplayedCost != gAgent.cost_micros ||
             gDisplayedTokens != (gAgent.context_seen ? gAgent.context_tokens : -1) ||
-            gDisplayedLimit != gModelInfoLimit) InvalRect(&gUsageRect);
+            gDisplayedLimit != gModelInfo.context_length) InvalRect(&gUsageRect);
     }
     if (gNet.ctx || gOTOpen) CloseChatContext();
     LogRoundTiming("abort");
