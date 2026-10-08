@@ -219,10 +219,15 @@ components are 1–31 bytes, cannot start with dot/dash, and paths are at most
 allow up to three directories or `.`. Only declared inputs are copied into the
 fresh build working directory. Standard SDK includes are supplied by the adapter.
 
-Prepare the queue once on the mounted AFP volume. Sherclawk now acquires the
-existing `worker-lock` and executes its current snapshot itself when unowned.
-ToolServer and its installed SDK are still required; MacRelix is unnecessary
-for this path. Queue creation and general queue service belong to increment 4:
+Sherclawk creates the queue itself before its first publication: it resolves
+the workspace root as a non-alias folder, creates `Worker01` then `buildjobs`
+one level at a time (journaled intent and verification, refusing a file or
+alias in either name) and only then publishes. Sherclawk acquires the existing
+`worker-lock` and executes its current snapshot itself when unowned. ToolServer
+and its installed SDK are still required; MacRelix is unnecessary for this
+path. General queue service belongs to increment 4. The host step below is only
+needed when an external worker should serve the queue before the app has
+created it:
 
 ```bash
 ssh "$SHARE_HOST" 'sudo -n install -d -o macos9 -g macos9 -m 775 /srv/retro68/Worker01/buildjobs'

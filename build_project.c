@@ -1,13 +1,16 @@
 /* Descriptors are data: only enumerated settings and portable relative names
  * enter the trusted MPW recipe. Closed source snapshots are read twice before
  * queue reservation; jobs.c then stages/readbacks them in cooperative steps.
- * Stop/deadline never cancel or replay published compiler jobs. */
+ * The fixed queue creates itself before first publication; the queue stays
+ * read-only to model tools. Stop/deadline never cancel or replay published
+ * compiler jobs. */
 #include "build_project.h"
 #include "run_application.h"
 #include "json.h"
 #include "text.h"
 #include "config.h"
 #include "selfbuild.h"
+#include <Script.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
@@ -308,6 +311,55 @@ static int finish(char *out,size_t cap,uint32_t now)
     active=0;
     return job.state==JOB_UNKNOWN || job.state==JOB_ABANDONED ? 1 : 0;
 }
+/* The fixed queue is app-owned state and may be absent on a fresh workspace.
+ * Create it one level at a time from the workspace root with the create_folder
+ * rules: journal intent, FSpDirCreate, flush, verify a non-alias folder. A file
+ * or alias occupying a name is refused. Creation is idempotent and nothing has
+ * been published yet, so a failed bootstrap may be retried. */
+static int queue_record(const char *event,const char *folder)
+{
+    char record[256];
+    if(!journal_fn)return -1;
+    snprintf(record,sizeof(record),"{\"build_id\":\"%s\",\"queue\":\"" QUEUE "\",\"folder\":\"%s\",\"os_error\":0}",id,folder);
+    return journal_fn(journal_context,event,record);
+}
+static int ensure_queue(void)
+{
+    char rest[64],folder[32],*part,*colon;
+    FSSpec parent,spec;
+    CInfoPBRec pb;
+    long dir,created;
+    OSErr e;
+    if(tools_workspace_root(&parent) || info(&parent,&pb) || !(pb.hFileInfo.ioFlAttrib & 16) ||
+        (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000) || strlen(QUEUE)>=sizeof(rest))return -1;
+    dir=pb.dirInfo.ioDrDirID;
+    strcpy(rest,QUEUE); part=rest;
+    for(;;) {
+        size_t n; Str255 name;
+        int made=0;
+        colon=strchr(part,':');
+        n=colon ? (size_t)(colon-part) : strlen(part);
+        if(!n || n>31)return -1;
+        memcpy(folder,part,n); folder[n]=0;
+        name[0]=(unsigned char)n; memcpy(name+1,part,n);
+        e=FSMakeFSSpec(parent.vRefNum,dir,name,&spec);
+        if(!e)e=info(&spec,&pb);
+        if(e==fnfErr) {
+            if(queue_record("queue_intent",folder))return -1;
+            e=FSpDirCreate(&spec,smSystemScript,&created);
+            if(e==dupFNErr)e=noErr;
+            if(!e)e=FlushVol(NULL,spec.vRefNum);
+            if(!e)e=info(&spec,&pb);
+            made=1;
+        }
+        if(e || !(pb.hFileInfo.ioFlAttrib & 16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000))return -1;
+        if(made && queue_record("queue_created",folder))return -1;
+        dir=pb.dirInfo.ioDrDirID;
+        if(!colon)break;
+        part=colon+1;
+    }
+    return 0;
+}
 int build_project_step(char *out,size_t cap,uint32_t now,int stop)
 {
     if(!active)return error(out,cap,"NO_ACTIVE_BUILD",1);
@@ -328,7 +380,9 @@ int build_project_step(char *out,size_t cap,uint32_t now,int stop)
         {
             FSSpec queue; JobInput inputs[JOB_INPUT_MAX]; size_t at=0; int i;
             snprintf(id,sizeof(id),"build-%08lx-%04lx",(unsigned long)now,(++sequence)&0xffffUL);
-            if(tools_resolve(QUEUE,&queue))return error(out,cap,"QUEUE_MISSING",0);
+            if(tools_resolve(QUEUE,&queue)) {
+                if(ensure_queue() || tools_resolve(QUEUE,&queue))return error(out,cap,"QUEUE_MISSING",0);
+            }
             if(add(manifest,sizeof(manifest),&at,"{\"build_id\":\"%s\",\"adapter\":\"" ADAPTER "\",\"recipe_hash\":\"%08lx\",\"inputs\":[",id,(unsigned long)hash(recipe,strlen(recipe))))return error(out,cap,"MANIFEST_LIMIT",0);
             for(i=0;i<=descriptor.count;i++) {
                 char q[1024],path[768];
