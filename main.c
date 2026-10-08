@@ -476,7 +476,13 @@ static void YieldTicks(uint32_t ticks)
  * example works around this by fully cycling InitOpenTransport /
  * CloseOpenTransport around every test, so we do the same around every
  * request (the Postman example, which inits OT once, shows the wedge).
- * The yield length is SHERCLAWK_OT_YIELD_TICKS (config.h).
+ *
+ * The yield on each side of CloseOpenTransport is SHERCLAWK_OT_YIELD_TICKS
+ * (config.h). It was 60, which made teardown about 122 ticks of a ~246-tick
+ * round; at 10 it is about 22 ticks. Guest soak (issue #25, 73 rounds): Stop
+ * mid-response, connection resets, a refused connect and a dropped-packet
+ * stall all aborted cleanly and the next request succeeded each time, with no
+ * wedge. Faults did not land mid-download on a large response.
  */
 static void CloseChatContext(void)
 {

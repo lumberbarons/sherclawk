@@ -13,6 +13,6 @@
 /* Open Transport teardown experiment: ticks (60/s) yielded on each side of
  * CloseOpenTransport, and whether a clean model round leaves OT open (errors
  * and aborts always cycle it). Defaults shown. */
-/* #define SHERCLAWK_OT_YIELD_TICKS 60 */
+/* #define SHERCLAWK_OT_YIELD_TICKS 10 */
 /* #define SHERCLAWK_OT_KEEP_OPEN_AFTER_CLEAN 0 */
 #endif

@@ -642,7 +642,7 @@ stopped early. Each tool call logs `tool=<n> name=<tool> ticks=<elapsed>`; for
 `build_project` and `run_application` that spans the whole stepped operation.
 
 The Open Transport teardown that dominates `close` is tunable at build time for
-guest soaks: `SHERCLAWK_OT_YIELD_TICKS` (default 60) sets the yield on each side
+guest soaks: `SHERCLAWK_OT_YIELD_TICKS` (default 10; it was 60) sets the yield on each side
 of `CloseOpenTransport`, and `SHERCLAWK_OT_KEEP_OPEN_AFTER_CLEAN=1` leaves OT
 open after a cleanly completed round (errors, aborts and quit still cycle it).
 Set either in `config.local.h`; the defaults keep the long-standing policy.
