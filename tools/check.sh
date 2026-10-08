@@ -75,3 +75,10 @@ fi
     "$HERE/run_application.c" "$HERE/jobs.c" "$HERE/tools.c" "$HERE/inspect.c" "$HERE/json.c" "$HERE/text.c" \
     -o "$HERE/build/tests/test-selfbuild"
 "$HERE/build/tests/test-selfbuild"
+
+"${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" -Wno-multichar \
+    -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -I"$HERE/tests/toolbox" -I"$HERE" \
+    "$HERE/tests/test_session.c" "$HERE/session.c" "$HERE/agent.c" "$HERE/json.c" "$HERE/text.c" \
+    -o "$HERE/build/tests/test-session"
+"$HERE/build/tests/test-session"
