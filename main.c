@@ -468,7 +468,7 @@ static void LogClose(void)
 
 /* DITL items: OK/Cancel, the editable model row with Find, the results list
  * (a user item drawn by hand), the hint line, the Effort popup rectangle,
- * then the label/edit pairs, the debug checkbox and the file hint. The
+ * then the label/edit pairs and the debug checkbox. The
  * numbers match the DITL in hello.r. */
 enum {
     kPrefsDialogID      = 128,
@@ -487,11 +487,10 @@ enum {
     kPrefsDebugItem     = 18
 };
 
-/* The effort menu is built at runtime. The Appearance popup button takes the
- * same NewControl overloading as the System 7 popup: the minimum is the menu
- * ID, the value the chosen item and the maximum the title width
- * (ControlDefinitions.h, "POPUP BUTTON"). The CDEF finds the menu by ID in the
- * menu list, so it is inserted before the control exists. */
+/* The effort menu is built at runtime. The popup is not a control: the DITL's
+ * user item is drawn by hand and PopUpMenuSelect tracks the menu, because both
+ * NewControl overloadings of the Appearance popup drew nothing or an empty
+ * popup on the guest. */
 enum {
     kPrefsEffortMenuID = 1001,
     kPrefsFetchNone = 0,   /* no exchange in flight */
@@ -510,8 +509,10 @@ enum {
  * `confirmed_id` the field text that has resolved to a catalog row. */
 typedef struct {
     DialogPtr     dlg;
-    ControlHandle popup;             /* Appearance popup; NULL when it failed */
-    MenuHandle    effort;            /* runtime menu the popup's minimum names */
+    Rect          popup;             /* Effort popup user item rectangle */
+    MenuHandle    effort;            /* runtime menu behind the popup; NULL on failure */
+    int           effort_on;         /* the menu holds real choices */
+    int           effort_choice;     /* 1-based chosen item */
     int           effort_shown;      /* popup lists confirmed_info's efforts */
     Rect          results;           /* results userItem rectangle */
     AgentModelRow rows[AGENT_MODEL_ROWS_MAX];
@@ -623,34 +624,82 @@ static void PrefsHint(PrefsDialog *d, const char *text)
     InvalRect(&rect);
 }
 
+/* Draw the popup by hand: a rounded box with its shadow, the chosen effort and
+ * a down arrow; the disabled form (no choices) is gray. */
+static void PrefsEffortDraw(PrefsDialog *d)
+{
+    Rect box = d->popup, text;
+    RGBColor fill = { 0xE000, 0xE000, 0xE000 }, gray = { 0x8000, 0x8000, 0x8000 };
+    Str255 label;
+    int i;
+    box.right -= 1; box.bottom -= 1;
+    RGBBackColor(&fill);
+    EraseRoundRect(&box, 8, 8);
+    ForeColor(blackColor);
+    BackColor(whiteColor);
+    FrameRoundRect(&box, 8, 8);
+    MoveTo(box.left + 4, box.bottom); LineTo(box.right - 4, box.bottom);
+    MoveTo(box.right, box.top + 4); LineTo(box.right, box.bottom - 4);
+    label[0] = 0;
+    if (d->effort && d->effort_choice >= 1 && d->effort_choice <= CountMItems(d->effort))
+        GetMenuItemText(d->effort, (short)d->effort_choice, label);
+    text.left = box.left + 8; text.right = box.right - 22;
+    text.top = box.top; text.bottom = box.bottom;
+    if (!d->effort_on) RGBForeColor(&gray);
+    TruncString(text.right - text.left, label, truncEnd);
+    MoveTo(text.left, box.bottom - 5);
+    DrawString(label);
+    for (i = 0; i < 4; i++) {
+        MoveTo(box.right - 16 + i, box.top + 7 + i);
+        Line(7 - 2 * i, 0);
+    }
+    ForeColor(blackColor);
+}
+
 /* Rebuild the effort menu from a confirmed row, preselecting its default
- * effort; a row without choices leaves the popup disabled showing (none). */
+ * effort; a row without choices leaves the popup disabled showing None. */
 static void PrefsEffortShow(PrefsDialog *d, const AgentModelInfo *info)
 {
     int i, choose = 1;
     d->effort_shown = info != NULL;
-    if (!d->popup || !d->effort) return;
+    d->effort_on = 0;
+    d->effort_choice = 1;
+    if (!d->effort) return;
     while (CountMItems(d->effort) > 0) DeleteMenuItem(d->effort, CountMItems(d->effort));
     if (!info || info->effort_count == 0) {
-        AppendMenu(d->effort, (ConstStr255Param)"\p(none)");
-        HiliteControl(d->popup, 255);
-        SetControlValue(d->popup, 1);
-        Draw1Control(d->popup);
-        return;
-    }
-    for (i = 0; i < info->effort_count; i++) {
-        Str255 label;
-        PStr(label, info->supported_efforts[i]);
-        AppendMenu(d->effort, label);
-    }
-    for (i = 0; i < info->effort_count; i++)
-        if (info->default_effort[0] && !strcmp(info->supported_efforts[i], info->default_effort)) {
-            choose = i + 1;
-            break;
+        AppendMenu(d->effort, (ConstStr255Param)"\pNone");
+    } else {
+        for (i = 0; i < info->effort_count; i++) {
+            Str255 label;
+            PStr(label, info->supported_efforts[i]);
+            AppendMenu(d->effort, label);
+            /* AppendMenu reads metacharacters; the efforts are plain words,
+             * but set the text outright so a stray one cannot become a flag. */
+            SetMenuItemText(d->effort, (short)(i + 1), label);
         }
-    HiliteControl(d->popup, 0);
-    SetControlValue(d->popup, (short)choose);
-    Draw1Control(d->popup);
+        for (i = 0; i < info->effort_count; i++)
+            if (info->default_effort[0] && !strcmp(info->supported_efforts[i], info->default_effort)) {
+                choose = i + 1;
+                break;
+            }
+        d->effort_on = 1;
+        d->effort_choice = choose;
+    }
+    InvalRect(&d->popup);
+}
+
+/* Click on the popup: track the menu at the box and keep the chosen item. */
+static void PrefsEffortClick(PrefsDialog *d)
+{
+    Point where;
+    long pick;
+    if (!d->effort || !d->effort_on) return;
+    where.v = d->popup.top; where.h = d->popup.left;
+    LocalToGlobal(&where);
+    pick = PopUpMenuSelect(d->effort, where.v, where.h, (short)d->effort_choice);
+    if ((short)(pick >> 16) == kPrefsEffortMenuID && (short)(pick & 0xFFFF) > 0)
+        d->effort_choice = (short)(pick & 0xFFFF);
+    PrefsEffortDraw(d);
 }
 
 /* Typing filters the fetched page locally; the empty filter shows all rows. */
@@ -673,7 +722,7 @@ static Rect PrefsRowRect(const Rect *box, int index)
     return r;
 }
 
-/* Hand-drawn result rows on the user item; the picked row is shaded. */
+/* Hand-drawn result rows on the user item; the picked row is inverted. */
 static void PrefsDrawRows(PrefsDialog *d)
 {
     Rect box = d->results;
@@ -684,11 +733,8 @@ static void PrefsDrawRows(PrefsDialog *d)
     for (i = 0; i < d->visible_count; i++) {
         const AgentModelRow *row = &d->rows[d->visible[i]];
         Rect r = PrefsRowRect(&box, i);
-        if (d->visible[i] == d->selected) {
-            RGBColor shade = { 0xDDDD, 0xDDDD, 0xDDDD };
-            RGBForeColor(&shade); PaintRect(&r); ForeColor(blackColor);
-        }
         DrawFittedLabel(&r, row->id, truncMiddle);
+        if (d->visible[i] == d->selected) InvertRect(&r);
     }
 }
 
@@ -862,10 +908,8 @@ static void ShowPreferences(void)
     static Prefs candidate;   /* the live values change only after a verified save */
     PrefsDialog *d = &gPrefsDlg;
     DialogPtr dlg;
-    ControlHandle popup = NULL;
     MenuHandle effort = NULL;
     short item, type;
-    Rect popup_rect;
     Handle item_handle;
     int done = 0, saved = 0, i, debug = gPrefs.show_tool_debug, rounds, tools;
     char model[CHAT_MODEL_CAP], key[PREFS_KEY_CAP], workspace[PREFS_WORKSPACE_CAP];
@@ -878,20 +922,13 @@ static void ShowPreferences(void)
     d->dlg = dlg;
     SetPort(dlg);
 
-    /* The Effort popup is created here because the DITL carries only its
-     * rectangle (item 9). Insert its menu before NewControl so the CDEF finds
-     * it by the ID passed as the control's minimum. */
-    GetDialogItem(dlg, kPrefsEffortItem, &type, &item_handle, &popup_rect);
+    /* The Effort popup is a hand-drawn user item (item 9); its menu is built
+     * and inserted here so PopUpMenuSelect can track it. */
+    GetDialogItem(dlg, kPrefsEffortItem, &type, &item_handle, &d->popup);
     GetDialogItem(dlg, kPrefsResultsItem, &type, &item_handle, &d->results);
     effort = NewMenu(kPrefsEffortMenuID, (ConstStr255Param)"\p");
-    if (effort) {
-        InsertMenu(effort, hierMenu);
-        popup = NewControl(dlg, &popup_rect, (ConstStr255Param)"\p", true, 1,
-                           kPrefsEffortMenuID, 0,
-                           kControlPopupButtonProc + kControlPopupFixedWidthVariant, 0);
-    }
+    if (effort) InsertMenu(effort, hierMenu);
     d->effort = effort;
-    d->popup = popup;
     PrefsEffortShow(d, NULL);
 
     SetPrefsText(dlg, kPrefsModelItem, gPrefs.model);
@@ -942,7 +979,7 @@ static void ShowPreferences(void)
                     BeginUpdate(dlg);
                     DrawDialog(dlg);
                     PrefsDrawRows(d);
-                    if (d->popup) Draw1Control(d->popup);
+                    PrefsEffortDraw(d);
                     EndUpdate(dlg);
                 } else if ((WindowPtr)event.message == gWindow) {
                     UpdateMainWindow();
@@ -962,18 +999,6 @@ static void ShowPreferences(void)
                     PrefsFetchResume(d);
                     break;
                 }
-                if (which == dlg && part == inContent && d->popup) {
-                    /* The popup is not a DITL item, so DialogSelect never sees it. */
-                    Point local = event.where;
-                    ControlHandle ctl = NULL;
-                    GlobalToLocal(&local);
-                    if (FindControl(local, dlg, &ctl) && ctl == d->popup) {
-                        TrackControl(d->popup, local, NULL);
-                        Draw1Control(d->popup);
-                        PrefsFetchResume(d);
-                        break;
-                    }
-                }
             }
             item = PrefsKeyItem(dlg, &event);
             if (item) hit = event.what == keyDown;   /* a held key does not repeat the press */
@@ -991,6 +1016,9 @@ static void ShowPreferences(void)
                 done = 1;
             } else if (item == kPrefsFindItem) {
                 PrefsFind(d);
+            } else if (item == kPrefsEffortItem) {
+                PrefsEffortClick(d);
+                PrefsFetchResume(d);
             } else if (item == kPrefsResultsItem) {
                 Point local = event.where;
                 GlobalToLocal(&local);
@@ -1082,7 +1110,6 @@ static void ShowPreferences(void)
         if (d->fetch || d->draining) PrefsFetchStep(d);
     }
 
-    if (d->popup) DisposeControl(d->popup);
     CloseDialog(dlg);
     if (effort) { DeleteMenu(kPrefsEffortMenuID); DisposeMenu(effort); }
     if (gWindow) SetPort(gWindow);
