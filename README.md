@@ -84,10 +84,11 @@ which stays as the compiled fallback. The workspace applies to new tool work
 immediately (tools, new sessions, builds); a session already open keeps
 writing to the folder it was opened in. Limits accept 1–128 and apply per run;
 outside that range, or with a value missing or malformed in the file, the
-compiled default is used. With the debug toggle on, each executed call shows a
-compact call block — rendered arguments, the result and the call's journal
-event names — in the Conversation; the session JSONL is byte-identical either
-way, and the API key never appears in status text, logs, prompts or results.
+compiled default is used. Each executed call shows a compact call line — the tool
+name and rendered arguments — in the Conversation; with the debug toggle on,
+the result and the call's journal event names follow it. The session JSONL is
+byte-identical either way, and the API key never appears in status text, logs,
+prompts or results.
 
 The Finder icon ships as a bundle icon family and as an attached custom icon,
 so the AFP file displays correctly without rebuilding the Desktop database.

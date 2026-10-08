@@ -186,10 +186,11 @@ should survive a relaunch.
   a session already open keeps writing to the folder it was opened in. The
   session, handoff and build-queue paths are all derived from the runtime value
   (`tools_workspace()`), so a change strands nothing mid-session.
-- **Debug blocks follow an agent-tool display style:** a call header with
-  rendered arguments (`• write_text(path: "x")`), the result indented under `»`,
-  then the call's journal event names. Staging/backup paths and full payloads
-  stay in the session JSONL, which is byte-identical with the toggle off.
+- **Debug blocks follow an agent-tool display style:** every executed call
+  shows a call header with rendered arguments (`• write_text(path: "x")`); the
+  toggle only adds the result indented under `»` and the call's journal event
+  names. Staging/backup paths and full payloads stay in the session JSONL,
+  which is byte-identical either way.
 - **Guest-found details:** `FSMakeFSSpec` returns `fnfErr` for the missing
   preferences file, so first run and first save treat that as "no file yet";
   and `ModalDialog` reports a DITL checkbox click as its item number but does
