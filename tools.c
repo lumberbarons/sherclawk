@@ -290,6 +290,16 @@ static void read(const char *s, const JsonToken *tokens, char *out, size_t cap)
     if (append(out, cap, &at, header)) fail(out, cap, "LIMIT", "Text result exceeds output capacity.", 0);
 
 }
+/* The configured workspace root as a non-alias folder. App-internal bootstrap
+ * operations that create fixed children (the build queue) start here. */
+OSErr tools_workspace_root(FSSpec *spec)
+{
+    CInfoPBRec pb;
+    OSErr err = spec_for("", 1, spec);
+    if (!err) err = catalog(spec, &pb);
+    if (!err && (!(pb.hFileInfo.ioFlAttrib & 16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000))) err = paramErr;
+    return err;
+}
 /* Resolve each existing ancestor by directory ID, never through an alias.
  * Only fnfErr for the final leaf is a valid create destination. */
 OSErr tools_resolve(const char *path, FSSpec *spec)

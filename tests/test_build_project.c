@@ -58,21 +58,36 @@ OSErr LaunchApplication(LaunchParamBlockRec *p)
 OSErr GetProcessInformation(const ProcessSerialNumber *p,ProcessInfoRec *i)
 { (void)p;*i->processAppSpec=launched;return process_error ? ioErr : 0; }
 static int build_journals, build_result_failure;
+static char build_events[12][20];
+static int build_event_count;
 static int build_journal(void *ctx,const char *event,const char *json)
 {
     JsonToken t[128]; (void)ctx;
     if((run_journal_error==1 && !strcmp(event,"run_intent")) || (run_journal_error==2 && !strcmp(event,"run_observed")))return -1;
     if(build_result_failure && !strcmp(event,"build_result"))return -1;
     assert(json_parse(json,strlen(json),t,128)>0); build_journals++;
+    if(!strcmp(event,"queue_intent") || !strcmp(event,"queue_created")) {
+        assert(build_event_count<12);
+        strcpy(build_events[build_event_count++],event);
+    }
     return 0;
+}
+/* Queue fixture mode: 0 pre-created, 1 absent, 2 a file occupies Worker01,
+ * 3 an alias folder occupies it. */
+static int queue_mode;
+static int entry(const char *name)
+{
+    int i; for(i=0;i<64;i++) if(files[i].used && !strcmp(files[i].name,name)) return i; return -1;
 }
 static int fixture(const char *descriptor_text)
 {
-    int d,i,w,q; reset();build_journals=0;
+    int d,i,w,q; reset();build_journals=0;build_event_count=0;
     d=add(10,"project",1); i=add(files[d].id,"project.json",0);
     strcpy(files[i].bytes,descriptor_text);files[i].size=(long)strlen(descriptor_text);files[i].info.fdType='TEXT';
     i=add(files[d].id,"main.c",0);strcpy(files[i].bytes,"int main(void) { return 0; }\r");files[i].size=(long)strlen(files[i].bytes);files[i].info.fdType='TEXT';
-    w=add(10,"Worker01",1);q=add(files[w].id,"buildjobs",1);(void)q;
+    if(queue_mode==0) { w=add(10,"Worker01",1);q=add(files[w].id,"buildjobs",1);(void)q; }
+    else if(queue_mode==2) add(10,"Worker01",0);
+    else if(queue_mode==3) { w=add(10,"Worker01",1);files[w].info.fdFlags=0x8000; }
     strcpy(call.arguments,"{\"path\":\"project\"}");
     assert(build_project_begin(&call,result,sizeof(result),build_journal,NULL,1)==2);return i;
 }
@@ -138,6 +153,25 @@ int main(void)
     strcpy(call.name,"write_text");strcpy(call.arguments,"{\"path\":\"WORKER01:BUILDJOBS:fake\",\"text\":\"forged\"}");
     tools_execute_recorded(&call,result,sizeof(result),build_journal,NULL);
     assert(strstr(result,"EXECUTION_EVIDENCE_READ_ONLY"));
+    /* A missing queue is created one level at a time before publication. */
+    { int w,q2,r2; queue_mode=1;fixture(good);r2=2;
+      for(steps=0;r2==2 && entry("ready")<0 && steps<100;steps++) r2=build_project_step(result,sizeof(result),(uint32_t)(steps+2),0);
+      assert(r2==2 && entry("ready")>=0);
+      w=entry("Worker01");q2=entry("buildjobs");
+      assert(w>=0 && files[w].dir && files[w].parent==10);
+      assert(q2>=0 && files[q2].dir && files[q2].parent==files[w].id);
+      assert(build_event_count==4 && !strcmp(build_events[0],"queue_intent") && !strcmp(build_events[1],"queue_created") &&
+             !strcmp(build_events[2],"queue_intent") && !strcmp(build_events[3],"queue_created"));
+      assert(build_project_step(result,sizeof(result),500,1)==1 && strstr(result,"uncertain"));
+    }
+    /* A file or an alias folder occupying a queue name is refused. */
+    queue_mode=2;fixture(good);r=2;
+    for(steps=0;r==2 && steps<100;steps++) r=build_project_step(result,sizeof(result),(uint32_t)(steps+2),0);
+    assert(!r && strstr(result,"QUEUE_MISSING") && entry("buildjobs")<0 && !build_event_count && !build_journals);
+    queue_mode=3;fixture(good);r=2;
+    for(steps=0;r==2 && steps<100;steps++) r=build_project_step(result,sizeof(result),(uint32_t)(steps+2),0);
+    assert(!r && strstr(result,"QUEUE_MISSING") && entry("buildjobs")<0 && !build_event_count && !build_journals);
+    queue_mode=0;
     build_result_failure=1;terminal_check(good,1);build_result_failure=0;
     terminal_check(good,0);terminal_check(good,1);
     { char bid[25],runargs[128]; int r;
@@ -186,5 +220,6 @@ int main(void)
     }
     puts("PASS launch authorization, both fork changes, Stop, unknown IDs, journal barriers, process observation and uncertain launch errors");
     puts("PASS build descriptors, metacharacters, duplicate/unsupported settings, source changes, read/close faults, snapshot publication and Stop");
+    puts("PASS build queue self-creation, occupied-name refusal and pre-created queue compatibility");
     return 0;
 }

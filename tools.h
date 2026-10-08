@@ -7,6 +7,8 @@
 #include <Files.h>
 /* Resolve all workspace ancestors without following aliases. */
 OSErr tools_resolve(const char *, FSSpec *);
+/* The configured workspace as a non-alias folder (bootstrap children). */
+OSErr tools_workspace_root(FSSpec *);
 #endif
 void tools_execute(const AgentCall *call, char *result, size_t cap);
 /* Nonzero means stop the run: recording failed or publication is uncertain. */
