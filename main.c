@@ -48,7 +48,7 @@ enum {
     kWinLeft   = 40,
     kWinTop    = 40,
     kWinWidth  = 600,
-    kWinHeight = 420,
+    kWinHeight = 436,
 
     kPad       = 10,
     kFieldH    = 20,
@@ -72,6 +72,13 @@ static Rect gModelLabelRect, gModelRect, gSendRect;
 static Rect gStatusLabelRect, gStatusRect;
 static Rect gHistoryRect;
 static size_t gDisplayedHistory = (size_t)-1;
+static Rect gUsageRect;
+static char gModelInfoModel[CHAT_MODEL_CAP];
+static long gModelInfoLimit = -1;
+static int  gModelInfoAttempted = 0;
+static long long gDisplayedCost = -1;
+static long gDisplayedTokens = -1;
+static long gDisplayedLimit = -1;
 static Rect gResponseLabelRect, gResponseRect, gResponseViewRect;
 
 static MenuHandle gAppleMenu = NULL;
@@ -102,6 +109,7 @@ static char gPending[CHAT_PROMPT_CAP * 3];
 static char gJSON[CHAT_REQUEST_CAP];
 static char gToolResult[AGENT_RESULT_CAP];
 static int gSending = 0, gOTOpen = 0;
+static int gLookupDrain = 0;
 static int gHandoff = 0;
 static Agent gHandoffCandidate;
 static char gHandoffSummary[8192], gHandoffPath[256];
@@ -156,7 +164,7 @@ static const char *TLSVersionLabel(MacTLS_Version v)
 
 static void UpdateHandoffControls(void)
 {
-    int enabled = !gSending && gSessionOpen && gAgent.messages &&
+    int enabled = !gSending && !gLookupDrain && gSessionOpen && gAgent.messages &&
         !gAgent.active && gAgent.next >= gAgent.count;
     if (enabled == gHandoffEnabled) return;
     gHandoffEnabled = enabled;
@@ -681,6 +689,19 @@ static int HandleMenu(long menuChoice)
 
 /* ── Layout, drawing, UI setup ────────────────────────────────────── */
 
+/* Compact OpenCode-style token counts: exact below 1000, else one decimal k/M. */
+static void FormatTokens(long tokens, char *out, size_t cap)
+{
+    if (tokens < 1000) snprintf(out, cap, "%ld", tokens);
+    else if (tokens < 1000000) {
+        long tenths = (tokens + 50) / 100;
+        snprintf(out, cap, "%ld.%ldk", tenths / 10, tenths % 10);
+    } else {
+        long tenths = (tokens + 50000) / 100000;
+        snprintf(out, cap, "%ld.%ldM", tenths / 10, tenths % 10);
+    }
+}
+
 static void ComputeLayout(void)
 {
     SetRect(&gModelLabelRect, 10, 10, 48, 30);
@@ -688,15 +709,16 @@ static void ComputeLayout(void)
     SetRect(&gStatusLabelRect, 10, 38, 56, 54);
     SetRect(&gStatusRect, 60, 38, 590, 54);
     SetRect(&gHistoryRect, 10, 254, 166, 270);
+    SetRect(&gUsageRect, 10, 272, 590, 288);
     SetRect(&gResponseLabelRect, 174, 62, 340, 78);
     SetRect(&gResponseRect, 174, 82, 590, 270);
     gResponseViewRect = gResponseRect; gResponseViewRect.right -= kScrollW;
-    SetRect(&gPromptLabelRect, 10, 278, 200, 294);
-    SetRect(&gPromptRect, 10, 298, 590, 380);
-    SetRect(&gSendRect, 10, 390, 74, 410);
-    SetRect(&gStopRect, 84, 390, 148, 410);
-    SetRect(&gNewRect, 158, 390, 246, 410);
-    SetRect(&gHandoffRect, 478, 390, 590, 410);
+    SetRect(&gPromptLabelRect, 10, 294, 200, 310);
+    SetRect(&gPromptRect, 10, 314, 590, 396);
+    SetRect(&gSendRect, 10, 406, 74, 426);
+    SetRect(&gStopRect, 84, 406, 148, 426);
+    SetRect(&gNewRect, 158, 406, 246, 426);
+    SetRect(&gHandoffRect, 478, 406, 590, 426);
 }
 
 static void DrawChrome(void)
@@ -734,6 +756,34 @@ static void DrawChrome(void)
             (unsigned long)(gAgent.used * 100 / AGENT_HISTORY_CAP));
         DrawLabel(&gHistoryRect, history);
         gDisplayedHistory = gAgent.used;
+        {
+            char line[96], count[24];
+            long dollars, micros;
+            EraseRect(&gUsageRect);
+            if (gAgent.context_seen) FormatTokens(gAgent.context_tokens, count, sizeof(count));
+            else strcpy(count, "-");
+            if (gAgent.context_seen && gModelInfoLimit > 0 && !strcmp(gModelInfoModel, gRunModel)) {
+                long long percent = ((long long)gAgent.context_tokens * 100 + gModelInfoLimit / 2) / gModelInfoLimit;
+                if (percent > 100) percent = 100;
+                snprintf(line, sizeof(line), "Context: %s tokens (%ld%%)", count, (long)percent);
+            } else if (gAgent.context_seen) {
+                snprintf(line, sizeof(line), "Context: %s tokens", count);
+            } else {
+                snprintf(line, sizeof(line), "Context: -");
+            }
+            DrawLabel(&gUsageRect, line);
+            if (gAgent.cost_micros > 0) {
+                dollars = (long)(gAgent.cost_micros / 1000000LL);
+                micros = (long)(gAgent.cost_micros % 1000000LL);
+                snprintf(line, sizeof(line), "Cost: $%lu.%06lu", (unsigned long)dollars, (unsigned long)micros);
+                PStr(p, line);
+                MoveTo(gUsageRect.right - StringWidth(p), gUsageRect.bottom - 4);
+                DrawString(p);
+            }
+            gDisplayedCost = gAgent.cost_micros;
+            gDisplayedTokens = gAgent.context_seen ? gAgent.context_tokens : -1;
+            gDisplayedLimit = gModelInfoLimit;
+        }
     }
     DrawLabel(&gResponseLabelRect, "Conversation:");
     FrameRect(&gResponseRect);
@@ -943,7 +993,7 @@ static void HandleEvent(const EventRecord *event)
         if (!gSending && gPromptTE && PtInRect(local, &(*gPromptTE)->viewRect)) {
             FocusSet(gPromptTE);
             TEClick(local, (event->modifiers & shiftKey) != 0, gPromptTE);
-        } else if (!gSending && gModelTE && PtInRect(local, &(*gModelTE)->viewRect)) {
+        } else if ((!gSending || gSending == 6) && gModelTE && PtInRect(local, &(*gModelTE)->viewRect)) {
             FocusSet(gModelTE);
             TEClick(local, (event->modifiers & shiftKey) != 0, gModelTE);
         } else if (gResponseTE && PtInRect(local, &(*gResponseTE)->viewRect)) {
@@ -979,7 +1029,8 @@ static void HandleEvent(const EventRecord *event)
                 gFocusedTE == gPromptTE ? gResponseTE : gModelTE);
             break;
         }
-        if (!gSending && gFocusedTE && gFocusedTE != gResponseTE) {
+        if ((!gSending || (gSending == 6 && gFocusedTE == gModelTE)) &&
+            gFocusedTE && gFocusedTE != gResponseTE) {
             long limit = gFocusedTE == gModelTE ? CHAT_MODEL_CAP - 1 : CHAT_PROMPT_CAP - 1;
             long remaining = (*gFocusedTE)->teLength -
                 ((*gFocusedTE)->selEnd - (*gFocusedTE)->selStart);
@@ -1238,6 +1289,10 @@ static int CommitHandoff(void)
     if (agent_handoff_seed(&gHandoffCandidate, gHandoffSummary, gSessionPath, gHandoffPath)) {
         FSClose(ref); return -1;
     }
+    /* Cost is a session total, not history: the fresh candidate keeps it and
+     * leaves the context line unset until the next reply. */
+    gHandoffCandidate.cost_micros = gAgent.cost_micros;
+    gHandoffCandidate.cost_seen = gAgent.cost_seen;
     /* The old agent is untouched until both durable files exist. */
     SessionClose();
     gSessionRef = ref; gSessionOpen = 1; strcpy(gSessionPath, path);
@@ -1251,6 +1306,7 @@ static void StartHandoff(void)
     size_t i;
     char attribution[256];
     if (gSending) return;
+    if (gLookupDrain) { SetStatus("The stopped lookup is still closing; try again in a moment."); return; }
     if (!gSessionOpen || !gAgent.messages || gAgent.active || gAgent.next < gAgent.count) {
         SetStatus("Finish or stop the current run before saving a handoff."); return;
     }
@@ -1291,6 +1347,16 @@ static void AbortChat(const char *reason)
         if (*gHandoffPath) ShowMessage("Retained handoff file (may be incomplete)", gHandoffPath);
         SetStatus("Handoff stopped; conversation retained. %s", reason);
         LogAbort("Handoff stopped; conversation retained. Reason", reason);
+        return;
+    }
+    if (gSending == 6) {
+        /* Do not tear the TLS context down mid-connect: classic OT can fault
+         * when an async connect is outstanding. Keep the exchange draining and
+         * close it from the loop once network_step reaches a terminal state. */
+        gLookupDrain = 1; gStartTicks = (uint32_t)TickCount();
+        gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
+        SetStatus("Model context lookup stopped. Send again shortly.");
+        LogAbort("Model context lookup stopped. Reason", reason);
         return;
     }
     if (gSending == 4 || gSending == 5) {
@@ -1352,11 +1418,82 @@ static int StartModelRequest(void)
     SetStatus("Connecting to OpenRouter (round %d)...", gAgent.rounds + 1);
     LogLine("Agent model request started."); return 0;
 }
+/* The session and agent state are touched only after the optional
+ * context-window lookup, so Stop during it keeps the typed prompt and leaves
+ * no session record. */
+static void SendBegin(void)
+{
+    char error[256];
+    gSending = 0;
+    if (!gSessionOpen && (gAgent.messages || SessionStart())) {
+        SetStatus("Session file unavailable. Check %s or start a new session.", tools_workspace()); return;
+    }
+    if (agent_begin(&gAgent, gPending, error, sizeof(error))) { SetStatus("%s", error); return; }
+    ShowMessage("You", gPending);
+    TESetText("", 0, gPromptTE); InvalRect(&gPromptRect);
+    SetSendEnabled(0); StartModelRequest();
+}
+static int ModelLookupAllowed(const char *model)
+{
+    size_t i;
+    if (!*model) return 0;
+    for (i = 0; model[i]; i++) {
+        unsigned char c = (unsigned char)model[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '.' || c == '_' || c == ':' ||
+              c == '/' || c == '-')) return 0;
+    }
+    return 1;
+}
+static void StartContextLookup(void)
+{
+    char path[CHAT_MODEL_CAP + 32];
+    int length;
+    if (snprintf(path, sizeof(path), "/api/v1/models/%s/endpoints", gRunModel) >= (int)sizeof(path)) { SendBegin(); return; }
+    length = http_build_get("openrouter.ai", path, gNet.request, sizeof(gNet.request));
+    if (length < 0) { SendBegin(); return; }
+    /* Remember the attempt before the network: at most one lookup per model
+     * per launch, whatever the outcome. */
+    strcpy(gModelInfoModel, gRunModel); gModelInfoLimit = -1; gModelInfoAttempted = 1;
+    InitOpenTransport(); gOTOpen = 1;
+    gStartTicks = (uint32_t)TickCount();
+    if (network_start(&gNet, gNet.request, (size_t)length) < 0) {
+        CloseChatContext(); SendBegin(); return;
+    }
+    gSending = 6;
+    SetSendEnabled(0);
+    SetStatus("Checking context window for %s...", gRunModel);
+}
+static void SendAdvance(void)
+{
+    if (!(gModelInfoAttempted && !strcmp(gModelInfoModel, gRunModel)) && ModelLookupAllowed(gRunModel)) {
+        StartContextLookup(); return;
+    }
+    SendBegin();
+}
+static void FinishContextLookup(int completed)
+{
+    long limit = -1;
+    if (completed && gNet.status == 200) limit = agent_context_limit(gNet.body, gNet.body_len);
+    if (limit > 0) gModelInfoLimit = limit;
+    if (gNet.ctx || gOTOpen) CloseChatContext();
+    {
+        char current[CHAT_MODEL_CAP];
+        if (TEGetTextInto(gModelTE, current, sizeof(current)) < 0 || strcmp(current, gRunModel)) {
+            gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
+            SetStatus("Model changed during the context lookup. Send again to continue.");
+            return;
+        }
+    }
+    gSending = 0;
+    SendAdvance();
+}
 static void SendChat(void)
 {
-    char prompt[CHAT_PROMPT_CAP], error[256];
+    char prompt[CHAT_PROMPT_CAP];
     size_t i;
     if (gSending) return;
+    if (gLookupDrain) { SetStatus("The stopped lookup is still closing; send again in a moment."); return; }
     if (!gPrefs.api_key[0]) { SetStatus("No API key: choose Preferences from the Edit menu."); return; }
     if (TEGetTextInto(gModelTE, gRunModel, sizeof(gRunModel)) < 0 ||
         TEGetTextInto(gPromptTE, prompt, sizeof(prompt)) < 0) { SetStatus("Model or message is too long."); return; }
@@ -1366,19 +1503,27 @@ static void SendChat(void)
     for (i = 0; prompt[i] && (prompt[i] == ' ' || prompt[i] == '\r' || prompt[i] == '\t'); i++) {}
     if (!*gRunModel || !prompt[i]) { SetStatus("Enter a model and message first."); return; }
     if (text_to_utf8(prompt, strlen(prompt), gPending, sizeof(gPending)) < 0) { SetStatus("Could not convert message to UTF-8."); return; }
-    if (!gSessionOpen && (gAgent.messages || SessionStart())) {
-        SetStatus("Session file unavailable. Check %s or start a new session.", tools_workspace()); return;
-    }
-    if (agent_begin(&gAgent, gPending, error, sizeof(error))) { SetStatus("%s", error); return; }
-    ShowMessage("You", gPending);
-    TESetText("", 0, gPromptTE); InvalRect(&gPromptRect);
-    SetSendEnabled(0); StartModelRequest();
+    SendAdvance();
 }
 static void DriveChatStep(void)
 {
     char error[256];
     int result;
     if (!gSending) return;
+    if (gSending == 6) {
+        int lookup;
+        if ((uint32_t)TickCount() - gStartTicks > 30UL * 60UL) { FinishContextLookup(0); return; }
+        lookup = network_step(&gNet);
+        if (lookup < 0) { FinishContextLookup(0); return; }
+        if (lookup == 0) {
+            MacTLS_State state = MacTLS_GetState(gNet.ctx);
+            if (state == kMacTLS_Handshaking) SetStatus("TLS handshake...");
+            else if (state == kMacTLS_Connected) SetStatus("Checking context window for %s...", gRunModel);
+            return;
+        }
+        FinishContextLookup(1);
+        return;
+    }
     if (gSending == 3) { StartModelRequest(); return; }
     if (gSending == 4 || gSending == 5) {
         int running=gSending==5;
@@ -1434,6 +1579,8 @@ static void DriveChatStep(void)
         if (agent_handoff_response(gNet.body, gNet.body_len, gNet.status, gHandoffSummary,
             sizeof(gHandoffSummary), error, sizeof(error))) { JournalModelError(error); AbortChat(error); return; }
         CloseChatContext();
+        /* The summary completion is provider-billed like any other round. */
+        agent_usage_absorb(&gAgent, gNet.body, gNet.body_len);
         if (CommitHandoff()) { AbortChat("Could not save/verify handoff and new journal. History was not cleared."); return; }
         gHandoff = 0; gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
         ShowMessage("Saved handoff", gHandoffPath);
@@ -1454,6 +1601,18 @@ static void DriveChatStep(void)
         else SetStatus("Done - %d model rounds, %d tools. Session saved.", gAgent.rounds, gAgent.tool_count);
         LogLine("Agent run completed.");
     }
+}
+/* A stopped context lookup keeps its exchange alive until network_step reaches
+ * a terminal state; closing it here avoids tearing OT down mid-connect. */
+static void DrainAbandonedLookup(void)
+{
+    int result;
+    if (!gLookupDrain) return;
+    if ((uint32_t)TickCount() - gStartTicks > 30UL * 60UL) {
+        CloseChatContext(); gLookupDrain = 0; return;
+    }
+    result = network_step(&gNet);
+    if (result != 0) { CloseChatContext(); gLookupDrain = 0; }
 }
 
 int main(void)
@@ -1477,11 +1636,15 @@ int main(void)
         WaitNextEvent(everyEvent, &event, gSending ? 1 : 10, NULL);
         SetPort(gWindow); HandleEvent(&event);
         if (gSending) DriveChatStep();
+        DrainAbandonedLookup();
         selfbuild_drain((uint32_t)TickCount());
         UpdateHandoffControls();
         /* History changes during sends, tool results, New Chat and handoff.
          * Keep its indicator current even when the ordinary status is unchanged. */
         if (gDisplayedHistory != gAgent.used) InvalRect(&gHistoryRect);
+        if (gDisplayedCost != gAgent.cost_micros ||
+            gDisplayedTokens != (gAgent.context_seen ? gAgent.context_tokens : -1) ||
+            gDisplayedLimit != gModelInfoLimit) InvalRect(&gUsageRect);
     }
     if (gNet.ctx || gOTOpen) CloseChatContext();
     if (gAgent.active) AbortChat("Application quit.");
