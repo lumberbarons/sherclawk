@@ -11,6 +11,13 @@
  * its token indices: agent_response absorbs only after its own use has ended. */
 static JsonToken tokens[4096];
 
+/* Size relations documented in docs/limits.md; a build fails if one is broken. */
+#define LIMIT_CHECK(name, cond) typedef char limit_check_##name[(cond) ? 1 : -1]
+/* A worst-case reasoning-heavy completion is about 10 bytes per token. */
+LIMIT_CHECK(tokens_fit_response, AGENT_MAX_TOKENS * 10 <= CHAT_RESPONSE_CAP);
+LIMIT_CHECK(reply_fits_response, AGENT_REPLY_CAP < CHAT_RESPONSE_CAP);
+LIMIT_CHECK(request_holds_history, CHAT_REQUEST_CAP >= AGENT_HISTORY_CAP + 16384);
+
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)
 

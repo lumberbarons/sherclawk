@@ -93,6 +93,9 @@ cp config.example.h config.local.h  # optional local config; gitignored
 - Runtime work is cooperative and bounded: builds, polling and search step
   from the event loop in small increments and honor Stop. Do not add blocking
   loops or unbounded waits.
+- Buffer, token and deadline limits depend on each other; read
+  `docs/limits.md` before changing any of them (`agent.h`, `chat.h`, `network.h`,
+  the `SIZE` resource) and keep it current.
 - Model-facing contracts (8 KiB JSON argument/result bounds, MacRoman/CR text
   and colon paths relative to the `Retro68:` workspace, create-only writes,
   revision-guarded edits) are documented in README.md; update the matching

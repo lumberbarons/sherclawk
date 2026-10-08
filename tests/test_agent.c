@@ -145,6 +145,14 @@ static void truncation(void)
     begin();
     assert(!agent_response(&a, partial_text, strlen(partial_text), 200, error, sizeof(error)));
     assert(a.limited && !a.truncated && !a.active && !strcmp(a.text, "Half an ans"));
+    /* A long complete reply, beyond the old 16 KiB, is kept whole. */
+    {
+        static char long_reply[AGENT_REPLY_CAP], body[AGENT_REPLY_CAP + 256];
+        memset(long_reply, 'x', 30000); long_reply[30000] = 0;
+        snprintf(body, sizeof(body), "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"%s\"}}]}", long_reply);
+        begin();
+        assert(!agent_response(&a, body, strlen(body), 200, error, sizeof(error)) && strlen(a.text) == 30000 && !a.active);
+    }
     /* The notice must be journaled; if it cannot be, nothing advances. */
     begin(); call("length"); used = a.used; fail_record = 1;
     assert(agent_response(&a, response, strlen(response), 200, error, sizeof(error)) == -1);
@@ -300,7 +308,7 @@ int main(void)
     }
     /* The wire request carries the named cap, so docs and code share one value. */
     begin();
-    assert(agent_request(&a, "model", req, sizeof(req)) > 0 && strstr(req, "\"max_tokens\":3072,"));
+    assert(agent_request(&a, "model", req, sizeof(req)) > 0 && strstr(req, "\"max_tokens\":6000,"));
     contexts();
     puts("PASS agent tools, usage accounting, history, truncation, Stop, persistence barriers and bounds");
     return 0;

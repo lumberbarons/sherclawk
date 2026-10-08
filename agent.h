@@ -8,10 +8,13 @@
 #define AGENT_CALL_MAX 4
 #define AGENT_ARGUMENT_CAP 8192
 #define AGENT_TEXT_CAP 16384
+/* Visible text of one model reply: AGENT_MAX_TOKENS of text at up to ~6 bytes
+ * per token, kept separate from the user-prompt and handoff buffers. */
+#define AGENT_REPLY_CAP 40960
 #define AGENT_TURN_MAX 32
 #define AGENT_TOOL_MAX 64
 /* Completion budget per agent request, reasoning included. */
-#define AGENT_MAX_TOKENS 3072
+#define AGENT_MAX_TOKENS 6000
 #define AGENT_HANDOFF_MAX_TOKENS 1536
 /* Display-grade cost accumulator clamp, in millionths of a US dollar. */
 #define AGENT_COST_MICROS_MAX 9000000000000000LL
@@ -20,7 +23,7 @@ typedef struct { char id[128], name[64], arguments[AGENT_ARGUMENT_CAP]; } AgentC
 typedef int (*AgentJournal)(void *context, const char *event, const char *json);
 typedef struct {
     char history[AGENT_HISTORY_CAP];
-    char text[AGENT_TEXT_CAP];
+    char text[AGENT_REPLY_CAP];
     AgentCall calls[AGENT_CALL_MAX];
     size_t used;
     int messages, count, next, rounds, tool_count, active, limited, truncated;

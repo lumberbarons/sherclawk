@@ -594,9 +594,10 @@ after a reply, and a click saved the handoff and prepared fresh history.
 Limits are explicit: by default 32 model rounds and 64 executed calls per run,
 each adjustable 1–128 in Preferences; four calls per
 response, 8 KiB arguments per call, 256 KiB history, 288 KiB JSON request, 64 KiB
-raw HTTP response, and 3,072 output tokens per model request (`AGENT_MAX_TOKENS`
+raw HTTP response, 40 KiB of reply text, and 6,000 output tokens per model request (`AGENT_MAX_TOKENS`
 in `agent.h`; the handoff request has its own `AGENT_HANDOFF_MAX_TOKENS`). Reasoning
-tokens count against that budget. Each HTTPS request has a 120-second
+tokens count against that budget. `docs/limits.md` explains how these limits
+relate. Each HTTPS request has a 120-second
 deadline. Tool output is below 1,536 bytes; folder listings have cursors and
 text reads provide `next_byte` continuation when a line is partial. Reads scan
 at most 8 KiB per invocation. Whole-file revisions guard small-file edits;
@@ -616,7 +617,7 @@ History buffers are static: the app allocates their full capacity at launch,
 not incrementally as messages arrive. With handoff enabled, each additional
 history byte costs roughly four RAM bytes (current history, candidate history,
 JSON request, and HTTP request). Per-response scratch is bounded separately.
-The 256 KiB build has 2,454,552 bytes (2.34 MiB) of linked code/static data
+The 256 KiB build has 2,512,456 bytes (2.40 MiB) of linked code/static data
 (`powerpc-apple-macos-size build/Sherclawk.xcoff`: text, data and bss);
 this excludes dynamic TLS/UI allocations and the stack. Its `SIZE` resource
 still requests 8 MiB preferred / 4 MiB minimum. A 512 KiB history would raise
@@ -643,7 +644,7 @@ the saved session; model history is not silently dropped.
 Each model round (and the handoff request) ends with one line of tick offsets
 since the request began, `-` for a phase never reached: `round=3 init=2
 connect=10 handshake=100 sent=104 first_byte=500 done=620 close=740 up=4096
-down=812 out=240/3072 reasoning=180 end=ok`. `close` includes the Open Transport
+down=812 out=240/6000 reasoning=180 end=ok`. `close` includes the Open Transport
 teardown yields, `up` and `down` are request and response bytes, `out` is the
 provider-reported completion tokens against the request cap and `reasoning` the
 part of them spent reasoning (each omitted when the provider does not report it),
