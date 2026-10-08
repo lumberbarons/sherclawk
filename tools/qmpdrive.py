@@ -412,7 +412,7 @@ class Cursor:
         if not (40 <= len(offs) <= 120):
             raise RuntimeError(f"calibrate: template has {len(offs)} offsets, suspicious (pos={self.pos})")
         self.template = offs
-        self.pos = pos = (x0, y0)
+        self.pos = (x0, y0)
         # Phase 2: white-body offsets, sampled with the cursor over the dark
         # 'untitled' disk icon (bright pixels there == cursor's own whites).
         # These are used to *rank* matches (min(dark, bright)); background

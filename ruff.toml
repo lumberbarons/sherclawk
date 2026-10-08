@@ -1,0 +1,11 @@
+# Ruff configuration for the stdlib-only Python tools. The rule selection is
+# explicit so the gate does not drift when ruff changes its default set;
+# extend the list deliberately. tools/lint.sh runs `ruff check tools tests`.
+target-version = "py39"
+
+[lint]
+select = [
+    "E4", # imports: unused, wildcard, star placement
+    "E9", # syntax and runtime errors
+    "F",  # pyflakes: undefined names, unused imports and variables
+]
