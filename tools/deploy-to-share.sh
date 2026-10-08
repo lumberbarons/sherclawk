@@ -13,5 +13,6 @@ python3 "$HERE/tools/netatalk_meta.py" sidecar "$HERE/build" "$APP" "$HERE/build
 scp -q "$HERE/build/$APP.APPL" "$SHARE_HOST:/tmp/$APP"
 scp -q "$HERE/build/._$APP" "$SHARE_HOST:/tmp/._$APP"
 scp -q "$HERE/tools/netatalk_meta.py" "$SHARE_HOST:/tmp/sherclawk-meta.py"
+# shellcheck disable=SC2029  # paths expand locally so ssh sees the final command
 ssh "$SHARE_HOST" "sudo -n install -o macos9 -g macos9 -m 666 /tmp/$APP '$SHARE_DIR/$APP' && sudo -n install -o macos9 -g macos9 -m 666 /tmp/._$APP '$SHARE_DIR/._$APP' && sudo -n python3 /tmp/sherclawk-meta.py xattr '$SHARE_DIR/$APP'"
 echo "Published $APP to $SHARE_HOST:$SHARE_DIR"

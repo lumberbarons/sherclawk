@@ -19,6 +19,7 @@ for patch in "$HERE"/patches/*.patch; do
 done
 LOCAL_FLAGS=(-DSHERCLAWK_HOST=1 -DSHERCLAWK_APP=1)
 if [ -f "$HERE/config.local.h" ]; then LOCAL_FLAGS+=(-DSHERCLAWK_HAS_LOCAL_CONFIG=1); fi
+# shellcheck disable=SC2054  # the comma is part of -fsanitize=address,undefined
 SAN_FLAGS=(-fsanitize=address,undefined -fno-omit-frame-pointer)
 # bash on macOS is 3.2; populate the array without mapfile.
 BEARSSL_SOURCES=()

@@ -18,6 +18,7 @@ cp ../../app.r app.r
 stage=compile
 echo "stage=$stage started"
 /Developer/Tools/tlsrvr -- MrC main.c -o main.o -i '"{CIncludes}"' -w off
+# shellcheck disable=SC2209  # 'link' is an MPW stage label, not a command
 stage=link
 echo "stage=$stage started"
 /Developer/Tools/tlsrvr -- PPCLink -o Template main.o '"{SharedLibraries}"InterfaceLib' '"{SharedLibraries}"StdCLib' '"{PPCLibraries}"StdCRuntime.o' '"{PPCLibraries}"PPCCRuntime.o' -t APPL
