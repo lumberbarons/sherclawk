@@ -29,6 +29,24 @@ int main(void)
     check_log = fopen("Retro68:SherclawkScrollCheck.log", "w");
     if (!check_log || !gResponseTE || !gResponseScroll) return 1;
 
+    /* Exercise the main screen's two-pane focus cycle and read-only transcript
+     * with the guest TextEdit Manager, rather than a host UI stub. */
+    {
+        EventRecord event;
+        memset(&event, 0, sizeof(event));
+        event.what = keyDown; event.message = 0x09;
+        HandleEvent(&event);
+        if (gFocusedTE != gResponseTE) failures++;
+        event.message = 'x'; HandleEvent(&event);
+        if ((*gResponseTE)->teLength) failures++;
+        event.message = 0x09; HandleEvent(&event);
+        if (gFocusedTE != gPromptTE) failures++;
+        event.message = 'x'; HandleEvent(&event);
+        if ((*gPromptTE)->teLength != 1) failures++;
+        TESetText("", 0, gPromptTE);
+        fprintf(check_log, "two-pane focus and read-only transcript checked\n");
+    }
+
     for (i = 0; i < 100; i++) strcat(text, "Synthetic transcript line\r");
     strcat(text, "END OF REPLY");
     ResponseSetText(text, strlen(text));

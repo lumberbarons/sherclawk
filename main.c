@@ -10,7 +10,9 @@
 #include <Events.h>
 #include <Controls.h>
 #include <ControlDefinitions.h>
+#include <Appearance.h>
 #include <ToolUtils.h>
+#include <TextUtils.h>
 #include <Scrap.h>
 #include <Files.h>
 #include <Folders.h>
@@ -64,17 +66,15 @@ static ControlHandle gSendBtn = NULL, gStopBtn = NULL, gNewBtn = NULL, gHandoffB
 static int gHandoffEnabled = -1;
 static TEHandle gPromptTE = NULL;
 static Rect gPromptRect, gPromptLabelRect, gStopRect, gNewRect, gHandoffRect;
-static TEHandle      gModelTE = NULL;
 static TEHandle      gResponseTE = NULL;
 static ControlHandle gResponseScroll = NULL;
 static ControlActionUPP gScrollActionUPP = NULL;
 static TEHandle      gFocusedTE = NULL;
 
-static Rect gModelLabelRect, gModelRect, gSendRect;
-static Rect gStatusLabelRect, gStatusRect;
-static Rect gHistoryRect;
+static Rect gModelRect, gSendRect;
+static Rect gInfoRect, gStatusRect, gHistoryRect, gMeterRect;
 static size_t gDisplayedHistory = (size_t)-1;
-static Rect gUsageRect;
+static Rect gUsageRect, gContextRect, gCostRect, gPromptHintRect;
 static char gModelInfoModel[CHAT_MODEL_CAP];
 static long gModelInfoLimit = -1;
 static int  gModelInfoAttempted = 0;
@@ -150,6 +150,17 @@ static void DrawLabel(const Rect *r, const char *text)
     DrawString(p);
 }
 
+/* Keep long model IDs and messages inside their column. Full status text is
+ * available by clicking its row; the model remains editable in Preferences. */
+static void DrawFittedLabel(const Rect *r, const char *text, short where)
+{
+    Str255 p;
+    PStr(p, text);
+    TruncString(r->right - r->left, p, where);
+    MoveTo(r->left, r->bottom - 4);
+    DrawString(p);
+}
+
 /* Replace the status line text; redraw only when it actually changed. */
 static void SetStatus(const char *fmt, ...)
 {
@@ -189,7 +200,10 @@ static void UpdateHandoffControls(void)
 
 static void SetSendEnabled(int enabled)
 {
+    Boolean isDefault = enabled != 0;
     if (gSendBtn) HiliteControl(gSendBtn, enabled ? 0 : 255);
+    if (gSendBtn) SetControlData(gSendBtn, kControlEntireControl,
+        kControlPushButtonDefaultTag, sizeof(isDefault), &isDefault);
     if (gNewBtn) HiliteControl(gNewBtn, enabled ? 0 : 255);
     if (gFileMenu) {
         if (enabled) EnableItem(gFileMenu, 1);
@@ -201,6 +215,7 @@ static void SetSendEnabled(int enabled)
     }
     UpdateHandoffControls();
     if (gStopBtn) HiliteControl(gStopBtn, enabled ? 255 : 0);
+    if (gWindow) InvalRect(&gStatusRect);
     if (!enabled && gFocusedTE != gResponseTE) FocusSet(gResponseTE);
 }
 
@@ -434,7 +449,6 @@ static void ShowPreferences(void)
     CloseDialog(dlg);
     if (gWindow) SetPort(gWindow);
     if (done) {
-        TESetText(gPrefs.model, (long)strlen(gPrefs.model), gModelTE);
         InvalRect(&gModelRect);
         SetStatus("Preferences saved; the workspace applies to new work now.");
     }
@@ -707,7 +721,7 @@ static int HandleMenu(long menuChoice)
                 long offset = 0;
                 if (scrap) incoming = GetScrap(scrap, 'TEXT', &offset);
                 if (scrap) DisposeHandle(scrap);
-                long maximum = gFocusedTE == gModelTE ? CHAT_MODEL_CAP - 1 : CHAT_PROMPT_CAP - 1;
+                long maximum = CHAT_PROMPT_CAP - 1;
                 long remaining = (*gFocusedTE)->teLength -
                     ((*gFocusedTE)->selEnd - (*gFocusedTE)->selStart);
                 if (incoming > 0 && incoming <= maximum - remaining) {
@@ -745,94 +759,143 @@ static void FormatTokens(long tokens, char *out, size_t cap)
 
 static void ComputeLayout(void)
 {
-    SetRect(&gModelLabelRect, 10, 10, 48, 30);
-    SetRect(&gModelRect, 54, 10, 590, 30);
-    SetRect(&gStatusLabelRect, 10, 38, 56, 54);
-    SetRect(&gStatusRect, 60, 38, 590, 54);
-    SetRect(&gHistoryRect, 10, 254, 166, 270);
-    SetRect(&gUsageRect, 10, 272, 590, 288);
-    SetRect(&gResponseLabelRect, 174, 62, 340, 78);
-    SetRect(&gResponseRect, 174, 82, 590, 270);
+    SetRect(&gResponseLabelRect, 10, 52, 200, 68);
+    SetRect(&gResponseRect, 10, 70, 590, 252);
     gResponseViewRect = gResponseRect; gResponseViewRect.right -= kScrollW;
-    SetRect(&gPromptLabelRect, 10, 294, 200, 310);
-    SetRect(&gPromptRect, 10, 314, 590, 396);
-    SetRect(&gSendRect, 10, 406, 74, 426);
-    SetRect(&gStopRect, 84, 406, 148, 426);
-    SetRect(&gNewRect, 158, 406, 246, 426);
-    SetRect(&gHandoffRect, 478, 406, 590, 426);
+    SetRect(&gPromptLabelRect, 10, 258, 130, 274);
+    SetRect(&gPromptHintRect, 410, 258, 590, 274);
+    /* One TextEdit line shorter than the former 82-pixel composer. */
+    SetRect(&gPromptRect, 10, 278, 590, 348);
+    SetRect(&gInfoRect, 10, 356, 590, 398);
+    SetRect(&gStatusRect, 18, 358, 320, 376);
+    SetRect(&gModelRect, 328, 358, 582, 376);
+    SetRect(&gHistoryRect, 18, 380, 238, 396);
+    SetRect(&gMeterRect, 194, 384, 230, 392);
+    SetRect(&gUsageRect, 246, 380, 582, 396);
+    SetRect(&gContextRect, 254, 380, 450, 396);
+    SetRect(&gCostRect, 466, 380, 582, 396);
+    SetRect(&gNewRect, 10, 406, 98, 426);
+    SetRect(&gHandoffRect, 108, 406, 220, 426);
+    SetRect(&gStopRect, 438, 406, 502, 426);
+    SetRect(&gSendRect, 518, 406, 586, 426);
+}
+
+/* QuickDraw chrome keeps the actual Window/Control Manager in charge of the
+ * native title bar, buttons and scrollbar. White is the TextEdit background. */
+static void PaintColorRect(const Rect *r, unsigned short shade)
+{
+    RGBColor color = { shade, shade, shade };
+    RGBForeColor(&color); PaintRect(r); ForeColor(blackColor);
+}
+
+static void DrawRecessedFrame(const Rect *r)
+{
+    RGBColor shadow = { 0x7777, 0x7777, 0x7777 };
+    RGBForeColor(&shadow);
+    MoveTo(r->left, r->bottom - 1); LineTo(r->left, r->top);
+    LineTo(r->right - 1, r->top);
+    ForeColor(whiteColor);
+    MoveTo(r->right - 1, r->top + 1); LineTo(r->right - 1, r->bottom - 1);
+    LineTo(r->left + 1, r->bottom - 1);
+    ForeColor(blackColor);
+}
+
+static void DrawTextPane(const Rect *r, TEHandle te)
+{
+    Rect outer = *r;
+    InsetRect(&outer, -1, -1);
+    DrawRecessedFrame(&outer);
+    EraseRect(r); FrameRect(r);
+    if (te) TEUpdate(&(*te)->viewRect, te);
 }
 
 static void DrawChrome(void)
 {
     Str255 p;
+    char line[CHAT_MODEL_CAP + 16], count[24];
+    Rect art = { 0, 0, 52, 52 }, destination = { 2, 10, 54, 62 };
+    Rect status = gStatusRect;
+    Rect lamp = { 363, 18, 371, 26 };
+    Rect meter = gMeterRect;
+    RGBColor accent = RunBusy() ? (RGBColor){ 0xAAAA, 0x7777, 0x1111 }
+                               : (RGBColor){ 0x2222, 0x8888, 0x2222 };
+    long dollars, micros;
+    unsigned long percent = (unsigned long)(gAgent.used * 100 / AGENT_HISTORY_CAP);
 
-    FrameRect(&gModelRect);
-    DrawLabel(&gModelLabelRect, "Model:");
-    if (gModelTE) TEUpdate(&(*gModelTE)->viewRect, gModelTE);
-
-    DrawLabel(&gStatusLabelRect, "Status:");
-    EraseRect(&gStatusRect);
-    PStr(p, gStatusText);
-    MoveTo(gStatusRect.left, gStatusRect.bottom - 4);
-    DrawString(p);
-
-    {
-        Rect art = { 82, 10, 238, 166 };
-        Rect destination = { 96, 10, 252, 166 };
-        Str255 title;
-        char history[80];
-        PStr(title, "Sherclawk"); MoveTo(10, 74); TextFace(bold); DrawString(title); TextFace(normal);
-        MoveTo(10, 87); PStr(title, "The consulting crustacean"); DrawString(title);
-        if (gArt) {
-            PixMapHandle pixels = GetGWorldPixMap(gArt);
-            if (LockPixels(pixels)) {
-                CopyBits((BitMap *)*pixels, &gWindow->portBits, &art, &destination, srcCopy, NULL);
-                UnlockPixels(pixels);
-            }
-        }
-        EraseRect(&gHistoryRect);
-        snprintf(history, sizeof(history), "History: %lu/%lu KiB (%lu%%)",
-            (unsigned long)((gAgent.used + 1023) / 1024),
-            (unsigned long)(AGENT_HISTORY_CAP / 1024),
-            (unsigned long)(gAgent.used * 100 / AGENT_HISTORY_CAP));
-        DrawLabel(&gHistoryRect, history);
-        gDisplayedHistory = gAgent.used;
-        {
-            char line[96], count[24];
-            long dollars, micros;
-            EraseRect(&gUsageRect);
-            if (gAgent.context_seen) FormatTokens(gAgent.context_tokens, count, sizeof(count));
-            else strcpy(count, "-");
-            if (gAgent.context_seen && gModelInfoLimit > 0 && !strcmp(gModelInfoModel, gRunModel)) {
-                long long percent = ((long long)gAgent.context_tokens * 100 + gModelInfoLimit / 2) / gModelInfoLimit;
-                if (percent > 100) percent = 100;
-                snprintf(line, sizeof(line), "Context: %s tokens (%ld%%)", count, (long)percent);
-            } else if (gAgent.context_seen) {
-                snprintf(line, sizeof(line), "Context: %s tokens", count);
-            } else {
-                snprintf(line, sizeof(line), "Context: -");
-            }
-            DrawLabel(&gUsageRect, line);
-            if (gAgent.cost_micros > 0) {
-                dollars = (long)(gAgent.cost_micros / 1000000LL);
-                micros = (long)(gAgent.cost_micros % 1000000LL);
-                snprintf(line, sizeof(line), "Cost: $%lu.%06lu", (unsigned long)dollars, (unsigned long)micros);
-                PStr(p, line);
-                MoveTo(gUsageRect.right - StringWidth(p), gUsageRect.bottom - 4);
-                DrawString(p);
-            }
-            gDisplayedCost = gAgent.cost_micros;
-            gDisplayedTokens = gAgent.context_seen ? gAgent.context_tokens : -1;
-            gDisplayedLimit = gModelInfoLimit;
+    PaintColorRect(&gWindow->portRect, 0xDDDD);
+    TextSize(10); TextFace(normal);
+    if (gArt) {
+        PixMapHandle pixels = GetGWorldPixMap(gArt);
+        if (LockPixels(pixels)) {
+            CopyBits((BitMap *)*pixels, &gWindow->portBits, &art, &destination, srcCopy, NULL);
+            UnlockPixels(pixels);
         }
     }
-    DrawLabel(&gResponseLabelRect, "Conversation:");
-    FrameRect(&gResponseRect);
-    if (gResponseTE) TEUpdate(&(*gResponseTE)->viewRect, gResponseTE);
+    TextSize(18); TextFace(bold);
+    PStr(p, "Sherclawk"); MoveTo(72, 28); DrawString(p);
+    TextSize(10); TextFace(normal);
+    PStr(p, "The consulting crustacean"); MoveTo(72, 43); DrawString(p);
 
-    DrawLabel(&gPromptLabelRect, "Message (Command-Return to send):");
-    FrameRect(&gPromptRect);
-    if (gPromptTE) TEUpdate(&(*gPromptTE)->viewRect, gPromptTE);
+    DrawLabel(&gResponseLabelRect, "Conversation:");
+    DrawTextPane(&gResponseRect, gResponseTE);
+    DrawLabel(&gPromptLabelRect, "Message:");
+    PStr(p, "Command-Return to send");
+    MoveTo(gPromptHintRect.right - StringWidth(p), gPromptHintRect.bottom - 4);
+    DrawString(p);
+    DrawTextPane(&gPromptRect, gPromptTE);
+
+    DrawRecessedFrame(&gInfoRect);
+    RGBForeColor(&accent); PaintOval(&lamp);
+    ForeColor(blackColor); FrameOval(&lamp);
+    status.left += 14;
+    DrawFittedLabel(&status, gStatusText, truncEnd);
+    snprintf(line, sizeof(line), "Model: %s", gPrefs.model);
+    DrawFittedLabel(&gModelRect, line, truncMiddle);
+    {
+        Rect divider = { 377, 18, 378, 582 };
+        PaintColorRect(&divider, 0xAAAA);
+        OffsetRect(&divider, 0, 1); PaintColorRect(&divider, 0xFFFF);
+        SetRect(&divider, 246, 382, 247, 394); PaintColorRect(&divider, 0xAAAA);
+        OffsetRect(&divider, 1, 0); PaintColorRect(&divider, 0xFFFF);
+        SetRect(&divider, 458, 382, 459, 394); PaintColorRect(&divider, 0xAAAA);
+        OffsetRect(&divider, 1, 0); PaintColorRect(&divider, 0xFFFF);
+    }
+    TextSize(9);
+    snprintf(line, sizeof(line), "History: %lu/%lu KiB (%lu%%)",
+        (unsigned long)((gAgent.used + 1023) / 1024),
+        (unsigned long)(AGENT_HISTORY_CAP / 1024), percent);
+    {
+        Rect label = gHistoryRect;
+        label.right = gMeterRect.left - 4;
+        DrawFittedLabel(&label, line, truncEnd);
+    }
+    EraseRect(&meter); FrameRect(&meter); InsetRect(&meter, 1, 1);
+    if (percent > 100) percent = 100;
+    meter.right = meter.left + (short)((meter.right - meter.left) * percent / 100);
+    if (percent > 0) {
+        RGBColor fill = { 0x5555, 0x6666, 0xAAAA };
+        RGBForeColor(&fill); PaintRect(&meter); ForeColor(blackColor);
+    }
+    gDisplayedHistory = gAgent.used;
+    if (gAgent.context_seen) FormatTokens(gAgent.context_tokens, count, sizeof(count));
+    else strcpy(count, "-");
+    if (gAgent.context_seen && gModelInfoLimit > 0 && !strcmp(gModelInfoModel, gRunModel)) {
+        long long contextPercent = ((long long)gAgent.context_tokens * 100 + gModelInfoLimit / 2) / gModelInfoLimit;
+        if (contextPercent > 100) contextPercent = 100;
+        snprintf(line, sizeof(line), "Context: %s tokens (%ld%%)", count, (long)contextPercent);
+    } else if (gAgent.context_seen) snprintf(line, sizeof(line), "Context: %s tokens", count);
+    else snprintf(line, sizeof(line), "Context: -");
+    DrawFittedLabel(&gContextRect, line, truncEnd);
+    if (gAgent.cost_micros > 0) {
+        dollars = (long)(gAgent.cost_micros / 1000000LL);
+        micros = (long)(gAgent.cost_micros % 1000000LL);
+        snprintf(line, sizeof(line), "Cost: $%lu.%06lu", (unsigned long)dollars, (unsigned long)micros);
+        DrawFittedLabel(&gCostRect, line, truncEnd);
+    }
+    gDisplayedCost = gAgent.cost_micros;
+    gDisplayedTokens = gAgent.context_seen ? gAgent.context_tokens : -1;
+    gDisplayedLimit = gModelInfoLimit;
+    TextSize(10);
     DrawControls(gWindow);
 }
 
@@ -840,6 +903,8 @@ static void UIInit(void)
 {
     Rect             bounds;
     MenuBarHandle    mb;
+
+    RegisterAppearanceClient();
 
     mb = GetNewMBar(128);
     if (mb) SetMenuBar(mb);
@@ -860,9 +925,9 @@ static void UIInit(void)
 
     ComputeLayout();
     {
-        Handle resource = Get1Resource('sART', 128);
-        Rect bounds = { 82, 10, 238, 166 };
-        if (resource && GetHandleSize(resource) == 4 + 156L * 156L * 4 &&
+        Handle resource = Get1Resource('sART', 129);
+        Rect bounds = { 0, 0, 52, 52 };
+        if (resource && GetHandleSize(resource) == 4 + 52L * 52L * 4 &&
             NewGWorld(&gArt, 32, &bounds, NULL, NULL, 0) == noErr) {
             PixMapHandle pixels = GetGWorldPixMap(gArt);
             if (LockPixels(pixels)) {
@@ -870,7 +935,7 @@ static void UIInit(void)
                 long row = GetPixRowBytes(pixels) & 0x3fff;
                 int y;
                 HLock(resource);
-                for (y = 0; y < 156; y++) memcpy(base + y * row, *resource + 4 + y * 156L * 4, 156 * 4);
+                for (y = 0; y < 52; y++) memcpy(base + y * row, *resource + 4 + y * 52L * 4, 52 * 4);
                 HUnlock(resource); UnlockPixels(pixels);
             } else { DisposeGWorld(gArt); gArt = NULL; }
         }
@@ -892,21 +957,6 @@ static void UIInit(void)
         gPromptTE = TENew(&view, &view);
         if (gPromptTE) TEAutoView(true, gPromptTE);
     }
-    /* Model field — single-line, horizontal autoscroll. */
-    {
-        Rect view = gModelRect;
-        InsetRect(&view, 3, 2);
-        Rect dest = view;
-        dest.right += 4000;   /* room for long model IDs */
-        gModelTE = TENew(&dest, &view);
-        if (gModelTE) {
-            const char *url = gPrefs.model;
-            TEAutoView(true, gModelTE);
-            TESetText(url, (long)strlen(url), gModelTE);
-            TESetSelect(0, 32767, gModelTE);   /* selected: type to replace */
-        }
-    }
-
     /* Response pane — multiline TE plus a scrollbar. */
     {
         Rect view = gResponseViewRect;
@@ -939,7 +989,6 @@ static void UIDispose(void)
     if (gResponseTE)     { TEDispose(gResponseTE);     gResponseTE = NULL; }
     if (gResponseScroll) { DisposeControl(gResponseScroll); gResponseScroll = NULL; }
     if (gScrollActionUPP){ DisposeControlActionUPP(gScrollActionUPP); gScrollActionUPP = NULL; }
-    if (gModelTE)          { TEDispose(gModelTE);          gModelTE = NULL; }
     if (gSendBtn)       { DisposeControl(gSendBtn);  gSendBtn = NULL; }
 
     if (gEditMenu)  { DeleteMenu(kEditMenuID);  DisposeMenu(gEditMenu);  gEditMenu  = NULL; }
@@ -947,6 +996,7 @@ static void UIDispose(void)
     if (gAppleMenu) { DeleteMenu(kAppleMenuID); DisposeMenu(gAppleMenu); gAppleMenu = NULL; }
 
     if (gWindow) { DisposeWindow(gWindow); gWindow = NULL; }
+    UnregisterAppearanceClient();
 }
 
 /* ── Event handling ───────────────────────────────────────────────── */
@@ -1031,12 +1081,17 @@ static void HandleEvent(const EventRecord *event)
             }
         }
 
+        if (!RunBusy() && PtInRect(local, &gStatusRect)) {
+            Str255 message;
+            PStr(message, gStatusText);
+            ParamText(message, NULL, NULL, NULL);
+            NoteAlert(129, NULL);
+            SetPort(gWindow);
+            break;
+        }
         if (!RunBusy() && gPromptTE && PtInRect(local, &(*gPromptTE)->viewRect)) {
             FocusSet(gPromptTE);
             TEClick(local, (event->modifiers & shiftKey) != 0, gPromptTE);
-        } else if ((!RunBusy() || gRun == RUN_CONTEXT_LOOKUP) && gModelTE && PtInRect(local, &(*gModelTE)->viewRect)) {
-            FocusSet(gModelTE);
-            TEClick(local, (event->modifiers & shiftKey) != 0, gModelTE);
         } else if (gResponseTE && PtInRect(local, &(*gResponseTE)->viewRect)) {
             FocusSet(gResponseTE);
             TEClick(local, (event->modifiers & shiftKey) != 0, gResponseTE);
@@ -1066,16 +1121,13 @@ static void HandleEvent(const EventRecord *event)
         }
 
         if (c == 0x09) {
-            if (!RunBusy()) FocusSet(gFocusedTE == gModelTE ? gPromptTE :
-                gFocusedTE == gPromptTE ? gResponseTE : gModelTE);
+            if (!RunBusy()) FocusSet(gFocusedTE == gPromptTE ? gResponseTE : gPromptTE);
             break;
         }
-        if ((!RunBusy() || (gRun == RUN_CONTEXT_LOOKUP && gFocusedTE == gModelTE)) &&
-            gFocusedTE && gFocusedTE != gResponseTE) {
-            long limit = gFocusedTE == gModelTE ? CHAT_MODEL_CAP - 1 : CHAT_PROMPT_CAP - 1;
+        if (!RunBusy() && gFocusedTE == gPromptTE) {
+            long limit = CHAT_PROMPT_CAP - 1;
             long remaining = (*gFocusedTE)->teLength -
                 ((*gFocusedTE)->selEnd - (*gFocusedTE)->selStart);
-            if (gFocusedTE == gModelTE && (c == '\r' || c == 0x03)) break;
             if (c == 8 || ((unsigned char)c >= 0x1c && (unsigned char)c <= 0x1f) || remaining < limit) {
                 TEKey(c, gFocusedTE); TESelView(gFocusedTE);
             } else SetStatus("Field limit reached.");
@@ -1284,7 +1336,8 @@ static void StartHandoff(void)
     if (!gSession.open || !gAgent.messages || gAgent.active || gAgent.next < gAgent.count) {
         SetStatus("Finish or stop the current run before saving a handoff."); return;
     }
-    if (!gPrefs.api_key[0] || TEGetTextInto(gModelTE, gRunModel, sizeof(gRunModel)) < 0 || !*gRunModel) {
+    strcpy(gRunModel, gPrefs.model);
+    if (!gPrefs.api_key[0] || !*gRunModel) {
         SetStatus("A model and API key are needed for a handoff."); return;
     }
     for (i = 0; gRunModel[i]; i++) if ((unsigned char)gRunModel[i] <= 32 || (unsigned char)gRunModel[i] >= 127) {
@@ -1456,8 +1509,7 @@ static void FinishContextLookup(int completed)
     if (limit > 0) gModelInfoLimit = limit;
     if (gNet.ctx || gOTOpen) CloseChatContext();
     {
-        char current[CHAT_MODEL_CAP];
-        if (TEGetTextInto(gModelTE, current, sizeof(current)) < 0 || strcmp(current, gRunModel)) {
+        if (strcmp(gPrefs.model, gRunModel)) {
             gRun = RUN_IDLE; SetSendEnabled(1); FocusSet(gPromptTE);
             SetStatus("Model changed during the context lookup. Send again to continue.");
             return;
@@ -1473,8 +1525,8 @@ static void SendChat(void)
     if (RunBusy()) return;
     if (gLookupDrain) { SetStatus("The stopped lookup is still closing; send again in a moment."); return; }
     if (!gPrefs.api_key[0]) { SetStatus("No API key: choose Preferences from the Edit menu."); return; }
-    if (TEGetTextInto(gModelTE, gRunModel, sizeof(gRunModel)) < 0 ||
-        TEGetTextInto(gPromptTE, prompt, sizeof(prompt)) < 0) { SetStatus("Model or message is too long."); return; }
+    strcpy(gRunModel, gPrefs.model);
+    if (TEGetTextInto(gPromptTE, prompt, sizeof(prompt)) < 0) { SetStatus("Message is too long."); return; }
     for (i = 0; gRunModel[i]; i++) if ((unsigned char)gRunModel[i] <= 32 || (unsigned char)gRunModel[i] >= 127) {
         SetStatus("Use an OpenRouter model ID without spaces."); return;
     }
@@ -1621,7 +1673,7 @@ int main(void)
     PrefsLoad();
     tools_set_workspace(gPrefs.workspace);
     UIInit();
-    if (!gWindow || !gModelTE || !gPromptTE || !gResponseTE ||
+    if (!gWindow || !gPromptTE || !gResponseTE ||
         !gSendBtn || !gStopBtn || !gNewBtn || !gHandoffBtn || !gResponseScroll || !gScrollActionUPP) {
         UIDispose(); MacTLS_Shutdown(); return 1;
     }
