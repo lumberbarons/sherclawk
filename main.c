@@ -462,13 +462,32 @@ static void YieldTicks(uint32_t ticks)
  * example works around this by fully cycling InitOpenTransport /
  * CloseOpenTransport around every test, so we do the same around every
  * request (the Postman example, which inits OT once, shows the wedge).
+ * The yield length is SHERCLAWK_OT_YIELD_TICKS (config.h).
  */
 static void CloseChatContext(void)
 {
     network_close(&gNet);
-    YieldTicks(60);
+    YieldTicks(SHERCLAWK_OT_YIELD_TICKS);
     if (gOTOpen) { CloseOpenTransport(); gOTOpen = 0; }
-    YieldTicks(60);
+    YieldTicks(SHERCLAWK_OT_YIELD_TICKS);
+}
+
+/* Teardown after a cleanly completed model round. Errors, aborts and quit keep
+ * using CloseChatContext; only this path may leave OT open for the next round
+ * (SHERCLAWK_OT_KEEP_OPEN_AFTER_CLEAN). */
+static void FinishChatContext(void)
+{
+#if SHERCLAWK_OT_KEEP_OPEN_AFTER_CLEAN
+    network_close(&gNet);
+    YieldTicks(SHERCLAWK_OT_YIELD_TICKS);
+#else
+    CloseChatContext();
+#endif
+}
+
+static void EnsureOpenTransport(void)
+{
+    if (!gOTOpen) { InitOpenTransport(); gOTOpen = 1; }
 }
 
 /*
@@ -1299,7 +1318,7 @@ static void StartHandoff(void)
     if (length < 0) { SetStatus("Could not prepare handoff request; conversation retained."); return; }
     gHandoffPath[0] = 0; gRun = RUN_HANDOFF;
     timing_round_begin(&gRoundTiming, 0, (uint32_t)TickCount());
-    InitOpenTransport(); gOTOpen = 1; gStartTicks = (uint32_t)TickCount();
+    EnsureOpenTransport(); gStartTicks = (uint32_t)TickCount();
     timing_mark(&gRoundTiming, TIMING_INIT, gStartTicks);
     SetSendEnabled(0);
     if (network_start(&gNet, gNet.request, (size_t)length) < 0) { AbortChat(gNet.error); return; }
@@ -1388,7 +1407,7 @@ static int StartModelRequest(void)
         attribution, gJSON, (size_t)length, gNet.request, sizeof(gNet.request));
     if (length < 0) { AbortChat("Request or API key is too long or invalid."); return -1; }
     timing_round_begin(&gRoundTiming, gAgent.rounds + 1, (uint32_t)TickCount());
-    InitOpenTransport(); gOTOpen = 1;
+    EnsureOpenTransport();
     gStartTicks = (uint32_t)TickCount(); gRun = RUN_MODEL_REQUEST;
     timing_mark(&gRoundTiming, TIMING_INIT, gStartTicks);
     if (network_start(&gNet, gNet.request, (size_t)length) < 0) { AbortChat(gNet.error); return -1; }
@@ -1432,7 +1451,7 @@ static void StartContextLookup(void)
     /* Remember the attempt before the network: at most one lookup per model
      * per launch, whatever the outcome. */
     strcpy(gModelInfoModel, gRunModel); gModelInfoLimit = -1; gModelInfoAttempted = 1;
-    InitOpenTransport(); gOTOpen = 1;
+    EnsureOpenTransport();
     gStartTicks = (uint32_t)TickCount();
     if (network_start(&gNet, gNet.request, (size_t)length) < 0) {
         CloseChatContext(); SendBegin(); return;
@@ -1558,7 +1577,7 @@ static void StepModelExchange(void)
     if (gRun == RUN_HANDOFF) {
         if (agent_handoff_response(gNet.body, gNet.body_len, gNet.status, gHandoffSummary,
             sizeof(gHandoffSummary), error, sizeof(error))) { JournalModelError(error); AbortChat(error); return; }
-        CloseChatContext();
+        FinishChatContext();
         /* The summary completion is provider-billed like any other round. */
         agent_usage_absorb(&gAgent, gNet.body, gNet.body_len);
         LogRoundTiming("ok");
@@ -1572,7 +1591,7 @@ static void StepModelExchange(void)
         return;
     }
     if (agent_response(&gAgent, gNet.body, gNet.body_len, gNet.status, error, sizeof(error))) { JournalModelError(error); AbortChat(error); return; }
-    CloseChatContext();
+    FinishChatContext();
     LogRoundTiming("ok");
     if (*gAgent.text) ShowMessage("Sherclawk", gAgent.text);
     if (gAgent.count) {

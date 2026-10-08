@@ -19,6 +19,19 @@
 #define SHERCLAWK_APP_URL ""
 #endif
 
+/* Open Transport teardown experiment (issue #25). SHERCLAWK_OT_YIELD_TICKS is
+ * the yield on each side of CloseOpenTransport (60 ticks per second; 0 skips
+ * it). With SHERCLAWK_OT_KEEP_OPEN_AFTER_CLEAN set to 1, a cleanly completed
+ * model round closes only the TLS context and leaves Open Transport open for
+ * the next round; any abort or error still cycles it. Defaults are the
+ * long-standing policy. */
+#ifndef SHERCLAWK_OT_YIELD_TICKS
+#define SHERCLAWK_OT_YIELD_TICKS 60
+#endif
+#ifndef SHERCLAWK_OT_KEEP_OPEN_AFTER_CLEAN
+#define SHERCLAWK_OT_KEEP_OPEN_AFTER_CLEAN 0
+#endif
+
 /* Compose OpenRouter app-attribution headers for a configured URL. An empty
  * URL writes an empty block (0); -1 for CR/LF or when the URL does not fit. */
 static inline int sherclawk_attribution(const char *url, char *out, size_t cap)
