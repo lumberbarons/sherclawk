@@ -21,13 +21,18 @@ typedef struct {
     int      active, round;                 /* round <= 0 marks the handoff request */
     uint32_t start, at[TIMING_PHASES];
     unsigned char seen[TIMING_PHASES];
+    int tokens_seen;
     unsigned long up, down;
+    long completion, reasoning, limit;      /* completion < 0: not reported */
 } RoundTiming;
 
 void timing_round_begin(RoundTiming *t, int round, uint32_t now);
 /* The first mark of a phase wins; later marks of the same phase are ignored. */
 void timing_mark(RoundTiming *t, TimingPhase phase, uint32_t now);
 void timing_set_bytes(RoundTiming *t, unsigned long up, unsigned long down);
+/* Provider-reported completion tokens against the request cap; reasoning < 0
+ * when the provider does not split it out. A negative completion is ignored. */
+void timing_set_tokens(RoundTiming *t, long completion, long reasoning, long limit);
 /* Offsets are ticks since the round began; a phase never reached prints "-".
  * Returns the length, or -1 if the buffer is too small or the round is idle. */
 int timing_round_format(const RoundTiming *t, const char *outcome, char *out, size_t cap);
