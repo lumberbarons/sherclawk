@@ -402,6 +402,46 @@ static int json_boolean(const char *s, const JsonToken *t, int index, int *out)
     if (length == 5 && !memcmp(s + t[index].start, "false", 5)) { *out = 0; return 0; }
     return -1;
 }
+/* Read one data-row object's id; -1 when absent, empty or over the cap. */
+static int model_row_id(const char *body, const JsonToken *tokens, int row, char *id, size_t cap)
+{
+    int field = json_member(body, tokens, row, "id");
+    if (field < 0 || json_string(body, tokens, field, id, cap) <= 0) { id[0] = 0; return -1; }
+    return 0;
+}
+/* Fill the display and reasoning metadata of one data-row object. */
+static void model_row_info(const char *body, const JsonToken *tokens, int row, AgentModelInfo *info)
+{
+    int field, value;
+    memset(info, 0, sizeof(*info));
+    info->context_length = -1;
+    field = json_member(body, tokens, row, "name");
+    if (json_string(body, tokens, field, info->name, sizeof(info->name)) < 0) info->name[0] = 0;
+    field = json_member(body, tokens, row, "context_length");
+    if (json_integer(body, tokens, field, &info->context_length)) info->context_length = -1;
+    field = json_member(body, tokens, row, "reasoning");
+    if (field >= 0 && tokens[field].type == JSON_OBJECT) {
+        int efforts, e;
+        info->reasoning = 1;
+        if (!json_boolean(body, tokens, json_member(body, tokens, field, "mandatory"), &value))
+            info->mandatory = value;
+        if (!json_boolean(body, tokens, json_member(body, tokens, field, "default_enabled"), &value))
+            info->default_enabled = value;
+        if (json_string(body, tokens, json_member(body, tokens, field, "default_effort"),
+                        info->default_effort, sizeof(info->default_effort)) < 0)
+            info->default_effort[0] = 0;
+        efforts = json_member(body, tokens, field, "supported_efforts");
+        if (efforts >= 0 && tokens[efforts].type == JSON_ARRAY) {
+            for (e = efforts + 1; e < tokens[efforts].next && info->effort_count < AGENT_EFFORT_MAX; e = tokens[e].next) {
+                char name[AGENT_EFFORT_CAP];
+                if (tokens[e].type != JSON_STRING) continue;
+                if (json_string(body, tokens, e, name, sizeof(name)) < 0) continue;
+                strcpy(info->supported_efforts[info->effort_count], name);
+                info->effort_count++;
+            }
+        }
+    }
+}
 int agent_model_info(const char *body, size_t len, const char *model, AgentModelInfo *info)
 {
     int data, i;
@@ -413,39 +453,64 @@ int agent_model_info(const char *body, size_t len, const char *model, AgentModel
     if (data < 0 || tokens[data].type != JSON_ARRAY) return -1;
     for (i = data + 1; i < tokens[data].next; i = tokens[i].next) {
         char id[CHAT_MODEL_CAP];
-        int field, value;
         if (tokens[i].type != JSON_OBJECT) continue;
-        field = json_member(body, tokens, i, "id");
-        if (field < 0 || json_string(body, tokens, field, id, sizeof(id)) < 0 || strcmp(id, model)) continue;
-        field = json_member(body, tokens, i, "name");
-        if (json_string(body, tokens, field, info->name, sizeof(info->name)) < 0) info->name[0] = 0;
-        field = json_member(body, tokens, i, "context_length");
-        if (json_integer(body, tokens, field, &info->context_length)) info->context_length = -1;
-        field = json_member(body, tokens, i, "reasoning");
-        if (field >= 0 && tokens[field].type == JSON_OBJECT) {
-            int efforts, e;
-            info->reasoning = 1;
-            if (!json_boolean(body, tokens, json_member(body, tokens, field, "mandatory"), &value))
-                info->mandatory = value;
-            if (!json_boolean(body, tokens, json_member(body, tokens, field, "default_enabled"), &value))
-                info->default_enabled = value;
-            if (json_string(body, tokens, json_member(body, tokens, field, "default_effort"),
-                            info->default_effort, sizeof(info->default_effort)) < 0)
-                info->default_effort[0] = 0;
-            efforts = json_member(body, tokens, field, "supported_efforts");
-            if (efforts >= 0 && tokens[efforts].type == JSON_ARRAY) {
-                for (e = efforts + 1; e < tokens[efforts].next && info->effort_count < AGENT_EFFORT_MAX; e = tokens[e].next) {
-                    char name[AGENT_EFFORT_CAP];
-                    if (tokens[e].type != JSON_STRING) continue;
-                    if (json_string(body, tokens, e, name, sizeof(name)) < 0) continue;
-                    strcpy(info->supported_efforts[info->effort_count], name);
-                    info->effort_count++;
-                }
-            }
-        }
+        if (model_row_id(body, tokens, i, id, sizeof(id)) < 0 || strcmp(id, model)) continue;
+        model_row_info(body, tokens, i, info);
         return 0;
     }
     return -1;
+}
+int agent_model_page(const char *body, size_t len, AgentModelRow *rows, int max)
+{
+    int data, i, count = 0;
+    if (max <= 0) return 0;
+    if (json_parse(body, len, tokens, 4096) < 1 || tokens[0].type != JSON_OBJECT) return 0;
+    data = json_member(body, tokens, 0, "data");
+    if (data < 0 || tokens[data].type != JSON_ARRAY) return 0;
+    for (i = data + 1; i < tokens[data].next && count < max; i = tokens[i].next) {
+        char id[CHAT_MODEL_CAP];
+        if (tokens[i].type != JSON_OBJECT) continue;
+        if (model_row_id(body, tokens, i, id, sizeof(id)) < 0) continue;
+        strcpy(rows[count].id, id);
+        model_row_info(body, tokens, i, &rows[count].info);
+        count++;
+    }
+    return count;
+}
+/* ASCII-case-insensitive substring search; empty needle matches. */
+static int contains_ci(const char *haystack, const char *needle)
+{
+    size_t n = strlen(needle), i;
+    if (!n) return 1;
+    for (; *haystack; haystack++) {
+        for (i = 0; i < n; i++) {
+            unsigned char a = (unsigned char)haystack[i], b = (unsigned char)needle[i];
+            if (!a) break;
+            if (a >= 'A' && a <= 'Z') a += 'a' - 'A';
+            if (b >= 'A' && b <= 'Z') b += 'a' - 'A';
+            if (a != b) break;
+        }
+        if (i == n) return 1;
+    }
+    return 0;
+}
+int agent_model_row_match(const AgentModelRow *row, const char *text)
+{
+    return contains_ci(row->id, text) || contains_ci(row->info.name, text);
+}
+int agent_model_row_find(const AgentModelRow *rows, int count, const char *model)
+{
+    int i;
+    if (!*model) return -1;
+    for (i = 0; i < count; i++) if (!strcmp(rows[i].id, model)) return i;
+    return -1;
+}
+int agent_popular_query(char *out, size_t cap)
+{
+    static const char path[] = "/api/v1/models?limit=10&sort=most-popular";
+    if (cap <= sizeof(path) - 1) return -1;
+    memcpy(out, path, sizeof(path));
+    return (int)(sizeof(path) - 1);
 }
 int agent_model_query(char *out, size_t cap, const char *model)
 {

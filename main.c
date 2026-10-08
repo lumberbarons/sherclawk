@@ -309,151 +309,6 @@ static int PrefsSave(const Prefs *p)
     return err ? -1 : 0;
 }
 
-/* ── Preferences dialog (DLOG/DITL 128) ───────────────────────────── */
-
-/* DITL item numbers: the OK/Cancel buttons, then label/edit pairs in order,
- * the debug checkbox and the location hint. */
-enum {
-    kPrefsDialogID     = 128,
-    kPrefsAlertID      = 128,
-    kPrefsOKItem       = 1,
-    kPrefsCancelItem   = 2,
-    kPrefsModelItem    = 4,
-    kPrefsKeyItem      = 6,
-    kPrefsWorkspaceItem = 8,
-    kPrefsRoundsItem   = 10,
-    kPrefsToolsItem    = 12,
-    kPrefsDebugItem    = 13
-};
-
-static Handle PrefsItem(DialogPtr dlg, short item)
-{
-    short  type;
-    Handle handle;
-    Rect   rect;
-    GetDialogItem(dlg, item, &type, &handle, &rect);
-    return handle;
-}
-
-static void SetPrefsText(DialogPtr dlg, short item, const char *text)
-{
-    Str255 p;
-    PStr(p, text);
-    SetDialogItemText(PrefsItem(dlg, item), p);
-}
-
-static void GetPrefsText(DialogPtr dlg, short item, char *out, size_t cap)
-{
-    Str255 p;
-    size_t n;
-    GetDialogItemText(PrefsItem(dlg, item), p);
-    n = p[0];
-    if (n >= cap) n = cap - 1;
-    memcpy(out, p + 1, n);
-    out[n] = 0;
-}
-
-static ControlHandle PrefsCheckbox(DialogPtr dlg)
-{
-    return (ControlHandle)PrefsItem(dlg, kPrefsDebugItem);
-}
-
-/* The dialog stays open on a rejected value; the alert explains why. */
-static void PrefsProblem(DialogPtr dlg, const char *message)
-{
-    Str255 p;
-    PStr(p, message);
-    ParamText(p, NULL, NULL, NULL);
-    StopAlert(kPrefsAlertID, NULL);
-    SetPort(dlg);
-}
-
-static void ShowPreferences(void)
-{
-    static Prefs candidate;   /* the live values change only after a verified save */
-    DialogPtr dlg;
-    short item;
-    int done = 0, debug = gPrefs.show_tool_debug, rounds, tools;
-    char model[CHAT_MODEL_CAP], key[PREFS_KEY_CAP], workspace[PREFS_WORKSPACE_CAP];
-    char rounds_text[8], tools_text[8];
-
-    dlg = GetNewDialog(kPrefsDialogID, NULL, (WindowPtr)-1L);
-    if (!dlg) { SetStatus("Could not open the Preferences dialog."); return; }
-    SetPort(dlg);
-    SetPrefsText(dlg, kPrefsModelItem, gPrefs.model);
-    SetPrefsText(dlg, kPrefsKeyItem, gPrefs.api_key);
-    SetPrefsText(dlg, kPrefsWorkspaceItem, gPrefs.workspace);
-    snprintf(rounds_text, sizeof(rounds_text), "%d", gPrefs.max_rounds);
-    snprintf(tools_text, sizeof(tools_text), "%d", gPrefs.max_tools);
-    SetPrefsText(dlg, kPrefsRoundsItem, rounds_text);
-    SetPrefsText(dlg, kPrefsToolsItem, tools_text);
-    SetControlValue(PrefsCheckbox(dlg), debug);
-    SelectDialogItemText(dlg, kPrefsModelItem, 0, 32767);
-    SetDialogDefaultItem(dlg, kPrefsOKItem);
-    SetDialogCancelItem(dlg, kPrefsCancelItem);
-
-    while (!done) {
-        ModalDialog(NULL, &item);
-        if (item == kPrefsDebugItem) {
-            /* ModalDialog reports the checkbox hit but does not toggle it. */
-            ControlHandle ctl = PrefsCheckbox(dlg);
-            debug = !debug;
-            SetControlValue(ctl, debug ? 1 : 0);
-            Draw1Control(ctl);
-            continue;
-        }
-        if (item == kPrefsCancelItem) break;
-        if (item != kPrefsOKItem) continue;
-        GetPrefsText(dlg, kPrefsModelItem, model, sizeof(model));
-        GetPrefsText(dlg, kPrefsKeyItem, key, sizeof(key));
-        GetPrefsText(dlg, kPrefsWorkspaceItem, workspace, sizeof(workspace));
-        GetPrefsText(dlg, kPrefsRoundsItem, rounds_text, sizeof(rounds_text));
-        GetPrefsText(dlg, kPrefsToolsItem, tools_text, sizeof(tools_text));
-        if (!prefs_model_ok(model)) {
-            PrefsProblem(dlg, "Enter a model ID: printable characters, no spaces.");
-            SelectDialogItemText(dlg, kPrefsModelItem, 0, 32767); continue;
-        }
-        if (!prefs_key_ok(key)) {
-            PrefsProblem(dlg, "The API key must be printable characters without spaces.");
-            SelectDialogItemText(dlg, kPrefsKeyItem, 0, 32767); continue;
-        }
-        if (!prefs_workspace_ok(workspace)) {
-            PrefsProblem(dlg, "The workspace must be a colon path ending in ':', like Retro68:.");
-            SelectDialogItemText(dlg, kPrefsWorkspaceItem, 0, 32767); continue;
-        }
-        rounds = prefs_limit_value(rounds_text);
-        if (rounds < 0) {
-            PrefsProblem(dlg, "Max model rounds must be a number from 1 to 128.");
-            SelectDialogItemText(dlg, kPrefsRoundsItem, 0, 32767); continue;
-        }
-        tools = prefs_limit_value(tools_text);
-        if (tools < 0) {
-            PrefsProblem(dlg, "Max tool calls must be a number from 1 to 128.");
-            SelectDialogItemText(dlg, kPrefsToolsItem, 0, 32767); continue;
-        }
-        candidate = gPrefs;
-        strcpy(candidate.model, model);
-        strcpy(candidate.api_key, key);
-        strcpy(candidate.workspace, workspace);
-        candidate.max_rounds = rounds;
-        candidate.max_tools = tools;
-        candidate.show_tool_debug = debug;
-        if (PrefsSave(&candidate)) {
-            PrefsProblem(dlg, "Could not save the preferences file. Nothing was changed.");
-            continue;
-        }
-        gPrefs = candidate;
-        tools_set_workspace(gPrefs.workspace);
-        done = 1;
-    }
-    CloseDialog(dlg);
-    if (gWindow) SetPort(gWindow);
-    if (done) {
-        InvalRect(&gModelRect);
-        SetStatus("Preferences saved; the workspace applies to new work now.");
-    }
-    FocusSet(gPromptTE);
-}
 
 /* ── Open Transport lifecycle and the share log ───────────────────── */
 
@@ -608,6 +463,556 @@ static void LogClose(void)
     gLogOpen = 0;
 }
 
+/* ── Preferences dialog (DLOG/DITL 128) ───────────────────────────── */
+
+/* DITL items: OK/Cancel, the editable model row with Find, the results list
+ * (a user item drawn by hand), the hint line, the Effort popup placeholder,
+ * then the label/edit pairs, the debug checkbox and the file hint. The
+ * numbers match the DITL in hello.r. */
+enum {
+    kPrefsDialogID      = 128,
+    kPrefsAlertID       = 128,
+    kPrefsOKItem        = 1,
+    kPrefsCancelItem    = 2,
+    kPrefsModelItem     = 4,
+    kPrefsFindItem      = 5,
+    kPrefsResultsItem   = 6,
+    kPrefsHintItem      = 7,
+    kPrefsEffortItem    = 9,
+    kPrefsKeyItem       = 11,
+    kPrefsWorkspaceItem = 13,
+    kPrefsRoundsItem    = 15,
+    kPrefsToolsItem     = 17,
+    kPrefsDebugItem     = 18
+};
+
+/* The effort menu is built at runtime; the popup CDEF finds a menu by its ID
+ * in the menu list (Tech Note TB42), so the popup's refCon is this ID. */
+enum {
+    kPrefsEffortMenuID = 1001,
+    kPrefsFetchNone = 0,   /* no exchange in flight */
+    kPrefsFetchPopular,    /* the one auto-load per launch */
+    kPrefsFetchSearch,     /* Find: list the matches for the typed text */
+    kPrefsFetchValidate,   /* OK: the typed id must resolve exactly */
+    kPrefsRowHeight = 12,
+    kPrefsRowsMax = AGENT_MODEL_ROWS_MAX
+};
+
+/* The catalog fetch shares the send-time lookup's 30-second deadline. */
+#define kPrefsFetchDeadline (30UL * 60UL)
+
+/* State carried between events of the modal Preferences loop. `rows` is the
+ * last fetched page, `filter` the local substring the user typed, and
+ * `confirmed_id` the field text that has resolved to a catalog row. */
+typedef struct {
+    DialogPtr     dlg;
+    ControlHandle popup;             /* Appearance popup; NULL when it failed */
+    MenuHandle    effort;            /* runtime menu named by the popup refCon */
+    Rect          results;           /* results userItem rectangle */
+    AgentModelRow rows[AGENT_MODEL_ROWS_MAX];
+    int           count;
+    int           selected;          /* index into rows, -1 when none */
+    int           visible[AGENT_MODEL_ROWS_MAX];
+    int           visible_count;
+    int           edited;            /* the model field changed by hand */
+    char          filter[CHAT_MODEL_CAP];
+    char          last_text[CHAT_MODEL_CAP];
+    char          confirmed_id[CHAT_MODEL_CAP];
+    AgentModelInfo confirmed_info;   /* metadata behind confirmed_id */
+    int           fetch;             /* kPrefsFetch* */
+    int           draining;          /* timed-out exchange still closing */
+    uint32_t      fetch_start;
+} PrefsDialog;
+
+static PrefsDialog   gPrefsDlg;
+static AgentModelRow gPopularRows[AGENT_MODEL_ROWS_MAX];
+static int           gPopularCount;
+static int           gPopularLoaded;   /* popular page fetched once per launch */
+
+static Handle PrefsItem(DialogPtr dlg, short item)
+{
+    short  type;
+    Handle handle;
+    Rect   rect;
+    GetDialogItem(dlg, item, &type, &handle, &rect);
+    return handle;
+}
+
+static void SetPrefsText(DialogPtr dlg, short item, const char *text)
+{
+    Str255 p;
+    PStr(p, text);
+    SetDialogItemText(PrefsItem(dlg, item), p);
+}
+
+static void GetPrefsText(DialogPtr dlg, short item, char *out, size_t cap)
+{
+    Str255 p;
+    size_t n;
+    GetDialogItemText(PrefsItem(dlg, item), p);
+    n = p[0];
+    if (n >= cap) n = cap - 1;
+    memcpy(out, p + 1, n);
+    out[n] = 0;
+}
+
+static ControlHandle PrefsCheckbox(DialogPtr dlg)
+{
+    return (ControlHandle)PrefsItem(dlg, kPrefsDebugItem);
+}
+
+/* The dialog stays open on a rejected value; the alert explains why. */
+static void PrefsProblem(DialogPtr dlg, const char *message)
+{
+    Str255 p;
+    PStr(p, message);
+    ParamText(p, NULL, NULL, NULL);
+    StopAlert(kPrefsAlertID, NULL);
+    SetPort(dlg);
+}
+
+/* Update the hint line in place; the invalidation is what redraws it. */
+static void PrefsHint(PrefsDialog *d, const char *text)
+{
+    short  type;
+    Handle handle;
+    Rect   rect;
+    SetPrefsText(d->dlg, kPrefsHintItem, text);
+    GetDialogItem(d->dlg, kPrefsHintItem, &type, &handle, &rect);
+    InvalRect(&rect);
+}
+
+/* Rebuild the effort menu from a confirmed row, preselecting its default
+ * effort; a row without choices leaves the popup disabled showing (none). */
+static void PrefsEffortShow(PrefsDialog *d, const AgentModelInfo *info)
+{
+    int i, choose = 1;
+    if (!d->popup || !d->effort) return;
+    while (CountMItems(d->effort) > 0) DeleteMenuItem(d->effort, CountMItems(d->effort));
+    if (!info || info->effort_count == 0) {
+        AppendMenu(d->effort, (ConstStr255Param)"\p(none)");
+        HiliteControl(d->popup, 255);
+        SetControlMaximum(d->popup, 1);
+        SetControlValue(d->popup, 1);
+        Draw1Control(d->popup);
+        return;
+    }
+    for (i = 0; i < info->effort_count; i++) {
+        Str255 label;
+        PStr(label, info->supported_efforts[i]);
+        AppendMenu(d->effort, label);
+    }
+    for (i = 0; i < info->effort_count; i++)
+        if (info->default_effort[0] && !strcmp(info->supported_efforts[i], info->default_effort)) {
+            choose = i + 1;
+            break;
+        }
+    HiliteControl(d->popup, 0);
+    SetControlMaximum(d->popup, (short)info->effort_count);
+    SetControlValue(d->popup, (short)choose);
+    Draw1Control(d->popup);
+}
+
+/* Typing filters the fetched page locally; the empty filter shows all rows. */
+static void PrefsFilterRows(PrefsDialog *d)
+{
+    int i;
+    d->visible_count = 0;
+    for (i = 0; i < d->count; i++)
+        if (agent_model_row_match(&d->rows[i], d->filter))
+            d->visible[d->visible_count++] = i;
+}
+
+static Rect PrefsRowRect(const Rect *box, int index)
+{
+    Rect r;
+    r.left   = box->left + 2;
+    r.right  = box->right - 2;
+    r.top    = box->top + 2 + (short)(index * kPrefsRowHeight);
+    r.bottom = r.top + kPrefsRowHeight;
+    return r;
+}
+
+/* Hand-drawn result rows on the user item; the picked row is shaded. */
+static void PrefsDrawRows(PrefsDialog *d)
+{
+    Rect box = d->results;
+    int i;
+    EraseRect(&box);
+    FrameRect(&box);
+    PrefsFilterRows(d);
+    for (i = 0; i < d->visible_count; i++) {
+        const AgentModelRow *row = &d->rows[d->visible[i]];
+        Rect r = PrefsRowRect(&box, i);
+        char label[CHAT_MODEL_CAP + AGENT_MODEL_NAME_CAP + 4];
+        if (d->visible[i] == d->selected) {
+            RGBColor shade = { 0xDDDD, 0xDDDD, 0xDDDD };
+            RGBForeColor(&shade); PaintRect(&r); ForeColor(blackColor);
+        }
+        if (row->info.name[0] && strcmp(row->info.name, row->id))
+            snprintf(label, sizeof(label), "%s - %s", row->info.name, row->id);
+        else snprintf(label, sizeof(label), "%s", row->id);
+        DrawFittedLabel(&r, label, truncMiddle);
+    }
+}
+
+static int PrefsRowHit(PrefsDialog *d, Point local)
+{
+    int index;
+    PrefsFilterRows(d);
+    if (local.h < d->results.left + 2 || local.h >= d->results.right - 2) return -1;
+    if (local.v < d->results.top + 2) return -1;
+    index = (local.v - (d->results.top + 2)) / kPrefsRowHeight;
+    if (index < 0 || index >= d->visible_count) return -1;
+    return d->visible[index];
+}
+
+/* A picked row confirms the model: the exact id lands in the editable field,
+ * its effort choices load with the default preselected, and its metadata is
+ * kept for the save. */
+static void PrefsConfirm(PrefsDialog *d, int index)
+{
+    d->selected = index;
+    d->edited = 0;
+    d->confirmed_info = d->rows[index].info;
+    strcpy(d->confirmed_id, d->rows[index].id);
+    SetPrefsText(d->dlg, kPrefsModelItem, d->rows[index].id);
+    strcpy(d->last_text, d->rows[index].id);
+    d->filter[0] = 0;
+    PrefsEffortShow(d, &d->confirmed_info);
+    PrefsHint(d, "Model confirmed. Press OK to save.");
+    PrefsDrawRows(d);
+}
+
+/* Start one catalog exchange; no other fetch may start until this one reaches
+ * a terminal state. */
+static int PrefsFetchStart(PrefsDialog *d, int kind, const char *query)
+{
+    char path[CHAT_MODEL_CAP * 3 + 48];
+    int length;
+    if (kind == kPrefsFetchPopular) length = agent_popular_query(path, sizeof(path));
+    else length = agent_model_query(path, sizeof(path), query);
+    if (length < 0) { PrefsHint(d, "That model name is too long for a catalog search."); return -1; }
+    length = http_build_get("openrouter.ai", path, gNet.request, sizeof(gNet.request));
+    if (length < 0) { PrefsHint(d, "The catalog request does not fit the network buffer."); return -1; }
+    EnsureOpenTransport();
+    gStartTicks = (uint32_t)TickCount();
+    if (network_start(&gNet, gNet.request, (size_t)length) < 0) {
+        CloseChatContext();
+        PrefsHint(d, "Could not start the catalog fetch.");
+        return -1;
+    }
+    d->fetch = kind;
+    d->fetch_start = (uint32_t)TickCount();
+    PrefsHint(d, kind == kPrefsFetchPopular ? "Loading the popular models..." :
+                 kind == kPrefsFetchValidate ? "Checking that model against the catalog..." :
+                 "Searching the catalog...");
+    return 0;
+}
+
+static void PrefsFetchFailed(PrefsDialog *d, int timed_out)
+{
+    d->fetch = kPrefsFetchNone;
+    d->draining = 0;
+    PrefsHint(d, timed_out ? "The catalog fetch timed out. Typed text is unchanged; try Find again."
+                           : "Could not load the model catalog. Typed text is unchanged; try Find again.");
+}
+
+/* A completed exchange: the page replaces the rows. Validate confirms only an
+ * exact id and always lists the candidates; the one popular load is cached for
+ * later opens, where a saved model still in the page resolves at once. */
+static void PrefsFetchComplete(PrefsDialog *d)
+{
+    char text[CHAT_MODEL_CAP], hint[128];
+    int kind = d->fetch, at;
+    d->fetch = kPrefsFetchNone;
+    d->count = agent_model_page(gNet.body, gNet.body_len, d->rows, kPrefsRowsMax);
+    d->selected = -1;
+    GetPrefsText(d->dlg, kPrefsModelItem, text, sizeof(text));
+    strcpy(d->last_text, text);
+    /* A hand-typed filter also applies to what just arrived (the Find query is
+     * in the box); validate always lists its candidates unfiltered. */
+    d->filter[0] = 0;
+    if (kind != kPrefsFetchValidate && d->edited) strcpy(d->filter, text);
+    if (kind == kPrefsFetchValidate) {
+        at = agent_model_row_find(d->rows, d->count, text);
+        if (at >= 0) {
+            d->selected = at;
+            d->confirmed_info = d->rows[at].info;
+            strcpy(d->confirmed_id, d->rows[at].id);
+            PrefsEffortShow(d, &d->confirmed_info);
+            PrefsHint(d, "Model confirmed. Press OK again to save.");
+        } else PrefsHint(d, "No exact match. Pick a candidate below, or press Find.");
+    } else if (kind == kPrefsFetchPopular) {
+        memcpy(gPopularRows, d->rows, (size_t)d->count * sizeof(AgentModelRow));
+        gPopularCount = d->count;
+        gPopularLoaded = 1;
+        at = agent_model_row_find(d->rows, d->count, text);
+        if (at >= 0) {
+            d->selected = at;
+            d->confirmed_info = d->rows[at].info;
+            strcpy(d->confirmed_id, d->rows[at].id);
+            PrefsEffortShow(d, &d->confirmed_info);
+        }
+        PrefsHint(d, "Popular models loaded. Type to filter, or press Find.");
+    } else {
+        snprintf(hint, sizeof(hint), "%d match%s. Click one to pick, or press Find again.",
+                 d->count, d->count == 1 ? "" : "es");
+        PrefsHint(d, hint);
+    }
+    d->edited = 0;
+    PrefsDrawRows(d);
+}
+
+/* One network step per pass, with the send-time lookup's deadline and drain
+ * rules: a timed-out connect is not torn down mid-flight. */
+static void PrefsFetchStep(PrefsDialog *d)
+{
+    int result;
+    uint32_t now = (uint32_t)TickCount();
+    if (!d->draining && now - d->fetch_start > kPrefsFetchDeadline) {
+        d->draining = 1;
+        d->fetch_start = now;
+    }
+    result = network_step(&gNet);
+    if (result == 0) {
+        if (d->draining && (uint32_t)TickCount() - d->fetch_start > kPrefsFetchDeadline) {
+            CloseChatContext();
+            PrefsFetchFailed(d, 1);
+        }
+        return;
+    }
+    CloseChatContext();
+    if (d->draining) { PrefsFetchFailed(d, 1); return; }
+    if (result < 0 || gNet.status != 200) { PrefsFetchFailed(d, 0); return; }
+    PrefsFetchComplete(d);
+}
+
+/* Find: fetch the matches for the typed text, or show the popular page when
+ * the box is empty and nothing has been fetched yet. */
+static void PrefsFind(PrefsDialog *d)
+{
+    char text[CHAT_MODEL_CAP];
+    if (d->fetch || d->draining) return;
+    GetPrefsText(d->dlg, kPrefsModelItem, text, sizeof(text));
+    strcpy(d->last_text, text);
+    if (!text[0]) {
+        d->filter[0] = 0;
+        if (d->count) {
+            PrefsHint(d, "Type to filter the list, or type a model ID and press Find.");
+            PrefsDrawRows(d);
+        } else PrefsFetchStart(d, kPrefsFetchPopular, NULL);
+        return;
+    }
+    d->filter[0] = 0;
+    PrefsFetchStart(d, kPrefsFetchSearch, text);
+}
+
+static void ShowPreferences(void)
+{
+    static Prefs candidate;   /* the live values change only after a verified save */
+    PrefsDialog *d = &gPrefsDlg;
+    DialogPtr dlg;
+    ControlHandle popup = NULL;
+    MenuHandle effort = NULL;
+    short item, type;
+    Rect popup_rect;
+    Handle item_handle;
+    int done = 0, saved = 0, i, debug = gPrefs.show_tool_debug, rounds, tools;
+    char model[CHAT_MODEL_CAP], key[PREFS_KEY_CAP], workspace[PREFS_WORKSPACE_CAP];
+    char rounds_text[8], tools_text[8];
+
+    memset(d, 0, sizeof(*d));
+    d->selected = -1;
+    dlg = GetNewDialog(kPrefsDialogID, NULL, (WindowPtr)-1L);
+    if (!dlg) { SetStatus("Could not open the Preferences dialog."); return; }
+    d->dlg = dlg;
+    SetPort(dlg);
+
+    /* The Effort popup is created here because the DITL carries only its
+     * rectangle (item 9). The CDEF finds the menu by ID in the menu list, so
+     * insert it before NewControl (Tech Note TB42). */
+    GetDialogItem(dlg, kPrefsEffortItem, &type, &item_handle, &popup_rect);
+    GetDialogItem(dlg, kPrefsResultsItem, &type, &item_handle, &d->results);
+    effort = NewMenu(kPrefsEffortMenuID, (ConstStr255Param)"\p");
+    if (effort) {
+        InsertMenu(effort, hierMenu);
+        popup = NewControl(dlg, &popup_rect, (ConstStr255Param)"\p", true, 1, 1, 1,
+                           kControlPopupButtonProc, kPrefsEffortMenuID);
+    }
+    d->effort = effort;
+    d->popup = popup;
+    PrefsEffortShow(d, NULL);
+
+    SetPrefsText(dlg, kPrefsModelItem, gPrefs.model);
+    SetPrefsText(dlg, kPrefsKeyItem, gPrefs.api_key);
+    SetPrefsText(dlg, kPrefsWorkspaceItem, gPrefs.workspace);
+    snprintf(rounds_text, sizeof(rounds_text), "%d", gPrefs.max_rounds);
+    snprintf(tools_text, sizeof(tools_text), "%d", gPrefs.max_tools);
+    SetPrefsText(dlg, kPrefsRoundsItem, rounds_text);
+    SetPrefsText(dlg, kPrefsToolsItem, tools_text);
+    SetControlValue(PrefsCheckbox(dlg), debug);
+    SelectDialogItemText(dlg, kPrefsModelItem, 0, 32767);
+    SetDialogDefaultItem(dlg, kPrefsOKItem);
+    SetDialogCancelItem(dlg, kPrefsCancelItem);
+
+    GetPrefsText(dlg, kPrefsModelItem, model, sizeof(model));
+    strcpy(d->last_text, model);
+    if (gPopularLoaded) {
+        /* Later opens reuse the page fetched earlier this launch, so the
+         * popular models appear without another fetch. */
+        d->count = gPopularCount;
+        memcpy(d->rows, gPopularRows, (size_t)gPopularCount * sizeof(AgentModelRow));
+        i = agent_model_row_find(d->rows, d->count, model);
+        if (i >= 0) {
+            d->selected = i;
+            d->confirmed_info = d->rows[i].info;
+            strcpy(d->confirmed_id, d->rows[i].id);
+            PrefsEffortShow(d, &d->confirmed_info);
+        }
+        PrefsHint(d, "Type to filter, or press Find to search the catalog.");
+        PrefsDrawRows(d);
+    } else if (PrefsFetchStart(d, kPrefsFetchPopular, NULL) == 0) {
+        PrefsDrawRows(d);
+    }
+
+    while (!done) {
+        EventRecord event;
+        int busy = d->fetch || d->draining;
+        WaitNextEvent(everyEvent, &event, busy ? 1 : 10, NULL);
+        SetPort(dlg);
+
+        if (event.what == updateEvt && (WindowPtr)event.message == dlg) {
+            BeginUpdate(dlg);
+            DrawDialog(dlg);
+            PrefsDrawRows(d);
+            if (d->popup) Draw1Control(d->popup);
+            EndUpdate(dlg);
+            continue;
+        }
+        if (event.what == kHighLevelEvent) { AEProcessAppleEvent(&event); continue; }
+        if (event.what == mouseDown) {
+            WindowPtr which = NULL;
+            short part = FindWindow(event.where, &which);
+            if (which == dlg && part == inDrag) {
+                /* The dialog is movable; drag its title bar ourselves. */
+                Rect screen = (*GetGrayRgn())->rgnBBox;
+                DragWindow(dlg, event.where, &screen);
+                SetPort(dlg);
+                continue;
+            }
+            if (which == dlg && part == inContent && d->popup) {
+                /* The popup is not a DITL item, so DialogSelect never sees it. */
+                Point local = event.where;
+                ControlHandle ctl = NULL;
+                GlobalToLocal(&local);
+                if (FindControl(local, dlg, &ctl) && ctl == d->popup) {
+                    TrackControl(d->popup, local, NULL);
+                    Draw1Control(d->popup);
+                    continue;
+                }
+            }
+        }
+        if (DialogSelect(&event, &dlg, &item)) {
+            if (item == kPrefsCancelItem) {
+                /* Hand an in-flight exchange to the main loop's drain path:
+                 * classic OT can fault when a connect is torn down mid-flight. */
+                if (d->fetch || d->draining) {
+                    gLookupDrain = 1;
+                    gStartTicks = (uint32_t)TickCount();
+                }
+                done = 1;
+            } else if (item == kPrefsFindItem) {
+                PrefsFind(d);
+            } else if (item == kPrefsResultsItem) {
+                Point local = event.where;
+                GlobalToLocal(&local);
+                i = PrefsRowHit(d, local);
+                if (i >= 0) PrefsConfirm(d, i);
+            } else if (item == kPrefsDebugItem) {
+                /* DialogSelect reports the checkbox hit but does not toggle it. */
+                ControlHandle ctl = PrefsCheckbox(dlg);
+                debug = !debug;
+                SetControlValue(ctl, debug ? 1 : 0);
+                Draw1Control(ctl);
+            } else if (item == kPrefsOKItem) {
+                if (d->fetch || d->draining) {
+                    PrefsHint(d, "Still checking the catalog; press OK again in a moment.");
+                } else {
+                    GetPrefsText(dlg, kPrefsModelItem, model, sizeof(model));
+                    GetPrefsText(dlg, kPrefsKeyItem, key, sizeof(key));
+                    GetPrefsText(dlg, kPrefsWorkspaceItem, workspace, sizeof(workspace));
+                    GetPrefsText(dlg, kPrefsRoundsItem, rounds_text, sizeof(rounds_text));
+                    GetPrefsText(dlg, kPrefsToolsItem, tools_text, sizeof(tools_text));
+                    rounds = prefs_limit_value(rounds_text);
+                    tools = prefs_limit_value(tools_text);
+                    if (!prefs_model_ok(model)) {
+                        PrefsProblem(dlg, "Enter a model ID: printable characters, no spaces.");
+                        SelectDialogItemText(dlg, kPrefsModelItem, 0, 32767);
+                    } else if (!prefs_key_ok(key)) {
+                        PrefsProblem(dlg, "The API key must be printable characters without spaces.");
+                        SelectDialogItemText(dlg, kPrefsKeyItem, 0, 32767);
+                    } else if (!prefs_workspace_ok(workspace)) {
+                        PrefsProblem(dlg, "The workspace must be a colon path ending in ':', like Retro68:.");
+                        SelectDialogItemText(dlg, kPrefsWorkspaceItem, 0, 32767);
+                    } else if (rounds < 0) {
+                        PrefsProblem(dlg, "Max model rounds must be a number from 1 to 128.");
+                        SelectDialogItemText(dlg, kPrefsRoundsItem, 0, 32767);
+                    } else if (tools < 0) {
+                        PrefsProblem(dlg, "Max tool calls must be a number from 1 to 128.");
+                        SelectDialogItemText(dlg, kPrefsToolsItem, 0, 32767);
+                    } else if (!(d->confirmed_id[0] && !strcmp(d->confirmed_id, model))) {
+                        /* An unresolved id never reaches the preferences file:
+                         * check the catalog and require an exact row first. */
+                        PrefsFetchStart(d, kPrefsFetchValidate, model);
+                    } else {
+                        candidate = gPrefs;
+                        strcpy(candidate.model, model);
+                        strcpy(candidate.api_key, key);
+                        strcpy(candidate.workspace, workspace);
+                        candidate.max_rounds = rounds;
+                        candidate.max_tools = tools;
+                        candidate.show_tool_debug = debug;
+                        if (PrefsSave(&candidate)) {
+                            PrefsProblem(dlg, "Could not save the preferences file. Nothing was changed.");
+                        } else {
+                            gPrefs = candidate;
+                            tools_set_workspace(gPrefs.workspace);
+                            /* The confirmed row is this model's context source
+                             * until a send-time lookup replaces it. */
+                            gModelInfo = d->confirmed_info;
+                            strcpy(gModelInfoModel, gPrefs.model);
+                            gModelInfoAttempted = 1;
+                            saved = 1;
+                            done = 1;
+                        }
+                    }
+                }
+            }
+        }
+        /* Typing filters the fetched rows locally; programmatic sets keep
+         * last_text in sync so only hand edits land here. */
+        GetPrefsText(dlg, kPrefsModelItem, model, sizeof(model));
+        if (strcmp(model, d->last_text)) {
+            strcpy(d->last_text, model);
+            strcpy(d->filter, model);
+            d->edited = 1;
+            PrefsDrawRows(d);
+        }
+        if (d->fetch || d->draining) PrefsFetchStep(d);
+    }
+
+    if (d->popup) DisposeControl(d->popup);
+    CloseDialog(dlg);
+    if (effort) { DeleteMenu(kPrefsEffortMenuID); DisposeMenu(effort); }
+    if (gWindow) SetPort(gWindow);
+    if (saved) {
+        InvalRect(&gModelRect);
+        SetStatus("Preferences saved; the workspace applies to new work now.");
+    }
+    FocusSet(gPromptTE);
+}
+
 /* ── Focus and text access ────────────────────────────────────────── */
 
 static void FocusSet(TEHandle te)
@@ -740,6 +1145,7 @@ static int HandleMenu(long menuChoice)
     case kEditMenuID:
         if (item == kEditPrefsItem) {
             if (RunBusy()) SetStatus("Finish the current run before changing Preferences.");
+            else if (gLookupDrain) SetStatus("The stopped lookup is still closing; try again in a moment.");
             else ShowPreferences();
             break;
         }
