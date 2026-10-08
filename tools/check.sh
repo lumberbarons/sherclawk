@@ -12,6 +12,14 @@ mkdir -p "$HERE/build/tests"
     "$HERE/vendor/http.c" -o "$HERE/build/tests/test-core"
 "$HERE/build/tests/test-core"
 
+# Preferences parser/formatter: pure code, no Toolbox stubs needed.
+"${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror \
+    -fsanitize=address,undefined -fno-omit-frame-pointer -DSHERCLAWK_APP=1 \
+    -I"$HERE" \
+    "$HERE/tests/test_preferences.c" "$HERE/preferences.c" \
+    -o "$HERE/build/tests/test-preferences"
+"$HERE/build/tests/test-preferences"
+
 # The network test needs a Certainly clone (fetch-only, see README).
 CERTAINLY_DIR="${CERTAINLY_DIR:-$HERE/../Certainly}"
 if [ -d "$CERTAINLY_DIR/include" ]; then

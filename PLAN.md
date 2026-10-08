@@ -114,6 +114,14 @@ This establishes flexibility before adding more application-specific fixtures.
    bounded resource-map and byte reads that never load a whole resource.
    Journaled catalog mutations, process-quit integration and the remaining
    idea-004 tools stay future work.
+7. Preferences (idea 002) is implemented and guest-verified in OS 9.2.2: a
+   modal Edit-menu dialog saves the model, API key, workspace, per-run limits
+   (1–128) and the tool-debug display toggle to
+   `System Folder:Preferences:Sherclawk Preferences`, falling back per value to
+   `config.local.h` and built-in defaults. The runtime workspace reaches tools,
+   sessions, inspection and native builds; the debug view is display-only. A
+   build without compiled credentials should still prove the saved key end to
+   end.
 
 ## Boundaries and verification
 

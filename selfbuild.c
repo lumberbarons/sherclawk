@@ -5,6 +5,7 @@
  * Flush/readback establishes AFP visibility, not a power-loss guarantee. */
 #include "selfbuild.h"
 #include "toolserver.h"
+#include "tools.h"
 #include "config.h"
 #include <Script.h>
 #include <stdio.h>
@@ -139,7 +140,7 @@ int selfbuild_begin(const NativeJob *j,const FSSpec *queue,const BuildPlan *p)
         record(j->directory,"native-executor","executor=Sherclawk\nadapter=mpw-ppc-v2\n"))goto fail;
     if(create_file(j->directory,"stdout",&s) || create_file(j->directory,"stderr",&s))goto fail;
     running=1; phase=0; input=step=0; offset=0; log_offsets[0]=log_offsets[1]=0;
-    if(snprintf(directory,sizeof(directory),SHERCLAWK_WORKSPACE SHERCLAWK_BUILD_QUEUE ":%s:build:native:",j->id)>=(int)sizeof(directory))goto fail;
+    if(snprintf(directory,sizeof(directory),"%s" SHERCLAWK_BUILD_QUEUE ":%s:build:native:",tools_workspace(),j->id)>=(int)sizeof(directory))goto fail;
     return 1;
 fail:
     uncertain("native claim/setup uncertain; no replay\n",j->start); return -1;
