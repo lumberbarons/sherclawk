@@ -13,6 +13,9 @@
 #define AGENT_REPLY_CAP 40960
 #define AGENT_TURN_MAX 32
 #define AGENT_TOOL_MAX 64
+#define AGENT_MODEL_NAME_CAP 64
+#define AGENT_EFFORT_CAP 16
+#define AGENT_EFFORT_MAX 8
 /* Completion budget per agent request, reasoning included. */
 #define AGENT_MAX_TOKENS 6000
 #define AGENT_HANDOFF_MAX_TOKENS 1536
@@ -20,6 +23,17 @@
 #define AGENT_COST_MICROS_MAX 9000000000000000LL
 
 typedef struct { char id[128], name[64], arguments[AGENT_ARGUMENT_CAP]; } AgentCall;
+/* One /api/v1/models?q= row: the catalog display name, context_length (-1
+ * when the row has none) and the optional reasoning block, whose effort names
+ * keep the provider's order. */
+typedef struct {
+    char name[AGENT_MODEL_NAME_CAP];
+    long context_length;
+    int reasoning, mandatory, default_enabled;
+    char default_effort[AGENT_EFFORT_CAP];
+    char supported_efforts[AGENT_EFFORT_MAX][AGENT_EFFORT_CAP];
+    int effort_count;
+} AgentModelInfo;
 typedef int (*AgentJournal)(void *context, const char *event, const char *json);
 typedef struct {
     char history[AGENT_HISTORY_CAP];
@@ -53,10 +67,17 @@ int agent_response(Agent *a, const char *body, size_t len, int status, char *err
 int agent_tool_result(Agent *a, const char *result, char *error, size_t cap);
 int agent_stop(Agent *a, const char *reason);
 /* Provider-reported usage is display-grade: absorb never fails and moves
- * totals only for present, sane values. context_limit returns the largest
- * data.endpoints[].context_length, or -1. */
+ * totals only for present, sane values. */
 void agent_usage_absorb(Agent *a, const char *body, size_t len);
-long agent_context_limit(const char *body, size_t len);
+/* Select the data row whose id equals model exactly and copy its name,
+ * context_length and reasoning metadata into info. Returns 0 when found, -1
+ * for a malformed, over-cap or matching-free page; absent optional fields
+ * keep their zero defaults. */
+int agent_model_info(const char *body, size_t len, const char *model, AgentModelInfo *info);
+/* Build the lookup path /api/v1/models?q=<model>&limit=10, percent-encoding
+ * model bytes outside [A-Za-z0-9-._~]. Returns the path length, or -1 when
+ * it does not fit. */
+int agent_model_query(char *out, size_t cap, const char *model);
 /* usage.completion_tokens, and reasoning_tokens (-1 when not reported). Returns
  * 0 when the completion count is present, -1 otherwise. */
 int agent_usage_completion(const char *body, size_t len, long *completion, long *reasoning);
