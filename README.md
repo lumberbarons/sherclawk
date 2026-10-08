@@ -593,7 +593,7 @@ after a reply, and a click saved the handoff and prepared fresh history.
 
 Limits are explicit: by default 32 model rounds and 64 executed calls per run,
 each adjustable 1–128 in Preferences; four calls per
-response, 8 KiB arguments per call, 256 KiB history, 288 KiB JSON request, 64 KiB
+response, 8 KiB arguments per call, 384 KiB history, 416 KiB JSON request, 64 KiB
 raw HTTP response, 40 KiB of reply text, and 6,000 output tokens per model request (`AGENT_MAX_TOKENS`
 in `agent.h`; the handoff request has its own `AGENT_HANDOFF_MAX_TOKENS`). Reasoning
 tokens count against that budget. `docs/limits.md` explains how these limits
@@ -617,12 +617,12 @@ History buffers are static: the app allocates their full capacity at launch,
 not incrementally as messages arrive. With handoff enabled, each additional
 history byte costs roughly four RAM bytes (current history, candidate history,
 JSON request, and HTTP request). Per-response scratch is bounded separately.
-The 256 KiB build has 2,512,456 bytes (2.40 MiB) of linked code/static data
+The 384 KiB build has 3,036,744 bytes (2.90 MiB) of linked code/static data
 (`powerpc-apple-macos-size build/Sherclawk.xcoff`: text, data and bss);
 this excludes dynamic TLS/UI allocations and the stack. Its `SIZE` resource
 still requests 8 MiB preferred / 4 MiB minimum. A 512 KiB history would raise
-that baseline to roughly 3.34 MiB, making the 4 MiB minimum tight; 1 MiB history
-would need roughly 5.34 MiB before dynamic allocations, and 2 MiB would exceed
+that baseline to roughly 3.4 MiB, making the 4 MiB minimum tight; 1 MiB history
+would need roughly 5.4 MiB before dynamic allocations, and 2 MiB would exceed
 the current 8 MiB preferred allocation. Re-measure and raise `SIZE` before such
 increases. Larger histories also upload more bytes and consume more model input
 tokens on every round; byte capacity is not a guarantee of provider context

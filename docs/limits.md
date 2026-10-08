@@ -17,8 +17,8 @@ in the headers today; the headers win if this drifts.
 | `AGENT_REPLY_CAP` | 40 KiB | Visible text of one reply (`Agent.text`). |
 | `AGENT_ARGUMENT_CAP` | 8 KiB | Arguments of one tool call. |
 | `AGENT_CALL_MAX` | 4 | Tool calls accepted from one response. |
-| `AGENT_HISTORY_CAP` | 256 KiB | Recorded conversation JSON (`Agent.history`). |
-| `CHAT_REQUEST_CAP` | 288 KiB | The whole request JSON (`gJSON`): history plus system prompt and tool schemas. |
+| `AGENT_HISTORY_CAP` | 384 KiB | Recorded conversation JSON (`Agent.history`). |
+| `CHAT_REQUEST_CAP` | 416 KiB | The whole request JSON (`gJSON`): history plus system prompt and tool schemas. |
 | `AGENT_TEXT_CAP` | 16 KiB | User prompt and handoff message buffers. Not reply text. |
 | `AGENT_RESULT_CAP` | 1536 | One tool result recorded into history. |
 | JSON token scratch | 4096 tokens | Tokens (not bytes) in any parsed response; `tokens[]` in `agent.c`. |
@@ -87,8 +87,9 @@ docker run --rm -v "$PWD/build:/b" ghcr.io/autc04/retro68 \
 ```
 
 Text plus data plus bss was 2,454,552 bytes (2.34 MiB) at 3072 tokens with a
-16 KiB reply buffer, and 2,512,456 bytes (2.40 MiB) at 6000 tokens with the
-40 KiB `AGENT_REPLY_CAP`. This excludes dynamic TLS and UI allocations and the
+16 KiB reply buffer and 256 KiB history, 2,512,456 bytes (2.40 MiB) at 6000
+tokens with the 40 KiB `AGENT_REPLY_CAP`, and 3,036,744 bytes (2.90 MiB) with
+384 KiB history. This excludes dynamic TLS and UI allocations and the
 stack, so keep the minimum partition comfortably above it.
 
 ## Changing a limit
