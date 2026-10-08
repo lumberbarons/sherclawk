@@ -219,10 +219,15 @@ components are 1–31 bytes, cannot start with dot/dash, and paths are at most
 allow up to three directories or `.`. Only declared inputs are copied into the
 fresh build working directory. Standard SDK includes are supplied by the adapter.
 
-Prepare the queue once on the mounted AFP volume. Sherclawk now acquires the
-existing `worker-lock` and executes its current snapshot itself when unowned.
-ToolServer and its installed SDK are still required; MacRelix is unnecessary
-for this path. Queue creation and general queue service belong to increment 4:
+Sherclawk creates the queue itself before its first publication: it resolves
+the workspace root as a non-alias folder, creates `Worker01` then `buildjobs`
+one level at a time (journaled intent and verification, refusing a file or
+alias in either name) and only then publishes. Sherclawk acquires the existing
+`worker-lock` and executes its current snapshot itself when unowned. ToolServer
+and its installed SDK are still required; MacRelix is unnecessary for this
+path. General queue service belongs to increment 4. The host step below is only
+needed when an external worker should serve the queue before the app has
+created it:
 
 ```bash
 ssh "$SHARE_HOST" 'sudo -n install -d -o macos9 -g macos9 -m 775 /srv/retro68/Worker01/buildjobs'
@@ -596,13 +601,21 @@ after a reply, and a click saved the handoff and prepared fresh history.
 
 Limits are explicit: by default 32 model rounds and 64 executed calls per run,
 each adjustable 1–128 in Preferences; four calls per
-response, 8 KiB arguments per call, 256 KiB history, 288 KiB JSON request, 64 KiB
-raw HTTP response, and 3,072 output tokens. Each HTTPS request has a 120-second
+response, 8 KiB arguments per call, 384 KiB history, 416 KiB JSON request, 64 KiB
+raw HTTP response, 40 KiB of reply text, and 6,000 output tokens per model request (`AGENT_MAX_TOKENS`
+in `agent.h`; the handoff request has its own `AGENT_HANDOFF_MAX_TOKENS`). Reasoning
+tokens count against that budget. `docs/limits.md` explains how these limits
+relate. Each HTTPS request has a 120-second
 deadline. Tool output is below 1,536 bytes; folder listings have cursors and
 text reads provide `next_byte` continuation when a line is partial. Reads scan
 at most 8 KiB per invocation. Whole-file revisions guard small-file edits;
 larger-file scan revisions are observational.
-Token-truncated tool calls never execute. There is no automatic network retry.
+A reply cut off at the output limit never executes anything. If it has tool
+calls, or no visible text at all (reasoning used the whole budget), it is
+discarded and the model is told, in a user message, that its last reply was cut
+off and not run, so it can retry with a smaller step; the run continues and the
+retry counts as a model round. A cut-off reply that is only partial text is
+shown with a notice and ends the run. There is no automatic network retry.
 Reaching a run limit pauses with the actual model-round and tool counts, the
 configured ceilings, history usage
 percentage, and a reminder to send Continue. Sending another message resets
@@ -612,12 +625,12 @@ History buffers are static: the app allocates their full capacity at launch,
 not incrementally as messages arrive. With handoff enabled, each additional
 history byte costs roughly four RAM bytes (current history, candidate history,
 JSON request, and HTTP request). Per-response scratch is bounded separately.
-The 256 KiB build has 2,454,552 bytes (2.34 MiB) of linked code/static data
+The 384 KiB build has 3,036,744 bytes (2.90 MiB) of linked code/static data
 (`powerpc-apple-macos-size build/Sherclawk.xcoff`: text, data and bss);
 this excludes dynamic TLS/UI allocations and the stack. Its `SIZE` resource
 still requests 8 MiB preferred / 4 MiB minimum. A 512 KiB history would raise
-that baseline to roughly 3.34 MiB, making the 4 MiB minimum tight; 1 MiB history
-would need roughly 5.34 MiB before dynamic allocations, and 2 MiB would exceed
+that baseline to roughly 3.4 MiB, making the 4 MiB minimum tight; 1 MiB history
+would need roughly 5.4 MiB before dynamic allocations, and 2 MiB would exceed
 the current 8 MiB preferred allocation. Re-measure and raise `SIZE` before such
 increases. Larger histories also upload more bytes and consume more model input
 tokens on every round; byte capacity is not a guarantee of provider context
@@ -639,10 +652,19 @@ the saved session; model history is not silently dropped.
 Each model round (and the handoff request) ends with one line of tick offsets
 since the request began, `-` for a phase never reached: `round=3 init=2
 connect=10 handshake=100 sent=104 first_byte=500 done=620 close=740 up=4096
-down=812 end=ok`. `close` includes the Open Transport teardown yields, `up` and
-`down` are request and response bytes, and `end=abort` marks a round that
-stopped early. Each tool call logs `tool=<n> name=<tool> ticks=<elapsed>`; for
+down=812 out=240/6000 reasoning=180 end=ok`. `close` includes the Open Transport
+teardown yields, `up` and `down` are request and response bytes, `out` is the
+provider-reported completion tokens against the request cap and `reasoning` the
+part of them spent reasoning (each omitted when the provider does not report it),
+`end=abort` marks a round that stopped early and `end=truncated` one cut off at
+the output limit and retried. Each tool call logs `tool=<n> name=<tool> ticks=<elapsed>`; for
 `build_project` and `run_application` that spans the whole stepped operation.
+
+The Open Transport teardown that dominates `close` is tunable at build time for
+guest soaks: `SHERCLAWK_OT_YIELD_TICKS` (default 10; it was 60) sets the yield on each side
+of `CloseOpenTransport`, and `SHERCLAWK_OT_KEEP_OPEN_AFTER_CLEAN=1` leaves OT
+open after a cleanly completed round (errors, aborts and quit still cycle it).
+Set either in `config.local.h`; the defaults keep the long-standing policy.
 
 ## Files and verification
 

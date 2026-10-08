@@ -476,13 +476,38 @@ static void YieldTicks(uint32_t ticks)
  * example works around this by fully cycling InitOpenTransport /
  * CloseOpenTransport around every test, so we do the same around every
  * request (the Postman example, which inits OT once, shows the wedge).
+ *
+ * The yield on each side of CloseOpenTransport is SHERCLAWK_OT_YIELD_TICKS
+ * (config.h). It was 60, which made teardown about 122 ticks of a ~246-tick
+ * round; at 10 it is about 22 ticks. Guest soak (issue #25, 73 rounds): Stop
+ * mid-response, connection resets, a refused connect and a dropped-packet
+ * stall all aborted cleanly and the next request succeeded each time, with no
+ * wedge. Faults did not land mid-download on a large response.
  */
 static void CloseChatContext(void)
 {
     network_close(&gNet);
-    YieldTicks(60);
+    YieldTicks(SHERCLAWK_OT_YIELD_TICKS);
     if (gOTOpen) { CloseOpenTransport(); gOTOpen = 0; }
-    YieldTicks(60);
+    YieldTicks(SHERCLAWK_OT_YIELD_TICKS);
+}
+
+/* Teardown after a cleanly completed model round. Errors, aborts and quit keep
+ * using CloseChatContext; only this path may leave OT open for the next round
+ * (SHERCLAWK_OT_KEEP_OPEN_AFTER_CLEAN). */
+static void FinishChatContext(void)
+{
+#if SHERCLAWK_OT_KEEP_OPEN_AFTER_CLEAN
+    network_close(&gNet);
+    YieldTicks(SHERCLAWK_OT_YIELD_TICKS);
+#else
+    CloseChatContext();
+#endif
+}
+
+static void EnsureOpenTransport(void)
+{
+    if (!gOTOpen) { InitOpenTransport(); gOTOpen = 1; }
 }
 
 /*
@@ -553,6 +578,14 @@ static void LogToolTiming(int index, const char *name)
 {
     char line[96];
     if (timing_tool_format(index, name, gToolStart, (uint32_t)TickCount(), line, sizeof(line)) > 0) LogLine(line);
+}
+/* Completion tokens against the request cap, from the provider's own usage,
+ * for every completed exchange (including ones agent_response will reject). */
+static void ObserveCompletionTokens(void)
+{
+    long completion, reasoning;
+    if (!gRoundTiming.active || agent_usage_completion(gNet.body, gNet.body_len, &completion, &reasoning)) return;
+    timing_set_tokens(&gRoundTiming, completion, reasoning, gRun == RUN_HANDOFF ? AGENT_HANDOFF_MAX_TOKENS : AGENT_MAX_TOKENS);
 }
 static void ObserveRound(void)
 {
@@ -1353,7 +1386,7 @@ static void StartHandoff(void)
     if (length < 0) { SetStatus("Could not prepare handoff request; conversation retained."); return; }
     gHandoffPath[0] = 0; gRun = RUN_HANDOFF;
     timing_round_begin(&gRoundTiming, 0, (uint32_t)TickCount());
-    InitOpenTransport(); gOTOpen = 1; gStartTicks = (uint32_t)TickCount();
+    EnsureOpenTransport(); gStartTicks = (uint32_t)TickCount();
     timing_mark(&gRoundTiming, TIMING_INIT, gStartTicks);
     SetSendEnabled(0);
     if (network_start(&gNet, gNet.request, (size_t)length) < 0) { AbortChat(gNet.error); return; }
@@ -1442,7 +1475,7 @@ static int StartModelRequest(void)
         attribution, gJSON, (size_t)length, gNet.request, sizeof(gNet.request));
     if (length < 0) { AbortChat("Request or API key is too long or invalid."); return -1; }
     timing_round_begin(&gRoundTiming, gAgent.rounds + 1, (uint32_t)TickCount());
-    InitOpenTransport(); gOTOpen = 1;
+    EnsureOpenTransport();
     gStartTicks = (uint32_t)TickCount(); gRun = RUN_MODEL_REQUEST;
     timing_mark(&gRoundTiming, TIMING_INIT, gStartTicks);
     if (network_start(&gNet, gNet.request, (size_t)length) < 0) { AbortChat(gNet.error); return -1; }
@@ -1488,7 +1521,7 @@ static void StartContextLookup(void)
      * per launch, whatever the outcome. */
     strcpy(gModelInfoModel, gRunModel); memset(&gModelInfo, 0, sizeof(gModelInfo));
     gModelInfo.context_length = -1; gModelInfoAttempted = 1;
-    InitOpenTransport(); gOTOpen = 1;
+    EnsureOpenTransport();
     gStartTicks = (uint32_t)TickCount();
     if (network_start(&gNet, gNet.request, (size_t)length) < 0) {
         CloseChatContext(); SendBegin(); return;
@@ -1611,9 +1644,10 @@ static void StepModelExchange(void)
         return;
     }
     if (gRun == RUN_HANDOFF) {
+        ObserveCompletionTokens();
         if (agent_handoff_response(gNet.body, gNet.body_len, gNet.status, gHandoffSummary,
             sizeof(gHandoffSummary), error, sizeof(error))) { JournalModelError(error); AbortChat(error); return; }
-        CloseChatContext();
+        FinishChatContext();
         /* The summary completion is provider-billed like any other round. */
         agent_usage_absorb(&gAgent, gNet.body, gNet.body_len);
         LogRoundTiming("ok");
@@ -1626,9 +1660,17 @@ static void StepModelExchange(void)
         SetStatus("Handoff saved; fresh history is ready. Send a message to continue.");
         return;
     }
+    ObserveCompletionTokens();
     if (agent_response(&gAgent, gNet.body, gNet.body_len, gNet.status, error, sizeof(error))) { JournalModelError(error); AbortChat(error); return; }
-    CloseChatContext();
-    LogRoundTiming("ok");
+    FinishChatContext();
+    LogRoundTiming(gAgent.truncated ? "truncated" : "ok");
+    if (gAgent.truncated) {
+        gRun = RUN_NEXT_REQUEST;
+        ShowMessage("Notice", "Reply cut off at the output token limit; nothing in it ran. Asking the model to retry.");
+        SetStatus("Output token limit reached; asking the model to retry.");
+        LogLine("Reply truncated at the output token limit; model told to retry.");
+        return;
+    }
     if (*gAgent.text) ShowMessage("Sherclawk", gAgent.text);
     if (gAgent.count) {
         gRun = RUN_TOOLS; SetStatus("Model requested %d tool(s).", gAgent.count);

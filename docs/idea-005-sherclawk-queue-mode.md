@@ -179,6 +179,13 @@ first publication. Move the path into `config.h`/Preferences. The guest can
 create folders on the AFP volume today; that is how sessions and projects are
 written. The ssh step exists only to serve the hand-started worker.
 
+Implemented 2026-10-08 (issue #65): `ensure_queue()` runs before first
+publication in `build_project_step`, journalling `queue_intent` and
+`queue_created` around each missing level and refusing a file or alias
+occupying either name. Host checks cover creation, occupied names and the
+pre-created queue. The File menu command and a Preferences queue path remain
+open.
+
 ## What would make the whole process much smoother
 
 Ranked by payoff:
