@@ -232,3 +232,28 @@ rule and the empty-name-as-absent handling. Logs are retained locally under
 ignored `build/inspect-check-verified.log` and `build/probe-verified.log`.
 Resource reads never load a whole fork, and inspection results are evidence,
 never launch authority.
+
+Preferences verification, October 7, 2026: the pure parser/formatter suite runs
+under ASan/UBSan in `tools/check.sh` alongside the existing suites: missing
+file/defaults, every key, comments and blank lines, CR/LF/CRLF, duplicate and
+unknown keys, empty-key clearing, over-long and boundary values, workspace
+component rules, limit and boolean refusal, and formatter round-trip/refusal.
+The PowerPC main app built and was published fork-aware and exercised in
+OS 9.2.2. Edit > Preferences… opened and seeded the compiled model, key,
+workspace, 32/64 limits and the debug toggle; OK saved
+`System Folder:Preferences:Sherclawk Preferences` and a quit/relaunch loaded
+it again (2/1 limits, toggle checked). Malformed fields were refused in place:
+a bad workspace and a non-numeric round count each showed the validation alert
+with the dialog still open. With limits 2/1 a request paused after 1 round and
+1 tool naming the configured ceilings, and Continue resumed. The debug toggle
+then rendered each call as `• name(args)`, the result under `»` and its
+`journal:` event names; the session JSONL kept only the normal records. The
+workspace field set to `Retro68:PrefsTest:` applied immediately: the next
+New Chat wrote its journal to `Retro68:PrefsTest:Sherclawk Sessions:` and
+tools resolved against that root. Restoring `Retro68:` and 32/64 left a clean
+state. Two fixes came out of the guest pass: `FSMakeFSSpec` returns `fnfErr`
+for the not-yet-existing preferences file (first run and first save), and
+`ModalDialog` reports a DITL checkbox hit without toggling it, so the dialog
+tracks the toggle itself (`SetControlValue` followed by `Draw1Control`). The
+saved key was present in the file and used by the runs, but not yet
+distinguished from the identical compiled key in a no-compiled-key build.

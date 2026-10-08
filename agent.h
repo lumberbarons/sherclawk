@@ -10,6 +10,8 @@
 #define AGENT_TEXT_CAP 16384
 #define AGENT_TURN_MAX 32
 #define AGENT_TOOL_MAX 64
+/* Display-grade cost accumulator clamp, in millionths of a US dollar. */
+#define AGENT_COST_MICROS_MAX 9000000000000000LL
 
 typedef struct { char id[128], name[64], arguments[AGENT_ARGUMENT_CAP]; } AgentCall;
 typedef int (*AgentJournal)(void *context, const char *event, const char *json);
@@ -19,6 +21,9 @@ typedef struct {
     AgentCall calls[AGENT_CALL_MAX];
     size_t used;
     int messages, count, next, rounds, tool_count, active, limited;
+    long long cost_micros;
+    long context_tokens;
+    int cost_seen, context_seen;
     AgentJournal journal;
     void *journal_context;
 } Agent;
@@ -36,5 +41,10 @@ int agent_handoff_seed(Agent *candidate, const char *summary, const char *source
 int agent_response(Agent *a, const char *body, size_t len, int status, char *error, size_t cap);
 int agent_tool_result(Agent *a, const char *result, char *error, size_t cap);
 int agent_stop(Agent *a, const char *reason);
+/* Provider-reported usage is display-grade: absorb never fails and moves
+ * totals only for present, sane values. context_limit returns the largest
+ * data.endpoints[].context_length, or -1. */
+void agent_usage_absorb(Agent *a, const char *body, size_t len);
+long agent_context_limit(const char *body, size_t len);
 const char *agent_tool_schemas(void);
 #endif

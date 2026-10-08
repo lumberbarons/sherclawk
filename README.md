@@ -74,6 +74,21 @@ Workspace source text is interpreted as MacRoman, converted to UTF-8 for the
 model, and displayed through native TextEdit. Binary/resource-fork files and
 aliases are refused. Tool arguments never pass through lossy UI conversion.
 
+**Preferences** (Edit menu, last item) sets the model, API key, workspace,
+per-run limits and a *Show tool debug in Conversation* toggle. Values are saved
+as clear `key=value` MacRoman text with CR line endings at
+`System Folder:Preferences:Sherclawk Preferences` (file type `pref`, creator
+`ShCk`); the file is created on the first save, so existing builds are
+unchanged until the dialog is used. Saved values override `config.local.h`,
+which stays as the compiled fallback. The workspace applies to new tool work
+immediately (tools, new sessions, builds); a session already open keeps
+writing to the folder it was opened in. Limits accept 1–128 and apply per run;
+outside that range, or with a value missing or malformed in the file, the
+compiled default is used. With the debug toggle on, each executed call shows a
+compact call block — rendered arguments, the result and the call's journal
+event names — in the Conversation; the session JSONL is byte-identical either
+way, and the API key never appears in status text, logs, prompts or results.
+
 The Finder icon ships as a bundle icon family and as an attached custom icon,
 so the AFP file displays correctly without rebuilding the Desktop database.
 Both 16px and 32px icons have color, masks and monochrome fallback. The native
@@ -501,6 +516,30 @@ The sidebar places the subtitle below Sherclawk's title and shows current
 model-history usage below the artwork as used/capacity KiB and a percentage.
 Usage updates during runs and resets with New Chat or a successful handoff.
 
+Directly under that indicator, a usage line reports provider accounting.
+`Context: 45.2k tokens (4%)` is the most recent model round's
+`usage.prompt_tokens` (cached input included) and its rounded share of that
+model's context window; before the first reply it reads `Context: -`, and the
+percentage is omitted while the window is unknown. `Cost: $0.012345` is the
+running sum, across the session's model rounds, of the provider-computed USD
+`usage.cost` (OpenRouter credits are USD 1:1), accumulated in millionths of a
+dollar and hidden while it is zero. Accounting is display-grade: values below
+one micro-dollar round to zero. New Chat resets both totals; a successful
+handoff carries the cost total into the fresh history but leaves the context
+line unset until the next reply.
+
+The context window comes from the public
+`GET /api/v1/models/<model>/endpoints` metadata response: the largest
+`context_length` across its endpoints. The app requests it at most once per
+model per launch, with a 30-second deadline and the same 64 KiB response
+bound. Any HTTP error, timeout, oversized body, or response beyond the
+4096-token JSON parser cap silently omits the percentage and proceeds with the
+send; there is no retry. The model field stays editable during the lookup; if
+it changes, the send is held and the typed prompt is kept. Stop during the
+lookup leaves no session record and keeps the prompt; the stopped exchange
+continues to a terminal network state before it is closed, so a send in the
+next few seconds may briefly report that the lookup is still closing.
+
 New `ppc-toolbox-v1` projects include confirmed close-box handling as well
 as Command-Q. Preserve these event branches when adding application behavior;
 existing projects are not changed by updating the embedded template.
@@ -541,7 +580,8 @@ The Save Handoff button was built, published fork-aware and checked in OS 9.2.2
 on October 6, 2026: disabled in a fresh chat and during a model request, enabled
 after a reply, and a click saved the handoff and prepared fresh history.
 
-Limits are explicit: 32 model rounds, 64 executed calls per run, four calls per
+Limits are explicit: by default 32 model rounds and 64 executed calls per run,
+each adjustable 1–128 in Preferences; four calls per
 response, 8 KiB arguments per call, 256 KiB history, 288 KiB JSON request, 64 KiB
 raw HTTP response, and 3,072 output tokens. Each HTTPS request has a 120-second
 deadline. Tool output is below 1,536 bytes; folder listings have cursors and
@@ -549,7 +589,8 @@ text reads provide `next_byte` continuation when a line is partial. Reads scan
 at most 8 KiB per invocation. Whole-file revisions guard small-file edits;
 larger-file scan revisions are observational.
 Token-truncated tool calls never execute. There is no automatic network retry.
-Reaching a run limit pauses with the model-round and tool counts, history usage
+Reaching a run limit pauses with the actual model-round and tool counts, the
+configured ceilings, history usage
 percentage, and a reminder to send Continue. Sending another message resets
 the run counters while retaining conversation history; handoff is not required.
 
@@ -557,11 +598,12 @@ History buffers are static: the app allocates their full capacity at launch,
 not incrementally as messages arrive. With handoff enabled, each additional
 history byte costs roughly four RAM bytes (current history, candidate history,
 JSON request, and HTTP request). Per-response scratch is bounded separately.
-The 256 KiB build has 2,330,176 bytes (2.22 MiB) of linked code/static data;
+The 256 KiB build has 2,454,552 bytes (2.34 MiB) of linked code/static data
+(`powerpc-apple-macos-size build/Sherclawk.xcoff`: text, data and bss);
 this excludes dynamic TLS/UI allocations and the stack. Its `SIZE` resource
 still requests 8 MiB preferred / 4 MiB minimum. A 512 KiB history would raise
-that baseline to roughly 3.22 MiB, making the 4 MiB minimum tight; 1 MiB history
-would need roughly 5.22 MiB before dynamic allocations, and 2 MiB would exceed
+that baseline to roughly 3.34 MiB, making the 4 MiB minimum tight; 1 MiB history
+would need roughly 5.34 MiB before dynamic allocations, and 2 MiB would exceed
 the current 8 MiB preferred allocation. Re-measure and raise `SIZE` before such
 increases. Larger histories also upload more bytes and consume more model input
 tokens on every round; byte capacity is not a guarantee of provider context
@@ -606,8 +648,10 @@ diagnostic built as its own CMake target; launch it in the guest and read
 | `SherclawkScrollCheck` | Toolbox scrollbar behavior |
 
 Host-side tests are in `tests/`, compiled against the stubs in `tests/toolbox/`
-by `tools/check.sh`. Python helpers: `tools/make-art.py` (icon and window
-art), `tools/netatalk_meta.py` (fork-aware publication),
+by `tools/check.sh`; `tools/lint.sh` adds shellcheck, cppcheck and ruff for the
+same sources, and `.github/workflows/ci.yml` runs those checks on `ubuntu-24.04`
+for pushes to main and pull requests. Python helpers: `tools/make-art.py`
+(icon and window art), `tools/netatalk_meta.py` (fork-aware publication),
 `tools/embed-project-template.py` and `tools/materialize-native-template.py`
 (starter template), `tools/publish-worker-job.py` (diagnostic job producer),
 and `tools/guest-input.py`, `tools/qmpdrive.py` and `tools/utm_qmp.py`

@@ -13,6 +13,7 @@
 #include <ToolUtils.h>
 #include <Scrap.h>
 #include <Files.h>
+#include <Folders.h>
 #include <OpenTransport.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -33,12 +34,14 @@
 #include <Resources.h>
 #include "text.h"
 #include "config.h"
+#include "preferences.h"
 
 /* ── Menu IDs ─────────────────────────────────────────────────────── */
 enum {
     kAppleMenuID = 128,
     kFileMenuID  = 129,
-    kEditMenuID  = 130
+    kEditMenuID  = 130,
+    kEditPrefsItem = 10   /* Edit menu: last item ("Preferences…") */
 };
 
 /* ── Layout ───────────────────────────────────────────────────────── */
@@ -46,7 +49,7 @@ enum {
     kWinLeft   = 40,
     kWinTop    = 40,
     kWinWidth  = 600,
-    kWinHeight = 420,
+    kWinHeight = 436,
 
     kPad       = 10,
     kFieldH    = 20,
@@ -70,6 +73,13 @@ static Rect gModelLabelRect, gModelRect, gSendRect;
 static Rect gStatusLabelRect, gStatusRect;
 static Rect gHistoryRect;
 static size_t gDisplayedHistory = (size_t)-1;
+static Rect gUsageRect;
+static char gModelInfoModel[CHAT_MODEL_CAP];
+static long gModelInfoLimit = -1;
+static int  gModelInfoAttempted = 0;
+static long long gDisplayedCost = -1;
+static long gDisplayedTokens = -1;
+static long gDisplayedLimit = -1;
 static Rect gResponseLabelRect, gResponseRect, gResponseViewRect;
 
 static MenuHandle gAppleMenu = NULL;
@@ -78,6 +88,13 @@ static MenuHandle gEditMenu  = NULL;
 
 static char gStatusText[256] = "Idle.";
 static int  gQuit = 0;
+
+/* ── Preferences ──────────────────────────────────────────────────── */
+static Prefs gPrefs;
+static int   gPrefsUnreadable = 0;   /* existing file could not be read */
+#define kPrefsFileName "\pSherclawk Preferences"
+#define kPrefsCreator 'ShCk'
+#define kPrefsFileType 'pref'
 
 /* ── Request state ──────────────────────────────────────────────── */
 static Chat gChat; /* Only the bounded native display is reused. */
@@ -93,6 +110,7 @@ static char gPending[CHAT_PROMPT_CAP * 3];
 static char gJSON[CHAT_REQUEST_CAP];
 static char gToolResult[AGENT_RESULT_CAP];
 static int gSending = 0, gOTOpen = 0;
+static int gLookupDrain = 0;
 static int gHandoff = 0;
 static Agent gHandoffCandidate;
 static char gHandoffSummary[8192], gHandoffPath[256];
@@ -149,7 +167,7 @@ static const char *TLSVersionLabel(MacTLS_Version v)
 
 static void UpdateHandoffControls(void)
 {
-    int enabled = !gSending && gSessionOpen && gAgent.messages &&
+    int enabled = !gSending && !gLookupDrain && gSessionOpen && gAgent.messages &&
         !gAgent.active && gAgent.next >= gAgent.count;
     if (enabled == gHandoffEnabled) return;
     gHandoffEnabled = enabled;
@@ -168,9 +186,250 @@ static void SetSendEnabled(int enabled)
         if (enabled) EnableItem(gFileMenu, 1);
         else DisableItem(gFileMenu, 1);
     }
+    if (gEditMenu) {
+        if (enabled) EnableItem(gEditMenu, kEditPrefsItem);
+        else DisableItem(gEditMenu, kEditPrefsItem);
+    }
     UpdateHandoffControls();
     if (gStopBtn) HiliteControl(gStopBtn, enabled ? 255 : 0);
     if (!enabled && gFocusedTE != gResponseTE) FocusSet(gResponseTE);
+}
+
+/* ── Preferences file (System Folder:Preferences) ─────────────────── */
+
+static OSErr PrefsSpec(FSSpec *spec)
+{
+    short vRefNum;
+    long  dirID;
+    OSErr err = FindFolder(kOnSystemDisk, kPreferencesFolderType, kCreateFolder,
+                           &vRefNum, &dirID);
+    if (err) return err;
+    return FSMakeFSSpec(vRefNum, dirID, (ConstStr255Param)kPrefsFileName, spec);
+}
+
+/* Load once at startup. A missing file is normal (defaults); an unreadable or
+ * oversized one keeps the compiled defaults and reports through the status
+ * line after the window exists. */
+static void PrefsLoad(void)
+{
+    static char bytes[PREFS_MAX_BYTES];
+    FSSpec spec;
+    short ref = 0;
+    long length = 0, count;
+    OSErr err, close_err;
+
+    prefs_defaults(&gPrefs);
+    gPrefsUnreadable = 0;
+    err = PrefsSpec(&spec);
+    if (err == fnfErr) return;               /* first run: compiled defaults */
+    if (err) { gPrefsUnreadable = 1; return; }
+    err = FSpOpenDF(&spec, fsRdPerm, &ref);
+    if (err == fnfErr) return;               /* file disappeared after the probe */
+    if (err) { gPrefsUnreadable = 1; return; }
+    err = GetEOF(ref, &length);
+    if (err || length < 0 || length > (long)sizeof(bytes)) err = ioErr;
+    if (!err) {
+        count = length;
+        err = FSRead(ref, &count, bytes);
+        if (!err && count != length) err = ioErr;
+    }
+    close_err = FSClose(ref);
+    if (err || close_err) { gPrefsUnreadable = 1; return; }
+    prefs_parse(bytes, (size_t)length, &gPrefs);
+}
+
+/* Write, flush and read back the whole file; a save that cannot be verified
+ * leaves the previous file and the previous in-memory values in place. */
+static int PrefsSave(const Prefs *p)
+{
+    static char bytes[PREFS_MAX_BYTES];
+    static char verified[PREFS_MAX_BYTES];
+    FSSpec spec;
+    short ref = 0;
+    long length, written, actual;
+    OSErr err, close_err;
+
+    length = prefs_format(p, bytes, sizeof(bytes));
+    if (length < 0) return -1;
+    err = PrefsSpec(&spec);
+    if (err == fnfErr) err = noErr;          /* create below; spec is usable */
+    if (!err) {
+        err = FSpCreate(&spec, kPrefsCreator, kPrefsFileType, smSystemScript);
+        if (err == dupFNErr) err = noErr;
+    }
+    if (!err) err = FSpOpenDF(&spec, fsWrPerm, &ref);
+    if (!err) err = SetEOF(ref, 0);
+    if (!err) {
+        written = length;
+        err = FSWrite(ref, &written, bytes);
+        if (!err && written != length) err = ioErr;
+    }
+    if (ref) {
+        close_err = FSClose(ref); ref = 0;
+        if (!err) err = close_err;
+    }
+    if (!err) err = FlushVol(NULL, spec.vRefNum);
+    if (!err) err = FSpOpenDF(&spec, fsRdPerm, &ref);
+    if (!err) err = GetEOF(ref, &actual);
+    if (!err && actual != length) err = ioErr;
+    if (!err) {
+        written = length;
+        err = FSRead(ref, &written, verified);
+        if (!err && written != length) err = ioErr;
+    }
+    if (!err && memcmp(bytes, verified, (size_t)length)) err = ioErr;
+    if (ref) {
+        close_err = FSClose(ref); ref = 0;
+        if (!err) err = close_err;
+    }
+    return err ? -1 : 0;
+}
+
+/* ── Preferences dialog (DLOG/DITL 128) ───────────────────────────── */
+
+/* DITL item numbers: the OK/Cancel buttons, then label/edit pairs in order,
+ * the debug checkbox and the location hint. */
+enum {
+    kPrefsDialogID     = 128,
+    kPrefsAlertID      = 128,
+    kPrefsOKItem       = 1,
+    kPrefsCancelItem   = 2,
+    kPrefsModelItem    = 4,
+    kPrefsKeyItem      = 6,
+    kPrefsWorkspaceItem = 8,
+    kPrefsRoundsItem   = 10,
+    kPrefsToolsItem    = 12,
+    kPrefsDebugItem    = 13
+};
+
+static Handle PrefsItem(DialogPtr dlg, short item)
+{
+    short  type;
+    Handle handle;
+    Rect   rect;
+    GetDialogItem(dlg, item, &type, &handle, &rect);
+    return handle;
+}
+
+static void SetPrefsText(DialogPtr dlg, short item, const char *text)
+{
+    Str255 p;
+    PStr(p, text);
+    SetDialogItemText(PrefsItem(dlg, item), p);
+}
+
+static void GetPrefsText(DialogPtr dlg, short item, char *out, size_t cap)
+{
+    Str255 p;
+    size_t n;
+    GetDialogItemText(PrefsItem(dlg, item), p);
+    n = p[0];
+    if (n >= cap) n = cap - 1;
+    memcpy(out, p + 1, n);
+    out[n] = 0;
+}
+
+static ControlHandle PrefsCheckbox(DialogPtr dlg)
+{
+    return (ControlHandle)PrefsItem(dlg, kPrefsDebugItem);
+}
+
+/* The dialog stays open on a rejected value; the alert explains why. */
+static void PrefsProblem(DialogPtr dlg, const char *message)
+{
+    Str255 p;
+    PStr(p, message);
+    ParamText(p, NULL, NULL, NULL);
+    StopAlert(kPrefsAlertID, NULL);
+    SetPort(dlg);
+}
+
+static void ShowPreferences(void)
+{
+    static Prefs candidate;   /* the live values change only after a verified save */
+    DialogPtr dlg;
+    short item;
+    int done = 0, debug = gPrefs.show_tool_debug, rounds, tools;
+    char model[CHAT_MODEL_CAP], key[PREFS_KEY_CAP], workspace[PREFS_WORKSPACE_CAP];
+    char rounds_text[8], tools_text[8];
+
+    dlg = GetNewDialog(kPrefsDialogID, NULL, (WindowPtr)-1L);
+    if (!dlg) { SetStatus("Could not open the Preferences dialog."); return; }
+    SetPort(dlg);
+    SetPrefsText(dlg, kPrefsModelItem, gPrefs.model);
+    SetPrefsText(dlg, kPrefsKeyItem, gPrefs.api_key);
+    SetPrefsText(dlg, kPrefsWorkspaceItem, gPrefs.workspace);
+    snprintf(rounds_text, sizeof(rounds_text), "%d", gPrefs.max_rounds);
+    snprintf(tools_text, sizeof(tools_text), "%d", gPrefs.max_tools);
+    SetPrefsText(dlg, kPrefsRoundsItem, rounds_text);
+    SetPrefsText(dlg, kPrefsToolsItem, tools_text);
+    SetControlValue(PrefsCheckbox(dlg), debug);
+    SelectDialogItemText(dlg, kPrefsModelItem, 0, 32767);
+    SetDialogDefaultItem(dlg, kPrefsOKItem);
+    SetDialogCancelItem(dlg, kPrefsCancelItem);
+
+    while (!done) {
+        ModalDialog(NULL, &item);
+        if (item == kPrefsDebugItem) {
+            /* ModalDialog reports the checkbox hit but does not toggle it. */
+            ControlHandle ctl = PrefsCheckbox(dlg);
+            debug = !debug;
+            SetControlValue(ctl, debug ? 1 : 0);
+            Draw1Control(ctl);
+            continue;
+        }
+        if (item == kPrefsCancelItem) break;
+        if (item != kPrefsOKItem) continue;
+        GetPrefsText(dlg, kPrefsModelItem, model, sizeof(model));
+        GetPrefsText(dlg, kPrefsKeyItem, key, sizeof(key));
+        GetPrefsText(dlg, kPrefsWorkspaceItem, workspace, sizeof(workspace));
+        GetPrefsText(dlg, kPrefsRoundsItem, rounds_text, sizeof(rounds_text));
+        GetPrefsText(dlg, kPrefsToolsItem, tools_text, sizeof(tools_text));
+        if (!prefs_model_ok(model)) {
+            PrefsProblem(dlg, "Enter a model ID: printable characters, no spaces.");
+            SelectDialogItemText(dlg, kPrefsModelItem, 0, 32767); continue;
+        }
+        if (!prefs_key_ok(key)) {
+            PrefsProblem(dlg, "The API key must be printable characters without spaces.");
+            SelectDialogItemText(dlg, kPrefsKeyItem, 0, 32767); continue;
+        }
+        if (!prefs_workspace_ok(workspace)) {
+            PrefsProblem(dlg, "The workspace must be a colon path ending in ':', like Retro68:.");
+            SelectDialogItemText(dlg, kPrefsWorkspaceItem, 0, 32767); continue;
+        }
+        rounds = prefs_limit_value(rounds_text);
+        if (rounds < 0) {
+            PrefsProblem(dlg, "Max model rounds must be a number from 1 to 128.");
+            SelectDialogItemText(dlg, kPrefsRoundsItem, 0, 32767); continue;
+        }
+        tools = prefs_limit_value(tools_text);
+        if (tools < 0) {
+            PrefsProblem(dlg, "Max tool calls must be a number from 1 to 128.");
+            SelectDialogItemText(dlg, kPrefsToolsItem, 0, 32767); continue;
+        }
+        candidate = gPrefs;
+        strcpy(candidate.model, model);
+        strcpy(candidate.api_key, key);
+        strcpy(candidate.workspace, workspace);
+        candidate.max_rounds = rounds;
+        candidate.max_tools = tools;
+        candidate.show_tool_debug = debug;
+        if (PrefsSave(&candidate)) {
+            PrefsProblem(dlg, "Could not save the preferences file. Nothing was changed.");
+            continue;
+        }
+        gPrefs = candidate;
+        tools_set_workspace(gPrefs.workspace);
+        done = 1;
+    }
+    CloseDialog(dlg);
+    if (gWindow) SetPort(gWindow);
+    if (done) {
+        TESetText(gPrefs.model, (long)strlen(gPrefs.model), gModelTE);
+        InvalRect(&gModelRect);
+        SetStatus("Preferences saved; the workspace applies to new work now.");
+    }
+    FocusSet(gPromptTE);
 }
 
 /* ── Open Transport lifecycle and the share log ───────────────────── */
@@ -423,6 +682,11 @@ static int HandleMenu(long menuChoice)
         break;
 
     case kEditMenuID:
+        if (item == kEditPrefsItem) {
+            if (gSending) SetStatus("Finish the current run before changing Preferences.");
+            else ShowPreferences();
+            break;
+        }
         if (gFocusedTE && (item == 4 || item == 8 ||
             (!gSending && gFocusedTE != gResponseTE))) {
             switch (item) {
@@ -457,6 +721,19 @@ static int HandleMenu(long menuChoice)
 
 /* ── Layout, drawing, UI setup ────────────────────────────────────── */
 
+/* Compact OpenCode-style token counts: exact below 1000, else one decimal k/M. */
+static void FormatTokens(long tokens, char *out, size_t cap)
+{
+    if (tokens < 1000) snprintf(out, cap, "%ld", tokens);
+    else if (tokens < 1000000) {
+        long tenths = (tokens + 50) / 100;
+        snprintf(out, cap, "%ld.%ldk", tenths / 10, tenths % 10);
+    } else {
+        long tenths = (tokens + 50000) / 100000;
+        snprintf(out, cap, "%ld.%ldM", tenths / 10, tenths % 10);
+    }
+}
+
 static void ComputeLayout(void)
 {
     SetRect(&gModelLabelRect, 10, 10, 48, 30);
@@ -464,15 +741,16 @@ static void ComputeLayout(void)
     SetRect(&gStatusLabelRect, 10, 38, 56, 54);
     SetRect(&gStatusRect, 60, 38, 590, 54);
     SetRect(&gHistoryRect, 10, 254, 166, 270);
+    SetRect(&gUsageRect, 10, 272, 590, 288);
     SetRect(&gResponseLabelRect, 174, 62, 340, 78);
     SetRect(&gResponseRect, 174, 82, 590, 270);
     gResponseViewRect = gResponseRect; gResponseViewRect.right -= kScrollW;
-    SetRect(&gPromptLabelRect, 10, 278, 200, 294);
-    SetRect(&gPromptRect, 10, 298, 590, 380);
-    SetRect(&gSendRect, 10, 390, 74, 410);
-    SetRect(&gStopRect, 84, 390, 148, 410);
-    SetRect(&gNewRect, 158, 390, 246, 410);
-    SetRect(&gHandoffRect, 478, 390, 590, 410);
+    SetRect(&gPromptLabelRect, 10, 294, 200, 310);
+    SetRect(&gPromptRect, 10, 314, 590, 396);
+    SetRect(&gSendRect, 10, 406, 74, 426);
+    SetRect(&gStopRect, 84, 406, 148, 426);
+    SetRect(&gNewRect, 158, 406, 246, 426);
+    SetRect(&gHandoffRect, 478, 406, 590, 426);
 }
 
 static void DrawChrome(void)
@@ -510,6 +788,34 @@ static void DrawChrome(void)
             (unsigned long)(gAgent.used * 100 / AGENT_HISTORY_CAP));
         DrawLabel(&gHistoryRect, history);
         gDisplayedHistory = gAgent.used;
+        {
+            char line[96], count[24];
+            long dollars, micros;
+            EraseRect(&gUsageRect);
+            if (gAgent.context_seen) FormatTokens(gAgent.context_tokens, count, sizeof(count));
+            else strcpy(count, "-");
+            if (gAgent.context_seen && gModelInfoLimit > 0 && !strcmp(gModelInfoModel, gRunModel)) {
+                long long percent = ((long long)gAgent.context_tokens * 100 + gModelInfoLimit / 2) / gModelInfoLimit;
+                if (percent > 100) percent = 100;
+                snprintf(line, sizeof(line), "Context: %s tokens (%ld%%)", count, (long)percent);
+            } else if (gAgent.context_seen) {
+                snprintf(line, sizeof(line), "Context: %s tokens", count);
+            } else {
+                snprintf(line, sizeof(line), "Context: -");
+            }
+            DrawLabel(&gUsageRect, line);
+            if (gAgent.cost_micros > 0) {
+                dollars = (long)(gAgent.cost_micros / 1000000LL);
+                micros = (long)(gAgent.cost_micros % 1000000LL);
+                snprintf(line, sizeof(line), "Cost: $%lu.%06lu", (unsigned long)dollars, (unsigned long)micros);
+                PStr(p, line);
+                MoveTo(gUsageRect.right - StringWidth(p), gUsageRect.bottom - 4);
+                DrawString(p);
+            }
+            gDisplayedCost = gAgent.cost_micros;
+            gDisplayedTokens = gAgent.context_seen ? gAgent.context_tokens : -1;
+            gDisplayedLimit = gModelInfoLimit;
+        }
     }
     DrawLabel(&gResponseLabelRect, "Conversation:");
     FrameRect(&gResponseRect);
@@ -585,7 +891,7 @@ static void UIInit(void)
         dest.right += 4000;   /* room for long model IDs */
         gModelTE = TENew(&dest, &view);
         if (gModelTE) {
-            const char *url = SHERCLAWK_MODEL;
+            const char *url = gPrefs.model;
             TEAutoView(true, gModelTE);
             TESetText(url, (long)strlen(url), gModelTE);
             TESetSelect(0, 32767, gModelTE);   /* selected: type to replace */
@@ -719,7 +1025,7 @@ static void HandleEvent(const EventRecord *event)
         if (!gSending && gPromptTE && PtInRect(local, &(*gPromptTE)->viewRect)) {
             FocusSet(gPromptTE);
             TEClick(local, (event->modifiers & shiftKey) != 0, gPromptTE);
-        } else if (!gSending && gModelTE && PtInRect(local, &(*gModelTE)->viewRect)) {
+        } else if ((!gSending || gSending == 6) && gModelTE && PtInRect(local, &(*gModelTE)->viewRect)) {
             FocusSet(gModelTE);
             TEClick(local, (event->modifiers & shiftKey) != 0, gModelTE);
         } else if (gResponseTE && PtInRect(local, &(*gResponseTE)->viewRect)) {
@@ -755,7 +1061,8 @@ static void HandleEvent(const EventRecord *event)
                 gFocusedTE == gPromptTE ? gResponseTE : gModelTE);
             break;
         }
-        if (!gSending && gFocusedTE && gFocusedTE != gResponseTE) {
+        if ((!gSending || (gSending == 6 && gFocusedTE == gModelTE)) &&
+            gFocusedTE && gFocusedTE != gResponseTE) {
             long limit = gFocusedTE == gModelTE ? CHAT_MODEL_CAP - 1 : CHAT_PROMPT_CAP - 1;
             long remaining = (*gFocusedTE)->teLength -
                 ((*gFocusedTE)->selEnd - (*gFocusedTE)->selStart);
@@ -800,7 +1107,7 @@ static int SessionCreate(char *out_path, size_t cap, short *out_ref)
     OSErr err;
     int attempt;
     char folder[256];
-    snprintf(folder, sizeof(folder), "%sSherclawk Sessions:", SHERCLAWK_WORKSPACE);
+    snprintf(folder, sizeof(folder), "%sSherclawk Sessions:", tools_workspace());
     PStr(path, folder);
     err = FSMakeFSSpec(0, 0, path, &spec);
     if (err == fnfErr) err = FSpDirCreate(&spec, smSystemScript, &dir);
@@ -844,6 +1151,7 @@ static void ShowMessage(const char *label, const char *text)
 {
     static char display[CHAT_TRANSCRIPT_CAP];
     size_t at = strlen(gChat.transcript), len, i, lines = 0;
+    size_t prefix = (label && *label) ? strlen(label) + 2 : 0; /* "label:\r" */
     if (text_to_macroman(text, display, sizeof(display)) < 0) strcpy(display, "[Text exceeds display capacity; see session file.]");
     len = strlen(display);
     for (i = 0; i < at; i++) if (gChat.transcript[i] == 13) lines++;
@@ -856,15 +1164,103 @@ static void ShowMessage(const char *label, const char *text)
         }
         lines += own_lines;
     }
-    if (at + len + strlen(label) + 8 >= sizeof(gChat.transcript) || lines > 1400) {
+    if (at + len + prefix + 8 >= sizeof(gChat.transcript) || lines > 1400) {
         strcpy(gChat.transcript, "[Earlier conversation is saved in the session file.]\r\r");
         at = strlen(gChat.transcript);
     }
-    if (strlen(label) + len + 5 >= sizeof(gChat.transcript) - at) return;
-    strcpy(gChat.transcript + at, label); strcat(gChat.transcript, ":\r");
+    if (prefix + len + 5 >= sizeof(gChat.transcript) - at) return;
+    if (prefix) { strcpy(gChat.transcript + at, label); strcat(gChat.transcript, ":\r"); }
     strcat(gChat.transcript, display); strcat(gChat.transcript, "\r\r");
     ResponseSetText(gChat.transcript, strlen(gChat.transcript));
     ResponseScrollTo(GetControlMaximum(gResponseScroll));
+}
+
+/* ── Tool debug view (display only; the session file is unaffected) ─ */
+/* Journal event names emitted for the tool call being executed. */
+static char gToolEvents[192];
+static void ToolEventsReset(void) { gToolEvents[0] = 0; }
+static void ToolEventsAppend(const char *event)
+{
+    size_t at = strlen(gToolEvents), n = strlen(event);
+    if (!at) {
+        if (n < sizeof(gToolEvents)) memcpy(gToolEvents, event, n + 1);
+        return;
+    }
+    if (at + n + 3 > sizeof(gToolEvents)) return; /* keep what already fit */
+    gToolEvents[at] = ','; gToolEvents[at + 1] = ' ';
+    memcpy(gToolEvents + at + 2, event, n + 1);
+}
+static int ToolEventJournal(void *context, const char *event, const char *json)
+{
+    ToolEventsAppend(event);
+    return Journal(context, event, json);
+}
+
+static void AppendText(char *out, size_t cap, const char *s)
+{
+    size_t at = strlen(out), n = strlen(s);
+    if (at + n >= cap) return;
+    memcpy(out + at, s, n + 1);
+}
+
+/* "• name(arg: value, ...)" from the recorded arguments, the same JSON the
+ * tool layer parses. Long strings and nesting are abbreviated, and the whole
+ * header is display-bounded. */
+static void RenderToolCall(const AgentCall *call, char *out, size_t cap)
+{
+    static JsonToken tokens[256];
+    static char value[132];
+    size_t i;
+    int parsed, first = 1;
+
+    snprintf(out, cap, "\xE2\x80\xA2 %s(", call->name);
+    parsed = call->arguments[0] ? json_parse(call->arguments, strlen(call->arguments), tokens, 256) : -1;
+    if (parsed < 1 || tokens[0].type != JSON_OBJECT) {
+        size_t at = strlen(out), n = strlen(call->arguments);
+        if (at < cap - 1 && n > cap - at - 2) n = cap - at - 2;
+        if (at < cap - 1) { memcpy(out + at, call->arguments, n); out[at + n] = 0; }
+    } else {
+        for (i = 1; i < (size_t)tokens[0].next; i = (size_t)tokens[i + 1].next) {
+            int v = (int)i + 1;
+            char key[64];
+            if (!first) AppendText(out, cap, ", ");
+            first = 0;
+            if (json_string(call->arguments, tokens, (int)i, key, sizeof(key)) < 0) strcpy(key, "?");
+            AppendText(out, cap, key);
+            AppendText(out, cap, ": ");
+            switch (tokens[v].type) {
+            case JSON_STRING:
+                if (json_string(call->arguments, tokens, v, value, sizeof(value)) < 0) strcpy(value, "<long>");
+                AppendText(out, cap, "\""); AppendText(out, cap, value); AppendText(out, cap, "\"");
+                break;
+            case JSON_PRIMITIVE: {
+                int n = tokens[v].end - tokens[v].start;
+                if (n > 40) n = 40;
+                memcpy(value, call->arguments + tokens[v].start, (size_t)n); value[n] = 0;
+                AppendText(out, cap, value);
+                break;
+            }
+            default:
+                AppendText(out, cap, tokens[v].type == JSON_ARRAY ? "[...]" : "{...}");
+                break;
+            }
+            if (strlen(out) > cap - 12) { AppendText(out, cap, ", ..."); break; }
+        }
+    }
+    AppendText(out, cap, ")");
+}
+
+/* One tool message: with the toggle off, the plain result as before; with it
+ * on, the call header, the result indented and the call's journal events. */
+static void ShowToolResult(const AgentCall *call, const char *label, const char *text)
+{
+    static char block[4096];
+    char header[400];
+    if (!gPrefs.show_tool_debug || !call) { ShowMessage(label, text); return; }
+    RenderToolCall(call, header, sizeof(header));
+    snprintf(block, sizeof(block), "%s\r  \xC2\xBB %s\r  journal: %s",
+        header, text, gToolEvents[0] ? gToolEvents : "(none)");
+    ShowMessage(NULL, block);
 }
 static void NewChat(void)
 {
@@ -891,7 +1287,7 @@ static int SaveHandoff(void)
     if (n < 0 || (size_t)n >= sizeof(utf8) ||
         (n = text_to_macroman_strict(utf8, bytes, sizeof(bytes))) < 0) return -1;
     length = n;
-    snprintf(folder, sizeof(folder), "%sSherclawk Sessions:", SHERCLAWK_WORKSPACE);
+    snprintf(folder, sizeof(folder), "%sSherclawk Sessions:", tools_workspace());
     for (attempt = 0; attempt < 100; attempt++) {
         char candidate[256];
         if (snprintf(candidate, sizeof(candidate), "%sh%08lx.md", folder,
@@ -925,6 +1321,10 @@ static int CommitHandoff(void)
     if (agent_handoff_seed(&gHandoffCandidate, gHandoffSummary, gSessionPath, gHandoffPath)) {
         FSClose(ref); return -1;
     }
+    /* Cost is a session total, not history: the fresh candidate keeps it and
+     * leaves the context line unset until the next reply. */
+    gHandoffCandidate.cost_micros = gAgent.cost_micros;
+    gHandoffCandidate.cost_seen = gAgent.cost_seen;
     /* The old agent is untouched until both durable files exist. */
     SessionClose();
     gSessionRef = ref; gSessionOpen = 1; strcpy(gSessionPath, path);
@@ -938,10 +1338,11 @@ static void StartHandoff(void)
     size_t i;
     char attribution[256];
     if (gSending) return;
+    if (gLookupDrain) { SetStatus("The stopped lookup is still closing; try again in a moment."); return; }
     if (!gSessionOpen || !gAgent.messages || gAgent.active || gAgent.next < gAgent.count) {
         SetStatus("Finish or stop the current run before saving a handoff."); return;
     }
-    if (!SHERCLAWK_API_KEY[0] || TEGetTextInto(gModelTE, gRunModel, sizeof(gRunModel)) < 0 || !*gRunModel) {
+    if (!gPrefs.api_key[0] || TEGetTextInto(gModelTE, gRunModel, sizeof(gRunModel)) < 0 || !*gRunModel) {
         SetStatus("A model and API key are needed for a handoff."); return;
     }
     for (i = 0; gRunModel[i]; i++) if ((unsigned char)gRunModel[i] <= 32 || (unsigned char)gRunModel[i] >= 127) {
@@ -952,7 +1353,7 @@ static void StartHandoff(void)
     if (sherclawk_attribution(SHERCLAWK_APP_URL, attribution, sizeof(attribution)) < 0) {
         SetStatus("Attribution URL is too long; conversation retained."); return;
     }
-    length = http_build_post_with_headers("openrouter.ai", "/api/v1/chat/completions", SHERCLAWK_API_KEY,
+    length = http_build_post_with_headers("openrouter.ai", "/api/v1/chat/completions", gPrefs.api_key,
         attribution, gJSON, (size_t)length, gNet.request, sizeof(gNet.request));
     if (length < 0) { SetStatus("Could not prepare handoff request; conversation retained."); return; }
     gHandoffPath[0] = 0; gHandoff = 1;
@@ -983,12 +1384,23 @@ static void AbortChat(const char *reason)
         LogAbort("Handoff stopped; conversation retained. Reason", reason);
         return;
     }
+    if (gSending == 6) {
+        /* Do not tear the TLS context down mid-connect: classic OT can fault
+         * when an async connect is outstanding. Keep the exchange draining and
+         * close it from the loop once network_step reaches a terminal state. */
+        gLookupDrain = 1; gStartTicks = (uint32_t)TickCount();
+        gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
+        SetStatus("Model context lookup stopped. Send again shortly.");
+        LogAbort("Model context lookup stopped. Reason", reason);
+        return;
+    }
     if (gSending == 4 || gSending == 5) {
         char error[256];
+        const AgentCall *call = gAgent.next < gAgent.count ? &gAgent.calls[gAgent.next] : NULL;
         if(gSending==5) run_application_step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), 1);
         else build_project_step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), 1);
         agent_tool_result(&gAgent, gToolResult, error, sizeof(error));
-        ShowMessage(gSending==5 ? "run_application" : "build_project", gToolResult);
+        ShowToolResult(call, gSending==5 ? "run_application" : "build_project", gToolResult);
     }
     if (gNet.ctx || gOTOpen) CloseChatContext();
     LogRoundTiming("abort");
@@ -1004,8 +1416,9 @@ static void PauseRunAtLimit(void)
 {
     char reason[256];
     snprintf(reason, sizeof(reason),
-        "Run paused after %d model rounds and %d tools. History is %lu%% full. Send Continue to resume.",
-        gAgent.rounds, gAgent.tool_count,
+        "Run paused after %d model rounds and %d tools (configured limits: %d rounds, %d tools). "
+        "History is %lu%% full. Send Continue to resume.",
+        gAgent.rounds, gAgent.tool_count, gPrefs.max_rounds, gPrefs.max_tools,
         (unsigned long)(gAgent.used * 100 / AGENT_HISTORY_CAP));
     AbortChat(reason);
 }
@@ -1024,7 +1437,7 @@ static int StartModelRequest(void)
 {
     int length;
     char attribution[256];
-    if (gAgent.rounds >= AGENT_TURN_MAX || gAgent.tool_count >= AGENT_TOOL_MAX) {
+    if (gAgent.rounds >= gPrefs.max_rounds || gAgent.tool_count >= gPrefs.max_tools) {
         PauseRunAtLimit(); return -1;
     }
     length = agent_request(&gAgent, gRunModel, gJSON, sizeof(gJSON));
@@ -1032,7 +1445,7 @@ static int StartModelRequest(void)
     if (sherclawk_attribution(SHERCLAWK_APP_URL, attribution, sizeof(attribution)) < 0) {
         AbortChat("Attribution URL is too long."); return -1;
     }
-    length = http_build_post_with_headers("openrouter.ai", "/api/v1/chat/completions", SHERCLAWK_API_KEY,
+    length = http_build_post_with_headers("openrouter.ai", "/api/v1/chat/completions", gPrefs.api_key,
         attribution, gJSON, (size_t)length, gNet.request, sizeof(gNet.request));
     if (length < 0) { AbortChat("Request or API key is too long or invalid."); return -1; }
     timing_round_begin(&gRoundTiming, gAgent.rounds + 1, (uint32_t)TickCount());
@@ -1043,12 +1456,83 @@ static int StartModelRequest(void)
     SetStatus("Connecting to OpenRouter (round %d)...", gAgent.rounds + 1);
     LogLine("Agent model request started."); return 0;
 }
+/* The session and agent state are touched only after the optional
+ * context-window lookup, so Stop during it keeps the typed prompt and leaves
+ * no session record. */
+static void SendBegin(void)
+{
+    char error[256];
+    gSending = 0;
+    if (!gSessionOpen && (gAgent.messages || SessionStart())) {
+        SetStatus("Session file unavailable. Check %s or start a new session.", tools_workspace()); return;
+    }
+    if (agent_begin(&gAgent, gPending, error, sizeof(error))) { SetStatus("%s", error); return; }
+    ShowMessage("You", gPending);
+    TESetText("", 0, gPromptTE); InvalRect(&gPromptRect);
+    SetSendEnabled(0); StartModelRequest();
+}
+static int ModelLookupAllowed(const char *model)
+{
+    size_t i;
+    if (!*model) return 0;
+    for (i = 0; model[i]; i++) {
+        unsigned char c = (unsigned char)model[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '.' || c == '_' || c == ':' ||
+              c == '/' || c == '-')) return 0;
+    }
+    return 1;
+}
+static void StartContextLookup(void)
+{
+    char path[CHAT_MODEL_CAP + 32];
+    int length;
+    if (snprintf(path, sizeof(path), "/api/v1/models/%s/endpoints", gRunModel) >= (int)sizeof(path)) { SendBegin(); return; }
+    length = http_build_get("openrouter.ai", path, gNet.request, sizeof(gNet.request));
+    if (length < 0) { SendBegin(); return; }
+    /* Remember the attempt before the network: at most one lookup per model
+     * per launch, whatever the outcome. */
+    strcpy(gModelInfoModel, gRunModel); gModelInfoLimit = -1; gModelInfoAttempted = 1;
+    InitOpenTransport(); gOTOpen = 1;
+    gStartTicks = (uint32_t)TickCount();
+    if (network_start(&gNet, gNet.request, (size_t)length) < 0) {
+        CloseChatContext(); SendBegin(); return;
+    }
+    gSending = 6;
+    SetSendEnabled(0);
+    SetStatus("Checking context window for %s...", gRunModel);
+}
+static void SendAdvance(void)
+{
+    if (!(gModelInfoAttempted && !strcmp(gModelInfoModel, gRunModel)) && ModelLookupAllowed(gRunModel)) {
+        StartContextLookup(); return;
+    }
+    SendBegin();
+}
+static void FinishContextLookup(int completed)
+{
+    long limit = -1;
+    if (completed && gNet.status == 200) limit = agent_context_limit(gNet.body, gNet.body_len);
+    if (limit > 0) gModelInfoLimit = limit;
+    if (gNet.ctx || gOTOpen) CloseChatContext();
+    {
+        char current[CHAT_MODEL_CAP];
+        if (TEGetTextInto(gModelTE, current, sizeof(current)) < 0 || strcmp(current, gRunModel)) {
+            gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
+            SetStatus("Model changed during the context lookup. Send again to continue.");
+            return;
+        }
+    }
+    gSending = 0;
+    SendAdvance();
+}
 static void SendChat(void)
 {
-    char prompt[CHAT_PROMPT_CAP], error[256];
+    char prompt[CHAT_PROMPT_CAP];
     size_t i;
     if (gSending) return;
-    if (!SHERCLAWK_API_KEY[0]) { SetStatus("No API key: set config.local.h and rebuild."); return; }
+    if (gLookupDrain) { SetStatus("The stopped lookup is still closing; send again in a moment."); return; }
+    if (!gPrefs.api_key[0]) { SetStatus("No API key: choose Preferences from the Edit menu."); return; }
     if (TEGetTextInto(gModelTE, gRunModel, sizeof(gRunModel)) < 0 ||
         TEGetTextInto(gPromptTE, prompt, sizeof(prompt)) < 0) { SetStatus("Model or message is too long."); return; }
     for (i = 0; gRunModel[i]; i++) if ((unsigned char)gRunModel[i] <= 32 || (unsigned char)gRunModel[i] >= 127) {
@@ -1057,38 +1541,48 @@ static void SendChat(void)
     for (i = 0; prompt[i] && (prompt[i] == ' ' || prompt[i] == '\r' || prompt[i] == '\t'); i++) {}
     if (!*gRunModel || !prompt[i]) { SetStatus("Enter a model and message first."); return; }
     if (text_to_utf8(prompt, strlen(prompt), gPending, sizeof(gPending)) < 0) { SetStatus("Could not convert message to UTF-8."); return; }
-    if (!gSessionOpen && (gAgent.messages || SessionStart())) {
-        SetStatus("Session file unavailable. Check %s or start a new session.", SHERCLAWK_WORKSPACE); return;
-    }
-    if (agent_begin(&gAgent, gPending, error, sizeof(error))) { SetStatus("%s", error); return; }
-    ShowMessage("You", gPending);
-    TESetText("", 0, gPromptTE); InvalRect(&gPromptRect);
-    SetSendEnabled(0); StartModelRequest();
+    SendAdvance();
 }
 static void DriveChatStep(void)
 {
     char error[256];
     int result;
     if (!gSending) return;
+    if (gSending == 6) {
+        int lookup;
+        if ((uint32_t)TickCount() - gStartTicks > 30UL * 60UL) { FinishContextLookup(0); return; }
+        lookup = network_step(&gNet);
+        if (lookup < 0) { FinishContextLookup(0); return; }
+        if (lookup == 0) {
+            MacTLS_State state = MacTLS_GetState(gNet.ctx);
+            if (state == kMacTLS_Handshaking) SetStatus("TLS handshake...");
+            else if (state == kMacTLS_Connected) SetStatus("Checking context window for %s...", gRunModel);
+            return;
+        }
+        FinishContextLookup(1);
+        return;
+    }
     if (gSending == 3) { StartModelRequest(); return; }
     if (gSending == 4 || gSending == 5) {
         int running=gSending==5;
+        const AgentCall *call = gAgent.next < gAgent.count ? &gAgent.calls[gAgent.next] : NULL;
         result = running ? run_application_step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), 0) : build_project_step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), 0);
         if (result == 2) return;
         gSending = 2;
         LogToolTiming(gAgent.next + 1, gAgent.calls[gAgent.next].name);
         if (agent_tool_result(&gAgent, gToolResult, error, sizeof(error))) { AbortChat(error); return; }
-        ShowMessage(running ? "run_application" : "build_project", gToolResult);
+        ShowToolResult(call, running ? "run_application" : "build_project", gToolResult);
         if (result) AbortChat(running ? "Launch outcome uncertain. Inspect the run journal; do not retry automatically." : "Build observation stopped. Inspect retained snapshot and logs before another build.");
         return;
     }
     if (gSending == 2) {
         AgentCall *call;
         if (gAgent.next == gAgent.count) { gSending = 3; return; }
-        if (gAgent.tool_count >= AGENT_TOOL_MAX) { PauseRunAtLimit(); return; }
+        if (gAgent.tool_count >= gPrefs.max_tools) { PauseRunAtLimit(); return; }
         call = &gAgent.calls[gAgent.next];
         gToolStart = (uint32_t)TickCount();
         SetStatus("Running %s (%d/%d)...", call->name, gAgent.next + 1, gAgent.count);
+        ToolEventsReset();
         {
             char id[800], name[400], started[1300];
             if (json_quote(call->id, id, sizeof(id)) < 0 || json_quote(call->name, name, sizeof(name)) < 0) {
@@ -1096,19 +1590,20 @@ static void DriveChatStep(void)
             }
             snprintf(started, sizeof(started), "{\"call_id\":%s,\"name\":%s}", id, name);
             if (Journal(NULL, "tool_started", started)) { AbortChat("Could not record tool start; no tool executed."); return; }
+            ToolEventsAppend("tool_started");
         }
         if (!strcmp(call->name, "build_project")) {
-            result = build_project_begin(call, gToolResult, sizeof(gToolResult), Journal, NULL, (uint32_t)TickCount());
+            result = build_project_begin(call, gToolResult, sizeof(gToolResult), ToolEventJournal, NULL, (uint32_t)TickCount());
             if (result == 2) { gSending = 4; SetStatus("Building snapshot; waiting for MacRelix worker..."); return; }
         } else if (!strcmp(call->name, "run_application")) {
-            result = run_application_begin(call, gToolResult, sizeof(gToolResult), Journal, NULL, (uint32_t)TickCount());
+            result = run_application_begin(call, gToolResult, sizeof(gToolResult), ToolEventJournal, NULL, (uint32_t)TickCount());
             if (result == 2) { gSending = 5; SetStatus("Verifying built application before launch..."); return; }
         } else if (!strcmp(call->name, "read_build_log")) {
             build_project_log(call, gToolResult, sizeof(gToolResult)); result = 0;
-        } else result = tools_execute_recorded(call, gToolResult, sizeof(gToolResult), Journal, NULL);
+        } else result = tools_execute_recorded(call, gToolResult, sizeof(gToolResult), ToolEventJournal, NULL);
         LogToolTiming(gAgent.next + 1, call->name);
         if (agent_tool_result(&gAgent, gToolResult, error, sizeof(error))) { AbortChat(error); return; }
-        ShowMessage(call->name, gToolResult);
+        ShowToolResult(call, call->name, gToolResult);
         if (result) AbortChat("Mutation stopped. Inspect the result and session recovery records; do not retry automatically.");
         return;
     }
@@ -1126,6 +1621,8 @@ static void DriveChatStep(void)
         if (agent_handoff_response(gNet.body, gNet.body_len, gNet.status, gHandoffSummary,
             sizeof(gHandoffSummary), error, sizeof(error))) { JournalModelError(error); AbortChat(error); return; }
         CloseChatContext();
+        /* The summary completion is provider-billed like any other round. */
+        agent_usage_absorb(&gAgent, gNet.body, gNet.body_len);
         LogRoundTiming("ok");
         if (CommitHandoff()) { AbortChat("Could not save/verify handoff and new journal. History was not cleared."); return; }
         gHandoff = 0; gSending = 0; SetSendEnabled(1); FocusSet(gPromptTE);
@@ -1149,30 +1646,49 @@ static void DriveChatStep(void)
         LogLine("Agent run completed.");
     }
 }
+/* A stopped context lookup keeps its exchange alive until network_step reaches
+ * a terminal state; closing it here avoids tearing OT down mid-connect. */
+static void DrainAbandonedLookup(void)
+{
+    int result;
+    if (!gLookupDrain) return;
+    if ((uint32_t)TickCount() - gStartTicks > 30UL * 60UL) {
+        CloseChatContext(); gLookupDrain = 0; return;
+    }
+    result = network_step(&gNet);
+    if (result != 0) { CloseChatContext(); gLookupDrain = 0; }
+}
 
 int main(void)
 {
     EventRecord event;
     InitGraf(&qd.thePort); InitFonts(); InitWindows(); InitMenus();
     TEInit(); InitDialogs(NULL); InitCursor(); MacTLS_Init();
+    PrefsLoad();
+    tools_set_workspace(gPrefs.workspace);
     UIInit();
     if (!gWindow || !gModelTE || !gPromptTE || !gResponseTE ||
         !gSendBtn || !gStopBtn || !gNewBtn || !gHandoffBtn || !gResponseScroll || !gScrollActionUPP) {
         UIDispose(); MacTLS_Shutdown(); return 1;
     }
     chat_reset(&gChat); agent_reset(&gAgent, Journal, NULL);
-    SetStatus("Ready. What shall we investigate?");
+    SetStatus(gPrefsUnreadable ? "Preferences unreadable; using compiled defaults."
+                               : "Ready. What shall we investigate?");
     LogOpen(); LogLine("Sherclawk session started.");
     if(selfbuild_init())SetStatus("Native executor unavailable; builds require the external worker.");
     while (!gQuit) {
         WaitNextEvent(everyEvent, &event, gSending ? 1 : 10, NULL);
         SetPort(gWindow); HandleEvent(&event);
         if (gSending) DriveChatStep();
+        DrainAbandonedLookup();
         selfbuild_drain((uint32_t)TickCount());
         UpdateHandoffControls();
         /* History changes during sends, tool results, New Chat and handoff.
          * Keep its indicator current even when the ordinary status is unchanged. */
         if (gDisplayedHistory != gAgent.used) InvalRect(&gHistoryRect);
+        if (gDisplayedCost != gAgent.cost_micros ||
+            gDisplayedTokens != (gAgent.context_seen ? gAgent.context_tokens : -1) ||
+            gDisplayedLimit != gModelInfoLimit) InvalRect(&gUsageRect);
     }
     if (gNet.ctx || gOTOpen) CloseChatContext();
     LogRoundTiming("abort");

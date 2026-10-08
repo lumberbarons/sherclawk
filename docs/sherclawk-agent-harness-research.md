@@ -159,7 +159,7 @@ Native Open Transport + embedded TLS + HTTP + provider adapter
 
 Use a request ID, session ID, tool-call ID, protocol version, length bounds, and explicit complete/error markers. If using a relay, keep provider credentials there and authenticate the connection. AgentBridge's mailbox is an optional transport idea; its native Toolbox techniques are the primary inspiration for this project. See sections 13–14.
 
-This workspace already documents a working OS 9 VM, Retro68 cross-compilation, fork-aware deployment, and QMP screenshot/input helpers. These are local setup reports, not independently retested by this research. The QMP route is useful for an emulator prototype but does not solve native input control on a physical Mac (`macos9-qemu.md` and `hello-world/README.md`, original workspace notes).
+This workspace already documents a working OS 9 VM, Retro68 cross-compilation, fork-aware deployment, and QMP screenshot/input helpers. These are local setup reports, not independently retested by this research. The QMP route is useful for an emulator prototype but does not solve native input control on a physical Mac ([VM setup notes](macos9-qemu.md) are vendored here; `hello-world/README.md` remains an original workspace note).
 
 ## 7. Supporting file-and-application tools
 

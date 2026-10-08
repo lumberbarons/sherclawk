@@ -11,7 +11,13 @@ against the stub headers in `tests/toolbox/`.
 tools/check.sh                # ASan/UBSan protocol, loop and File Manager fault suites
 tools/check-transport.sh      # TLS I/O against patched Certainly sources
 python3 tests/test_worker.py  # MacRelix worker protocol (host perl)
+tools/lint.sh                 # shellcheck, cppcheck and ruff (the CI lint gate)
 ```
+
+- `.github/workflows/ci.yml` runs `tools/check.sh`, `tools/check-transport.sh`,
+  `tests/test_worker.py` and `tools/lint.sh` on `ubuntu-24.04` for pushes to
+  main and every pull request; `tools/check.sh` therefore has to stay clean
+  under GCC as well as clang.
 
 - `tools/check.sh` is the main loop while editing; run it before claiming a
   change works. It regenerates `build/project-template.h` and compiles the

@@ -28,6 +28,18 @@ static ChatNetwork net;
 static Agent agent;
 static char body[CHAT_REQUEST_CAP], tool_result[AGENT_RESULT_CAP];
 static FILE *logfile;
+/* The guest printf has no %lld; render the 64-bit accumulator as digits. */
+static void micros_text(long long value, char *out, size_t cap)
+{
+    char digits[24];
+    size_t at = sizeof(digits), n;
+    unsigned long long v = (unsigned long long)value;
+    do { digits[--at] = (char)('0' + (int)(v % 10)); v /= 10; } while (v);
+    n = sizeof(digits) - at;
+    if (n >= cap) n = cap - 1;
+    memcpy(out, digits + sizeof(digits) - n, n);
+    out[n] = 0;
+}
 static void yield(void)
 {
 #ifdef SHERCLAWK_HOST
@@ -178,6 +190,11 @@ static int run_agent(void)
             attribution, body, (size_t)length, net.request, sizeof(net.request));
         if (exchange(length) < 0 || agent_response(&agent, net.body, net.body_len, net.status, error, sizeof(error))) {
             fprintf(logfile, "FAIL model %s\n", error); return 1;
+        }
+        {
+            char cost[24];
+            micros_text(agent.cost_micros, cost, sizeof(cost));
+            fprintf(logfile, "USAGE tokens=%ld cost_micros=%s\n", agent.context_tokens, cost);
         }
         while (agent.next < agent.count) {
             AgentCall *call = &agent.calls[agent.next];

@@ -90,6 +90,7 @@ static void terminal_check(const char *good,int artifact_ok)
     }
     assert(ready>=0);dir=files[ready].parent;
     for(i=0;i<64;i++)if(files[i].used && files[i].id==dir)break;
+    assert(i<64);  /* the fixture always records dir */
     strcpy(build_id,files[i].name);
     snprintf(terminal,sizeof(terminal),"protocol=1\nid=%s\noutcome=succeeded\nexit=0\nsignal=0\nwait_status=0\n",build_id);
     record_file(dir,"result",terminal);
@@ -99,7 +100,8 @@ static void terminal_check(const char *good,int artifact_ok)
     r=build_project_step(result,sizeof(result),500,0);
     for(int step=0;r==2 && step<100;step++)r=build_project_step(result,sizeof(result),501+step,0);
     if(build_result_failure) { assert(r==1 && strstr(result,"JOURNAL_AFTER_BUILD"));
-        for(int k=0;k<64;k++)assert(!files[k].used || strcmp(files[k].name,"launch.rec"));return; }
+        for(int k=0;k<64;k++)assert(!files[k].used || strcmp(files[k].name,"launch.rec"));
+        return; }
     assert(artifact_ok ? r==0 && strstr(result,"\"status\":\"ok\"") && strstr(result,"native:sample") : r==1 && strstr(result,"ARTIFACT_INVALID"));
 }
 

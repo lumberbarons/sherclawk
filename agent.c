@@ -6,6 +6,11 @@
 #include <stdio.h>
 #include <string.h>
 
+/* One 4096-token scratch (64 KiB) is shared by both response parsers and the
+ * usage/context extractors, which never nest while an outer parser still needs
+ * its token indices: agent_response absorbs only after its own use has ended. */
+static JsonToken tokens[4096];
+
 static const char policy[] =
     "You are Sherclawk, a native assistant running on classic Mac OS 9.2.2. "
     "Inspect files using the actual tools. search_text locates literal matches; follow its cursor to completion and read matches before editing. write_text creates new plain text files; "
@@ -193,7 +198,6 @@ static int null_token(const char *s, const JsonToken *t, int index)
 int agent_handoff_response(const char *body, size_t len, int status, char *summary,
                            size_t cap, char *error, size_t error_cap)
 {
-    static JsonToken tokens[4096];
     char finish[64], role[32];
     int choices, msg, calls;
     summary[0] = 0;
@@ -215,7 +219,6 @@ int agent_handoff_response(const char *body, size_t len, int status, char *summa
 }
 int agent_response(Agent *a, const char *body, size_t len, int status, char *error, size_t cap)
 {
-    static JsonToken tokens[4096];
     /* One assistant response cannot exceed the transport response bound;
      * its scratch buffer need not grow with total conversation history. */
     static char message[CHAT_RESPONSE_CAP + 1];
@@ -291,6 +294,8 @@ int agent_response(Agent *a, const char *body, size_t len, int status, char *err
     }
     memcpy(message, body + tokens[msg].start, length); message[length] = 0;
     if (record(a, "assistant", message)) { snprintf(error, cap, "Could not record response; no tools executed."); return -1; }
+    /* Totals move only for responses that were actually recorded. */
+    agent_usage_absorb(a, body, len);
     a->count = count; a->next = 0; a->rounds++;
     if (!count) a->active = 0;
     error[0] = 0; return 0;
@@ -320,4 +325,39 @@ int agent_stop(Agent *a, const char *reason)
         a->active = 0; return -1;
     }
     a->active = 0; return 0;
+}
+void agent_usage_absorb(Agent *a, const char *body, size_t len)
+{
+    long prompt_tokens;
+    long long micros;
+    int usage;
+    if (json_parse(body, len, tokens, 4096) < 1 || tokens[0].type != JSON_OBJECT) return;
+    usage = json_member(body, tokens, 0, "usage");
+    if (usage < 0 || tokens[usage].type != JSON_OBJECT) return;
+    if (!json_integer(body, tokens, json_member(body, tokens, usage, "prompt_tokens"), &prompt_tokens)) {
+        a->context_tokens = prompt_tokens;
+        a->context_seen = 1;
+    }
+    if (!json_decimal_micros(body, tokens, json_member(body, tokens, usage, "cost"), &micros)) {
+        if (a->cost_micros > AGENT_COST_MICROS_MAX - micros) a->cost_micros = AGENT_COST_MICROS_MAX;
+        else a->cost_micros += micros;
+        a->cost_seen = 1;
+    }
+}
+long agent_context_limit(const char *body, size_t len)
+{
+    long best = -1, value;
+    int data, endpoints, i;
+    if (json_parse(body, len, tokens, 4096) < 1 || tokens[0].type != JSON_OBJECT) return -1;
+    data = json_member(body, tokens, 0, "data");
+    if (data < 0 || tokens[data].type != JSON_OBJECT) return -1;
+    endpoints = json_member(body, tokens, data, "endpoints");
+    if (endpoints < 0 || tokens[endpoints].type != JSON_ARRAY) return -1;
+    for (i = endpoints + 1; i < tokens[endpoints].next; i = tokens[i].next) {
+        int field;
+        if (tokens[i].type != JSON_OBJECT) continue;
+        field = json_member(body, tokens, i, "context_length");
+        if (!json_integer(body, tokens, field, &value) && value > best) best = value;
+    }
+    return best;
 }

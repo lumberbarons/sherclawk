@@ -172,7 +172,8 @@ short ResError(void) { short e=res_error; res_error=0; return e; }
 short Count1Types(void)
 {
     int f=res_file(), r, k; short n=0;
-    if(f<0)return 0; res_error=0;
+    if(f<0)return 0;
+    res_error=0;
     for(r=0;r<16;r++) if(resources[r].used && resources[r].file==f) {
         for(k=0;k<r;k++) if(resources[k].used && resources[k].file==f && resources[k].type==resources[r].type) break;
         if(k==r)n++;
@@ -194,7 +195,8 @@ void Get1IndType(ResType *type, short index)
 short Count1Resources(ResType type)
 {
     int f=res_file(), r; short n=0;
-    if(f<0)return 0; res_error=0;
+    if(f<0)return 0;
+    res_error=0;
     for(r=0;r<16;r++)if(resources[r].used && resources[r].file==f && resources[r].type==type)n++;
     return n;
 }
@@ -455,7 +457,8 @@ static void edit_checks(void)
       for(d=0;d<6;d++) {
           int n=d==5 ? 7 : 31;
           memset(name,0xdb,(size_t)n);name[n]=0;k=add(parent,name,1);parent=files[k].id;
-          for(k=0;k<n;k++)strcat(path,"\xe2\x82\xac");strcat(path,":");
+          for(k=0;k<n;k++)strcat(path,"\xe2\x82\xac");
+          strcat(path,":");
       }
       files[i].parent=parent;strcat(path,"hello.c");assert(json_quote(path,quoted,sizeof(quoted))>0);
       snprintf(call.arguments,sizeof(call.arguments),"{\"path\":%s,\"expected_revision\":\"%s\",\"old_text\":\"one\",\"new_text\":\"two\"}",quoted,revision);
