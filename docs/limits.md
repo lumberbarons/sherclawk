@@ -21,7 +21,7 @@ in the headers today; the headers win if this drifts.
 | `CHAT_REQUEST_CAP` | 416 KiB | The whole request JSON (`gJSON`): history plus system prompt and tool schemas. |
 | `AGENT_TEXT_CAP` | 16 KiB | User prompt and handoff message buffers. Not reply text. |
 | `AGENT_RESULT_CAP` | 1536 | One tool result recorded into history. |
-| JSON token scratch | 4096 tokens | Tokens (not bytes) in any parsed response; `tokens[]` in `agent.c`. |
+| JSON token scratch | 4096 tokens | Tokens (not bytes) in any parsed response; `tokens[]` in `agent.c`. A catalog page over the cap parses to zero rows. |
 
 ### Display and time
 
@@ -29,7 +29,8 @@ in the headers today; the headers win if this drifts.
 |---|---|---|
 | `CHAT_TRANSCRIPT_CAP` | 30,001 bytes | The TextEdit transcript. Classic TextEdit stops at 32,000 bytes, so this cannot simply be raised. A reply too long for it is journaled but shown as a "see the session file" placeholder. |
 | Request deadline | 120 s | One HTTPS exchange (`StepModelExchange`). |
-| Context lookup deadline | 30 s | The model context-window query. |
+| Model catalog deadline | 30 s | The model context-window query and each Preferences catalog fetch (popular page, Find, OK validation). Dragging the dialog restarts it. |
+| Catalog page rows | 10 | `AGENT_MODEL_ROWS_MAX`; the popular, search and validation queries all send `limit=10`. |
 | Rounds / tool calls per run | 32 / 64 default, 1–128 in Preferences | A run pauses at either; sending a message resets them. |
 
 ### Memory partition (`hello.r`)
@@ -64,7 +65,15 @@ against it, along with dynamic TLS and UI allocations.
 6. **Round time ≈ `max_tokens` ÷ generation speed.** Measured about 107 tokens
    per second on a fast model (3072 tokens in 28.7 s), so 6000 tokens is about
    56 s against the 120 s deadline. A slower model shrinks that margin.
-7. **Every round re-uploads the full history.** History size is therefore also
+7. **A catalog page must fit `CHAT_RESPONSE_CAP` and the JSON token scratch.**
+   The Preferences chooser reads ten rows per fetch through the same
+   network buffers and parser as a model reply. Raising the row count means
+   re-checking both limits. An empty popular page is treated as a failed
+   fetch and is not cached; an empty search or validation page is the
+   catalog's "no match". The 30-second deadline is shared with the
+   context lookup, and a timed-out fetch drains before it closes, in the dialog
+   or (after Cancel) in the main loop.
+8. **Every round re-uploads the full history.** History size is therefore also
    per-round upload time, and bigger history only helps up to the model's own
    context window (the Context line in the status area).
 

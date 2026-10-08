@@ -127,6 +127,7 @@ static uint32_t gStartTicks;
 static RoundTiming gRoundTiming;
 static uint32_t gToolStart;
 static void FocusSet(TEHandle te);
+static void DrawChrome(void);
 static void SendChat(void);
 static void AbortChat(const char *reason);
 static void NewChat(void);
@@ -466,7 +467,7 @@ static void LogClose(void)
 /* ── Preferences dialog (DLOG/DITL 128) ───────────────────────────── */
 
 /* DITL items: OK/Cancel, the editable model row with Find, the results list
- * (a user item drawn by hand), the hint line, the Effort popup placeholder,
+ * (a user item drawn by hand), the hint line, the Effort popup rectangle,
  * then the label/edit pairs, the debug checkbox and the file hint. The
  * numbers match the DITL in hello.r. */
 enum {
@@ -486,8 +487,11 @@ enum {
     kPrefsDebugItem     = 18
 };
 
-/* The effort menu is built at runtime; the popup CDEF finds a menu by its ID
- * in the menu list (Tech Note TB42), so the popup's refCon is this ID. */
+/* The effort menu is built at runtime. The Appearance popup button takes the
+ * same NewControl overloading as the System 7 popup: the minimum is the menu
+ * ID, the value the chosen item and the maximum the title width
+ * (ControlDefinitions.h, "POPUP BUTTON"). The CDEF finds the menu by ID in the
+ * menu list, so it is inserted before the control exists. */
 enum {
     kPrefsEffortMenuID = 1001,
     kPrefsFetchNone = 0,   /* no exchange in flight */
@@ -507,7 +511,8 @@ enum {
 typedef struct {
     DialogPtr     dlg;
     ControlHandle popup;             /* Appearance popup; NULL when it failed */
-    MenuHandle    effort;            /* runtime menu named by the popup refCon */
+    MenuHandle    effort;            /* runtime menu the popup's minimum names */
+    int           effort_shown;      /* popup lists confirmed_info's efforts */
     Rect          results;           /* results userItem rectangle */
     AgentModelRow rows[AGENT_MODEL_ROWS_MAX];
     int           count;
@@ -571,6 +576,42 @@ static void PrefsProblem(DialogPtr dlg, const char *message)
     SetPort(dlg);
 }
 
+/* Redraw the main window when its update event arrives while the dialog is up. */
+static void UpdateMainWindow(void)
+{
+    if (!gWindow) return;
+    SetPort(gWindow);
+    BeginUpdate(gWindow);
+    EraseRect(&gWindow->portRect);
+    DrawChrome();
+    EndUpdate(gWindow);
+}
+
+/* Flash a dialog button for the few ticks a key press takes to "click" it. */
+static void PrefsFlashButton(DialogPtr dlg, short item)
+{
+    ControlHandle button = (ControlHandle)PrefsItem(dlg, item);
+    uint32_t start = (uint32_t)TickCount();
+    HiliteControl(button, kControlButtonPart);
+    while ((uint32_t)TickCount() - start < 8) { }
+    HiliteControl(button, 0);
+}
+
+/* DialogSelect does not apply the default and cancel items the way
+ * ModalDialog's filter did: Return and Enter press OK, Escape and Command-.
+ * press Cancel. Returns the item pressed, or 0 for any other event. */
+static short PrefsKeyItem(DialogPtr dlg, const EventRecord *event)
+{
+    char c;
+    short item = 0;
+    if (event->what != keyDown && event->what != autoKey) return 0;
+    c = (char)(event->message & charCodeMask);
+    if (!(event->modifiers & cmdKey) && (c == '\r' || c == 3)) item = kPrefsOKItem;
+    else if (c == 27 || ((event->modifiers & cmdKey) && c == '.')) item = kPrefsCancelItem;
+    if (item && event->what == keyDown) PrefsFlashButton(dlg, item);
+    return item;
+}
+
 /* Update the hint line in place; the invalidation is what redraws it. */
 static void PrefsHint(PrefsDialog *d, const char *text)
 {
@@ -587,12 +628,12 @@ static void PrefsHint(PrefsDialog *d, const char *text)
 static void PrefsEffortShow(PrefsDialog *d, const AgentModelInfo *info)
 {
     int i, choose = 1;
+    d->effort_shown = info != NULL;
     if (!d->popup || !d->effort) return;
     while (CountMItems(d->effort) > 0) DeleteMenuItem(d->effort, CountMItems(d->effort));
     if (!info || info->effort_count == 0) {
         AppendMenu(d->effort, (ConstStr255Param)"\p(none)");
         HiliteControl(d->popup, 255);
-        SetControlMaximum(d->popup, 1);
         SetControlValue(d->popup, 1);
         Draw1Control(d->popup);
         return;
@@ -608,7 +649,6 @@ static void PrefsEffortShow(PrefsDialog *d, const AgentModelInfo *info)
             break;
         }
     HiliteControl(d->popup, 0);
-    SetControlMaximum(d->popup, (short)info->effort_count);
     SetControlValue(d->popup, (short)choose);
     Draw1Control(d->popup);
 }
@@ -694,7 +734,7 @@ static int PrefsFetchStart(PrefsDialog *d, int kind, const char *query)
     else length = agent_model_query(path, sizeof(path), query);
     if (length < 0) { PrefsHint(d, "That model name is too long for a catalog search."); return -1; }
     length = http_build_get("openrouter.ai", path, gNet.request, sizeof(gNet.request));
-    if (length < 0) { PrefsHint(d, "The catalog request does not fit the network buffer."); return -1; }
+    if (length < 0) { PrefsHint(d, "The catalog request is too large."); return -1; }
     EnsureOpenTransport();
     gStartTicks = (uint32_t)TickCount();
     if (network_start(&gNet, gNet.request, (size_t)length) < 0) {
@@ -714,8 +754,8 @@ static void PrefsFetchFailed(PrefsDialog *d, int timed_out)
 {
     d->fetch = kPrefsFetchNone;
     d->draining = 0;
-    PrefsHint(d, timed_out ? "The catalog fetch timed out. Typed text is unchanged; try Find again."
-                           : "Could not load the model catalog. Typed text is unchanged; try Find again.");
+    PrefsHint(d, timed_out ? "The catalog fetch timed out. Try Find again."
+                           : "Could not load the catalog. Try Find again.");
 }
 
 /* A completed exchange: the page replaces the rows. Validate confirms only an
@@ -725,15 +765,21 @@ static void PrefsFetchComplete(PrefsDialog *d)
 {
     char text[CHAT_MODEL_CAP], hint[128];
     int kind = d->fetch, at;
+    int count = agent_model_page(gNet.body, gNet.body_len, d->rows, kPrefsRowsMax);
+    /* An empty popular page is a failure, not a list to cache for the launch:
+     * a malformed or oversized page parses to zero rows. A search or validate
+     * page with no rows is the catalog's answer for a typo. */
+    if (count == 0 && kind == kPrefsFetchPopular) { PrefsFetchFailed(d, 0); return; }
     d->fetch = kPrefsFetchNone;
-    d->count = agent_model_page(gNet.body, gNet.body_len, d->rows, kPrefsRowsMax);
+    d->count = count;
     d->selected = -1;
     GetPrefsText(d->dlg, kPrefsModelItem, text, sizeof(text));
     strcpy(d->last_text, text);
-    /* A hand-typed filter also applies to what just arrived (the Find query is
-     * in the box); validate always lists its candidates unfiltered. */
+    /* Text typed while the popular page loaded filters it. Search and validate
+     * pages were already matched by the server, so they list unfiltered and the
+     * hint's count is what the user sees. */
     d->filter[0] = 0;
-    if (kind != kPrefsFetchValidate && d->edited) strcpy(d->filter, text);
+    if (kind == kPrefsFetchPopular && d->edited) strcpy(d->filter, text);
     if (kind == kPrefsFetchValidate) {
         at = agent_model_row_find(d->rows, d->count, text);
         if (at >= 0) {
@@ -742,7 +788,7 @@ static void PrefsFetchComplete(PrefsDialog *d)
             strcpy(d->confirmed_id, d->rows[at].id);
             PrefsEffortShow(d, &d->confirmed_info);
             PrefsHint(d, "Model confirmed. Press OK again to save.");
-        } else PrefsHint(d, "No exact match. Pick a candidate below, or press Find.");
+        } else PrefsHint(d, "No exact match. Pick a candidate or press Find.");
     } else if (kind == kPrefsFetchPopular) {
         memcpy(gPopularRows, d->rows, (size_t)d->count * sizeof(AgentModelRow));
         gPopularCount = d->count;
@@ -754,9 +800,9 @@ static void PrefsFetchComplete(PrefsDialog *d)
             strcpy(d->confirmed_id, d->rows[at].id);
             PrefsEffortShow(d, &d->confirmed_info);
         }
-        PrefsHint(d, "Popular models loaded. Type to filter, or press Find.");
+        PrefsHint(d, "Popular models loaded. Type to filter or Find.");
     } else {
-        snprintf(hint, sizeof(hint), "%d match%s. Click one to pick, or press Find again.",
+        snprintf(hint, sizeof(hint), "%d match%s. Click a row to pick it.",
                  d->count, d->count == 1 ? "" : "es");
         PrefsHint(d, hint);
     }
@@ -788,6 +834,13 @@ static void PrefsFetchStep(PrefsDialog *d)
     PrefsFetchComplete(d);
 }
 
+/* DragWindow and TrackControl block until the mouse is released and no network
+ * step runs meanwhile, so the wait does not count against the deadline. */
+static void PrefsFetchResume(PrefsDialog *d)
+{
+    if (d->fetch || d->draining) d->fetch_start = (uint32_t)TickCount();
+}
+
 /* Find: fetch the matches for the typed text, or show the popular page when
  * the box is empty and nothing has been fetched yet. */
 static void PrefsFind(PrefsDialog *d)
@@ -799,7 +852,7 @@ static void PrefsFind(PrefsDialog *d)
     if (!text[0]) {
         d->filter[0] = 0;
         if (d->count) {
-            PrefsHint(d, "Type to filter the list, or type a model ID and press Find.");
+            PrefsHint(d, "Type to filter, or enter a model ID and press Find.");
             PrefsDrawRows(d);
         } else PrefsFetchStart(d, kPrefsFetchPopular, NULL);
         return;
@@ -830,15 +883,16 @@ static void ShowPreferences(void)
     SetPort(dlg);
 
     /* The Effort popup is created here because the DITL carries only its
-     * rectangle (item 9). The CDEF finds the menu by ID in the menu list, so
-     * insert it before NewControl (Tech Note TB42). */
+     * rectangle (item 9). Insert its menu before NewControl so the CDEF finds
+     * it by the ID passed as the control's minimum. */
     GetDialogItem(dlg, kPrefsEffortItem, &type, &item_handle, &popup_rect);
     GetDialogItem(dlg, kPrefsResultsItem, &type, &item_handle, &d->results);
     effort = NewMenu(kPrefsEffortMenuID, (ConstStr255Param)"\p");
     if (effort) {
         InsertMenu(effort, hierMenu);
-        popup = NewControl(dlg, &popup_rect, (ConstStr255Param)"\p", true, 1, 1, 1,
-                           kControlPopupButtonProc, kPrefsEffortMenuID);
+        popup = NewControl(dlg, &popup_rect, (ConstStr255Param)"\p", true, 1,
+                           kPrefsEffortMenuID, 0,
+                           kControlPopupButtonProc + kControlPopupFixedWidthVariant, 0);
     }
     d->effort = effort;
     d->popup = popup;
@@ -870,7 +924,7 @@ static void ShowPreferences(void)
             strcpy(d->confirmed_id, d->rows[i].id);
             PrefsEffortShow(d, &d->confirmed_info);
         }
-        PrefsHint(d, "Type to filter, or press Find to search the catalog.");
+        PrefsHint(d, "Type to filter, or press Find to search.");
         PrefsDrawRows(d);
     } else if (PrefsFetchStart(d, kPrefsFetchPopular, NULL) == 0) {
         PrefsDrawRows(d);
@@ -879,44 +933,61 @@ static void ShowPreferences(void)
     while (!done) {
         EventRecord event;
         int busy = d->fetch || d->draining;
+        int hit = 0;
         WaitNextEvent(everyEvent, &event, busy ? 1 : 10, NULL);
         SetPort(dlg);
 
-        if (event.what == updateEvt && (WindowPtr)event.message == dlg) {
-            BeginUpdate(dlg);
-            DrawDialog(dlg);
-            PrefsDrawRows(d);
-            if (d->popup) Draw1Control(d->popup);
-            EndUpdate(dlg);
-            continue;
-        }
-        if (event.what == kHighLevelEvent) { AEProcessAppleEvent(&event); continue; }
-        if (event.what == mouseDown) {
-            WindowPtr which = NULL;
-            short part = FindWindow(event.where, &which);
-            if (which == dlg && part == inDrag) {
-                /* The dialog is movable; drag its title bar ourselves. */
-                Rect screen = (*GetGrayRgn())->rgnBBox;
-                DragWindow(dlg, event.where, &screen);
-                SetPort(dlg);
-                continue;
+        /* Every branch falls through to the network step below: a pass that
+         * only dragged the window or answered an update must still advance
+         * the fetch. */
+        do {
+            if (event.what == updateEvt) {
+                if ((WindowPtr)event.message == dlg) {
+                    BeginUpdate(dlg);
+                    DrawDialog(dlg);
+                    PrefsDrawRows(d);
+                    if (d->popup) Draw1Control(d->popup);
+                    EndUpdate(dlg);
+                } else if ((WindowPtr)event.message == gWindow) {
+                    UpdateMainWindow();
+                    SetPort(dlg);
+                }
+                break;
             }
-            if (which == dlg && part == inContent && d->popup) {
-                /* The popup is not a DITL item, so DialogSelect never sees it. */
-                Point local = event.where;
-                ControlHandle ctl = NULL;
-                GlobalToLocal(&local);
-                if (FindControl(local, dlg, &ctl) && ctl == d->popup) {
-                    TrackControl(d->popup, local, NULL);
-                    Draw1Control(d->popup);
-                    continue;
+            if (event.what == kHighLevelEvent) { AEProcessAppleEvent(&event); break; }
+            if (event.what == mouseDown) {
+                WindowPtr which = NULL;
+                short part = FindWindow(event.where, &which);
+                if (which == dlg && part == inDrag) {
+                    /* The dialog is movable; drag its title bar ourselves. */
+                    Rect screen = (*GetGrayRgn())->rgnBBox;
+                    DragWindow(dlg, event.where, &screen);
+                    SetPort(dlg);
+                    PrefsFetchResume(d);
+                    break;
+                }
+                if (which == dlg && part == inContent && d->popup) {
+                    /* The popup is not a DITL item, so DialogSelect never sees it. */
+                    Point local = event.where;
+                    ControlHandle ctl = NULL;
+                    GlobalToLocal(&local);
+                    if (FindControl(local, dlg, &ctl) && ctl == d->popup) {
+                        TrackControl(d->popup, local, NULL);
+                        Draw1Control(d->popup);
+                        PrefsFetchResume(d);
+                        break;
+                    }
                 }
             }
-        }
-        if (DialogSelect(&event, &dlg, &item)) {
+            item = PrefsKeyItem(dlg, &event);
+            if (item) hit = event.what == keyDown;   /* a held key does not repeat the press */
+            else hit = DialogSelect(&event, &dlg, &item);
+            if (!hit) break;
             if (item == kPrefsCancelItem) {
                 /* Hand an in-flight exchange to the main loop's drain path:
-                 * classic OT can fault when a connect is torn down mid-flight. */
+                 * classic OT can fault when a connect is torn down mid-flight.
+                 * The main loop owns the exchange from here, so this pass must
+                 * not step it again. */
                 if (d->fetch || d->draining) {
                     gLookupDrain = 1;
                     gStartTicks = (uint32_t)TickCount();
@@ -937,8 +1008,9 @@ static void ShowPreferences(void)
                 Draw1Control(ctl);
             } else if (item == kPrefsOKItem) {
                 if (d->fetch || d->draining) {
-                    PrefsHint(d, "Still checking the catalog; press OK again in a moment.");
+                    PrefsHint(d, "Still checking; press OK again in a moment.");
                 } else {
+                    int confirmed;
                     GetPrefsText(dlg, kPrefsModelItem, model, sizeof(model));
                     GetPrefsText(dlg, kPrefsKeyItem, key, sizeof(key));
                     GetPrefsText(dlg, kPrefsWorkspaceItem, workspace, sizeof(workspace));
@@ -946,6 +1018,7 @@ static void ShowPreferences(void)
                     GetPrefsText(dlg, kPrefsToolsItem, tools_text, sizeof(tools_text));
                     rounds = prefs_limit_value(rounds_text);
                     tools = prefs_limit_value(tools_text);
+                    confirmed = d->confirmed_id[0] && !strcmp(d->confirmed_id, model);
                     if (!prefs_model_ok(model)) {
                         PrefsProblem(dlg, "Enter a model ID: printable characters, no spaces.");
                         SelectDialogItemText(dlg, kPrefsModelItem, 0, 32767);
@@ -961,9 +1034,12 @@ static void ShowPreferences(void)
                     } else if (tools < 0) {
                         PrefsProblem(dlg, "Max tool calls must be a number from 1 to 128.");
                         SelectDialogItemText(dlg, kPrefsToolsItem, 0, 32767);
-                    } else if (!(d->confirmed_id[0] && !strcmp(d->confirmed_id, model))) {
-                        /* An unresolved id never reaches the preferences file:
-                         * check the catalog and require an exact row first. */
+                    } else if (!confirmed && strcmp(model, gPrefs.model)) {
+                        /* A changed id never reaches the preferences file
+                         * unresolved: check the catalog and require an exact
+                         * row first. The saved id is already trusted, so the
+                         * other fields stay editable while the catalog is
+                         * unreachable. */
                         PrefsFetchStart(d, kPrefsFetchValidate, model);
                     } else {
                         candidate = gPrefs;
@@ -978,18 +1054,21 @@ static void ShowPreferences(void)
                         } else {
                             gPrefs = candidate;
                             tools_set_workspace(gPrefs.workspace);
-                            /* The confirmed row is this model's context source
-                             * until a send-time lookup replaces it. */
-                            gModelInfo = d->confirmed_info;
-                            strcpy(gModelInfoModel, gPrefs.model);
-                            gModelInfoAttempted = 1;
+                            if (confirmed) {
+                                /* The confirmed row is this model's context
+                                 * source until a send-time lookup replaces it. */
+                                gModelInfo = d->confirmed_info;
+                                strcpy(gModelInfoModel, gPrefs.model);
+                                gModelInfoAttempted = 1;
+                            }
                             saved = 1;
                             done = 1;
                         }
                     }
                 }
             }
-        }
+        } while (0);
+        if (done) break;
         /* Typing filters the fetched rows locally; programmatic sets keep
          * last_text in sync so only hand edits land here. */
         GetPrefsText(dlg, kPrefsModelItem, model, sizeof(model));
@@ -997,6 +1076,11 @@ static void ShowPreferences(void)
             strcpy(d->last_text, model);
             strcpy(d->filter, model);
             d->edited = 1;
+            /* The popup describes the confirmed row only while the text
+             * still names it. */
+            if (d->confirmed_id[0] && !strcmp(model, d->confirmed_id)) {
+                if (!d->effort_shown) PrefsEffortShow(d, &d->confirmed_info);
+            } else if (d->effort_shown) PrefsEffortShow(d, NULL);
             PrefsDrawRows(d);
         }
         if (d->fetch || d->draining) PrefsFetchStep(d);
@@ -1445,13 +1529,7 @@ static void HandleEvent(const EventRecord *event)
     switch (event->what) {
     case kHighLevelEvent: AEProcessAppleEvent(event); break;
     case updateEvt:
-        if ((WindowPtr)event->message == gWindow) {
-            SetPort(gWindow);
-            BeginUpdate(gWindow);
-            EraseRect(&gWindow->portRect);
-            DrawChrome();
-            EndUpdate(gWindow);
-        }
+        if ((WindowPtr)event->message == gWindow) UpdateMainWindow();
         break;
 
     case mouseDown: {
