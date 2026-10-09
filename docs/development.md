@@ -64,7 +64,6 @@ Certainly clone above:
 ```bash
 tools/check.sh
 tools/check-transport.sh
-python3 tests/test_worker.py
 tools/lint.sh
 ```
 
@@ -127,8 +126,7 @@ diagnostic built as its own CMake target; launch it in the guest and read
 | `SherclawkProbe` (`tools/probe.c`) | Real model, tool and follow-up conversation; host variant via `tools/build-host-probe.sh` |
 | `SherclawkWriteCheck`, `SherclawkEditCheck`, `SherclawkSearchCheck`, `SherclawkInspectCheck` | The matching tool executors against the File Manager |
 | `SherclawkProjectCheck` | `create_project` publication, bytes and metadata |
-| `SherclawkBuildCheck`, `SherclawkRunCheck`, `SherclawkSelfBuildCheck`, `SherclawkSelfBuildStopCheck` | `build_project` / `run_application` through the worker or native executor (`tools/build-check.c`) |
-| `SherclawkJobCheck` | Native job publication and polling against the MacRelix worker |
+| `SherclawkBuildCheck`, `SherclawkRunCheck`, `SherclawkSelfBuildCheck`, `SherclawkSelfBuildStopCheck` | `build_project` / `run_application` through the native executor (`tools/build-check.c`) |
 | `SherclawkToolServerCheck`, `SherclawkNativeBuildCheck`, `SherclawkNativeBuildErrorCheck` | ToolServer channel and fixed native build, described below |
 | `SherclawkHandoffCheck` | Save Handoff persistence and seeding |
 | `SherclawkScrollCheck` | Toolbox scrollbar behavior |
@@ -138,8 +136,7 @@ by `tools/check.sh`; `tools/lint.sh` adds shellcheck, cppcheck and ruff for the
 same sources, and `.github/workflows/ci.yml` runs those checks on `ubuntu-24.04`
 for pushes to main and pull requests. Python helpers: `tools/make-art.py`
 (icon and window art), `tools/netatalk_meta.py` (fork-aware publication),
-`tools/embed-project-template.py` and `tools/materialize-native-template.py`
-(starter template), `tools/publish-worker-job.py` (diagnostic job producer),
+`tools/embed-project-template.py` (starter template),
 and `tools/guest-input.py`, `tools/qmpdrive.py` and `tools/utm_qmp.py`
 (drive the UTM guest over QMP).
 
@@ -150,8 +147,6 @@ APP=SherclawkProjectCheck tools/deploy-to-share.sh
 # Launch in OS 9; inspect Retro68:SherclawkProjectCheck.log.
 APP=SherclawkRunCheck tools/deploy-to-share.sh
 # Launch in OS 9; inspect Retro68:SherclawkRunCheck.log.
-APP=SherclawkJobCheck tools/deploy-to-share.sh
-# See worker/README.md for the guest native producer/poller diagnostic.
 ./build.sh SherclawkProbe_APPL
 APP=SherclawkProbe tools/deploy-to-share.sh
 # Launch SherclawkProbe in OS 9; it logs, then quits.
@@ -187,15 +182,14 @@ a unique fixture folder; its log includes flushed mutation recovery records.
 ### ToolServer diagnostic
 
 `SherclawkToolServerCheck` is a standalone asynchronous Apple-event spike.
-When the build queue is unowned, the main app's `build_project` self-executes
-through this queued ToolServer channel; the MacRelix worker remains the
-exclusive-owner fallback. Publish the diagnostic with:
+The main app's `build_project` executes through this same queued ToolServer
+channel. Publish the diagnostic with:
 
 ```bash
 APP=SherclawkToolServerCheck tools/deploy-to-share.sh
 ```
 
-Run only with ToolServer idle and no worker build in progress. It finds a running
+Run only with ToolServer idle and no build in progress. It finds a running
 `MPSX` process or discovers and launches ToolServer through mounted volumes'
 desktop databases. It creates a fresh `Retro68:ToolServerCheck<ticks>:` fixture
 with native `TEXT`/CR Rez sources and writes
@@ -239,7 +233,7 @@ APP=SherclawkSelfBuildCheck tools/deploy-to-share.sh
 APP=SherclawkSelfBuildStopCheck tools/deploy-to-share.sh
 ```
 
-Run with MacRelix quit and the queue unowned. It checks independent and starter
+Run with the queue unowned and ToolServer idle. It checks independent and starter
 projects with multiple sources, explicit native ownership, resource structure,
 compiler failures, revision-bound edits and fresh build IDs. Evidence is recorded
 in `Retro68:SherclawkSelfBuildCheck.log`; acceptance is recorded in the
@@ -247,7 +241,7 @@ in `Retro68:SherclawkSelfBuildCheck.log`; acceptance is recorded in the
 
 ### Fixed native build diagnostic
 
-With MacRelix quit and ToolServer idle, publish and launch:
+With ToolServer idle, publish and launch:
 
 ```bash
 APP=SherclawkNativeBuildCheck tools/deploy-to-share.sh
@@ -269,8 +263,8 @@ application, success record or launch. Each attempt retains its own inputs.
 reply is drained without advancing. A 120-second command deadline or observed
 ToolServer disappearance likewise records an unknown outcome. Command-Q leaves
 the diagnostic. Never launch a partial artifact from a stopped attempt.
-Process scans refuse this fixture while the known MacRelix app is running;
-this is not queue locking or universal executor detection.
+The fixture logs every running process as evidence of the executor
+environment; this is not queue locking.
 
 Both success runs, compiler failure and Stop/late-reply behavior passed in OS 9.
 The repeated artifact payloads matched except for a PEF timestamp; full resource

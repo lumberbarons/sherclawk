@@ -9,7 +9,7 @@ OSErr PBHGetVInfoSync(HParamBlockRec *p) {(void)p;return fnfErr;}
 OSErr PBDTGetPath(DTPBRec *p) {(void)p;return fnfErr;}
 OSErr PBDTGetAPPLSync(DTPBRec *p) {(void)p;return fnfErr;}
 static void log_message(const char *s,...) {(void)s;}
-static const char good[]="{\"protocol\":2,\"toolchain\":\"mpw-ppc-v2\",\"sources\":[\"main.c\"],\"output\":\"sample\"}\r";
+
 static char runargs[128],handle[32];
 static const char *journal_fault;
 static int quit_records;
@@ -31,11 +31,21 @@ static int launch_again(void)
 }
 static void fresh(void)
 {
-    char bid[25];
+    int w,q,b,d,n,r;
     process_absent=1;application_tracking_begin();while(application_tracking_step()==2){}
     process_absent=process_error=identity_changed=launch_error=run_journal_error=0;
-    terminal_check(good,1);field("build_id",bid,sizeof(bid));
-    snprintf(runargs,sizeof(runargs),"{\"build_id\":\"%s\"}",bid);
+    /* Quit tests seal an artifact directly; build executor behavior belongs to
+     * the native build suites, not this real Apple-event transport fixture. */
+    reset();
+    w=add(10,"Worker01",1);q=add(files[w].id,"buildjobs",1);
+    b=add(files[q].id,"build-00000001-0001",1);d=add(files[b].id,"build",1);
+    n=add(files[d].id,"native",1);n=add(files[n].id,"sample",0);
+    strcpy(files[n].bytes,"Joy!peffpwpc............................");
+    files[n].size=(long)strlen(files[n].bytes);files[n].resource=100;files[n].info.fdType='APPL';
+    r=application_authorize_begin("build-00000001-0001","sample",build_journal,NULL,1);
+    while(r==2)r=run_application_step(result,sizeof(result),2,0);
+    assert(!r);
+    strcpy(runargs,"{\"build_id\":\"build-00000001-0001\"}");
     set_self();launch_psn=42;process_signature='SHTP';launcher_override=0;process_enumeration_error=0;journal_fault=NULL;ae_fail_stage=0;
     assert(!launch_again() && strstr(result,"\"quit_supported\":true"));
 }

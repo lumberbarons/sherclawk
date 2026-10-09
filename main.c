@@ -1844,7 +1844,7 @@ typedef struct {
 } PendingTool;
 static const PendingTool kPendingTools[] = {
     { RUN_BUILD, "build_project", build_project_begin, build_project_step,
-      "Building snapshot; waiting for MacRelix worker...",
+      "Building snapshot with MPW ToolServer...",
       "Build observation stopped. Inspect retained snapshot and logs before another build." },
     { RUN_LAUNCH, "run_application", run_application_begin, run_application_step,
       "Verifying built application before launch...",
@@ -2260,7 +2260,7 @@ int main(void)
     SetStatus(gPrefsUnreadable ? "Preferences unreadable; using compiled defaults."
                                : "Ready. What shall we investigate?");
     LogOpen(); LogLine("Sherclawk session started.");
-    if(selfbuild_init())SetStatus("Native executor unavailable; builds require the external worker.");
+    if(selfbuild_init())SetStatus("ToolServer unavailable; builds cannot start.");
     while (!gQuit) {
         WaitNextEvent(everyEvent, &event, RunBusy() ? 1 : 10, NULL);
         SetPort(gWindow); HandleEvent(&event);

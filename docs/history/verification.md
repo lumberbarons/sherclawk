@@ -101,7 +101,7 @@ and stdout/stderr continuation through the MacRelix worker. Command-period
 recorded an unknown outcome without changing the published job; a later explicit
 worker scan completed that original queued job. ASan/UBSan File Manager fault
 checks and the existing Python worker checks passed. Detailed evidence and
-limits are in [worker/VERIFIED.md](../../worker/VERIFIED.md). Model-facing build/run
+limits are in [macrelix-worker-verified.md](macrelix-worker-verified.md). Model-facing build/run
 tools, source revision binding and artifact authorization were planned at this
 point and have since been implemented.
 
@@ -138,7 +138,7 @@ snapshot paths in OS 9: the independent window displayed text from its second C
 file, and the starter displayed the native template window. This is visual
 launch evidence; automated run IDs/runtime observations were planned then and are covered by
 the native launch entry below. Retained
-build IDs and compiler results are recorded in [worker/VERIFIED.md](../../worker/VERIFIED.md).
+build IDs and compiler results are recorded in [macrelix-worker-verified.md](macrelix-worker-verified.md).
 The initial independent fixture exposed a missing `QDGlobals` definition; the
 linker failure was reported correctly and retained. Host checks include malformed
 descriptors, duplicate/unsupported settings, path metacharacters, source changes,
@@ -164,7 +164,7 @@ run IDs and native process observations. The main app's live
 `openai/gpt-6-luna` loop also launched a retained authorized build from a fresh
 session and received a final response, verifying persisted authority across app
 lifetimes. These are process observations, not functional smoke-test results.
-IDs and retained evidence are in [worker/VERIFIED.md](../../worker/VERIFIED.md).
+IDs and retained evidence are in [macrelix-worker-verified.md](macrelix-worker-verified.md).
 
 
 ToolServer spike verification, October 6, 2026: the standalone PowerPC diagnostic
