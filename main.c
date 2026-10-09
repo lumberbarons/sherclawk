@@ -1663,7 +1663,17 @@ static void StepModelExchange(void)
     ObserveCompletionTokens();
     if (agent_response(&gAgent, gNet.body, gNet.body_len, gNet.status, error, sizeof(error))) { JournalModelError(error); AbortChat(error); return; }
     FinishChatContext();
-    LogRoundTiming(gAgent.truncated ? "truncated" : "ok");
+    LogRoundTiming(gAgent.truncated ? "truncated" : gAgent.discarded ? "discarded" : "ok");
+    if (gAgent.discarded) {
+        char note[160];
+        gRun = RUN_NEXT_REQUEST;
+        snprintf(note, sizeof(note), "Reply discarded: %s. Nothing in it ran. Asking the model to retry.", gAgent.discarded);
+        ShowMessage("Notice", note);
+        SetStatus("Reply discarded; asking the model to retry smaller.");
+        snprintf(note, sizeof(note), "Reply discarded (%s); model told to retry.", gAgent.discarded);
+        LogLine(note);
+        return;
+    }
     if (gAgent.truncated) {
         gRun = RUN_NEXT_REQUEST;
         ShowMessage("Notice", "Reply cut off at the output token limit; nothing in it ran. Asking the model to retry.");
