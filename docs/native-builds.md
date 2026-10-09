@@ -163,9 +163,8 @@ Serve Build Queue toggle remain future work.
 
 ### ToolServer protocol
 
-The client in `toolserver.c` reimplements the protocol of the upstream `tlsrvr`
-tool without using its code (see
-[third-party notices](../THIRD-PARTY-NOTICES.md#reference-only-software)).
+The client in `toolserver.c` speaks the same Apple-event protocol as the
+upstream `tlsrvr` tool.
 
 - **Discovery.** Find a running process with signature `'MPSX'`; otherwise find
   the ToolServer `APPL` through the mounted volumes' desktop databases and call

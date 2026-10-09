@@ -48,14 +48,6 @@ Third-party material retains its own copyright and license as described below.
   license does not grant rights to them. The same applies to users' Mac OS
   install media, ROMs and guest disk images.
 
-## Reference-only software
-
-- **MacRelix and its `tlsrvr` ToolServer client** — AGPL-3.0. The upstream
-  client source was read as a reference to learn the Apple-event protocol. No
-  MacRelix or Metamage code is copied, linked or distributed; Sherclawk's own
-  client (`toolserver.c`) was written from that protocol description and
-  verified in the guest. Do not copy upstream source into this repository.
-
 ## Distributing compiled apps
 
 An app includes Certainly and BearSSL code even though the libraries' source
