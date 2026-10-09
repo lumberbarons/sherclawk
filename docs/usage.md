@@ -160,3 +160,10 @@ A recording failure stops execution. Journals are preserved across relaunches;
 automatic session reloading/recovery is not implemented yet. When display
 limits are reached, earlier visible text is replaced with a notice referring to
 the saved session; model history is not silently dropped.
+
+Graceful application Quit is available through `quit_application(run_id)` only
+for applications newly launched and journaled by this running
+Sherclawk instance. New Chat retains that authority; restarting Sherclawk loses
+it. Closing a chat or Sherclawk does not quit applications. Applications that
+require interaction may refuse a noninteractive Quit; a timeout is an uncertain
+outcome, and the agent must report it without retrying.

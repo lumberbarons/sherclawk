@@ -233,3 +233,33 @@ recovery or retry. File Manager sharing rules do not protect against direct
 POSIX writes on the AFP server, so do not modify the same source that way during
 an edit. Stop prevents subsequent calls; it does not interrupt or undo a small
 synchronous edit already executing.
+
+## Quit an owned application
+
+`quit_application({"run_id":"…"})` is guest-verified and advertised in
+`agent_tool_schemas` and `get_environment`. It accepts exactly one run ID from a launch Sherclawk confirmed and journaled
+in this process. No path, arbitrary PSN, force quit, or discard-changes option
+is accepted. New Chat keeps ownership; quitting Sherclawk loses it, and old
+journals never restore it. Chat close and app exit perform no automatic cleanup.
+
+Successful launch results include `quit_supported`, `quit_reason`, and
+`original_run_id`. A pre-existing application gets no new authority; when it
+was already owned, the original run ID remains its only close handle. A failed
+or incomplete snapshot, unavailable dispatcher, or full ownership registry
+preserves launch behavior with `quit_supported:false` and a reason.
+
+Before sending, Quit verifies the exact PSN, artifact FSSpec, launch date and
+launcher, rejecting Sherclawk, Finder and system processes. `ALREADY_EXITED`
+means absence was observed without sending. `QUIT_OBSERVED` means the owned
+process disappeared. A queued noninteractive Quit requests normal cleanup;
+a successful reply alone is insufficient. An explicit refusal while still
+present returns `error/QUIT_REFUSED` with `native_error`. Timeout after 30
+seconds, malformed replies, observation failures, ambiguous send errors and
+post-send journal failures return `uncertain`. Stop before send prevents Quit;
+after send it stops observation and cannot withdraw the request.
+
+`quit_intent` is journaled before sending, followed by `quit_submitted` and
+terminal `quit_observed`. A failed intent journal prevents sending. Once a
+send is attempted, its run ID cannot send another Quit, including after an
+uncertain outcome or refusal. Late and wrong-sender replies cannot advance
+later operations. A tool result of `uncertain` must be reported without retry.

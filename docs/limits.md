@@ -201,3 +201,15 @@ On 2026-10-08 the Docker-linked MCP diagnostic measured 339,968 bytes text,
 bytes because it does not yet link MCP. These measurements exclude dynamic
 TLS/UI allocations and stack; they do not prove the integrated 4 MiB minimum
 partition is sufficient.
+
+## Owned process Quit
+
+`application_process.c` retains 32 ownership entries and a 256-PSN prelaunch
+snapshot. Reclamation and enumeration each advance at most one entry per event
+loop turn. Failed, incomplete or full tracking preserves launch behavior while
+withholding new quit authority. If tracking consumes the remaining 60-second
+launch verification budget after fork verification completes, launch proceeds
+with `PROCESS_SNAPSHOT_DEADLINE` and no new authority. Quit observes once per turn for 30 seconds
+(1800 ticks). The shared answer dispatcher has two callback slots and allocates
+return IDs 101–32767 without reuse during Sherclawk's lifetime; exhaustion
+prevents another send. These bounds do not change the model argument/result caps.

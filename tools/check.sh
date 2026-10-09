@@ -91,7 +91,7 @@ fi
 "${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" -Wno-multichar \
     -fsanitize=address,undefined -fno-omit-frame-pointer \
     -I"$HERE/tests/toolbox" -I"$HERE" \
-    "$HERE/tests/test_build_project.c" "$HERE/selfbuild.c" "$HERE/build_project.c" "$HERE/run_application.c" "$HERE/jobs.c" \
+    "$HERE/tests/test_build_project.c" "$HERE/selfbuild.c" "$HERE/build_project.c" "$HERE/run_application.c" "$HERE/application_process.c" "$HERE/ae_dispatch.c" "$HERE/jobs.c" \
     "$HERE/tools.c" "$HERE/inspect.c" "$HERE/view_image.c" "$HERE/json.c" "$HERE/text.c" -o "$HERE/build/tests/test-build-project"
 "$HERE/build/tests/test-build-project"
 
@@ -99,9 +99,18 @@ fi
     -fsanitize=address,undefined -fno-omit-frame-pointer \
     -I"$HERE/tests/toolbox" -I"$HERE" \
     "$HERE/tests/test_selfbuild.c" "$HERE/selfbuild.c" "$HERE/build_project.c" \
-    "$HERE/run_application.c" "$HERE/jobs.c" "$HERE/tools.c" "$HERE/inspect.c" "$HERE/view_image.c" "$HERE/json.c" "$HERE/text.c" \
+    "$HERE/run_application.c" "$HERE/application_process.c" "$HERE/ae_dispatch.c" "$HERE/jobs.c" "$HERE/tools.c" "$HERE/inspect.c" "$HERE/view_image.c" "$HERE/json.c" "$HERE/text.c" \
     -o "$HERE/build/tests/test-selfbuild"
 "$HERE/build/tests/test-selfbuild"
+
+"${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" -Wno-multichar \
+    -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -I"$HERE/tests/toolbox" -I"$HERE" \
+    "$HERE/tests/test_quit_application.c" "$HERE/selfbuild.c" "$HERE/build_project.c" \
+    "$HERE/run_application.c" "$HERE/application_process.c" "$HERE/ae_dispatch.c" "$HERE/toolserver.c" \
+    "$HERE/jobs.c" "$HERE/tools.c" "$HERE/inspect.c" "$HERE/view_image.c" "$HERE/json.c" "$HERE/text.c" \
+    -o "$HERE/build/tests/test-quit-application"
+"$HERE/build/tests/test-quit-application"
 
 "${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" -Wno-multichar \
     -fsanitize=address,undefined -fno-omit-frame-pointer \
