@@ -404,6 +404,36 @@ static void field(const char *name, char *out, size_t cap)
     JsonToken tokens[128];assert(json_parse(result,strlen(result),tokens,128)>0);
     assert(json_string(result,tokens,json_member(result,tokens,0,name),out,cap)>=0);
 }
+static void page_checks(void)
+{
+    static char decoded[AGENT_RESULT_CAP], rebuilt[4097];
+    const unsigned char kinds[] = {'x', '"', '\\', '\t', '\r', 0xdb};
+    int k;
+    for (k=0;k<(int)sizeof(kinds);k++) {
+        long cursor=0; int pages=0, f;
+        reset();f=add(10,"hello.c",0);files[f].info.fdType='TEXT';
+        memset(files[f].bytes,kinds[k],4096);files[f].size=4096;
+        while(cursor<4096) {
+            JsonToken t[128];int n;long next;
+            strcpy(call.name,"read_text");
+            snprintf(call.arguments,sizeof(call.arguments),"{\"path\":\"hello.c\",\"start_byte\":%ld,\"max_lines\":30}",cursor);
+            tools_execute(&call,result,sizeof(result));
+            assert(strlen(result)<AGENT_RESULT_CAP && json_parse(result,strlen(result),t,128)>0);
+            n=json_string(result,t,json_member(result,t,0,"text"),decoded,sizeof(decoded));assert(n>0);
+            next=strtol(result+t[json_member(result,t,0,"next_byte")].start,NULL,10);
+            assert(next>cursor && next<=4096);
+            if(k==0) { assert(n==next-cursor);memcpy(rebuilt+cursor,decoded,(size_t)n); }
+            cursor=next;assert(++pages<200);
+        }
+        if(k==0) { assert(pages==4);assert(!memcmp(rebuilt,files[f].bytes,4096)); }
+    }
+    /* Page endings never divide CRLF, including when max_lines is reached. */
+    reset();k=add(10,"hello.c",0);files[k].info.fdType='TEXT';
+    strcpy(files[k].bytes,"a\r\nb\r\n");files[k].size=6;
+    strcpy(call.name,"read_text");strcpy(call.arguments,"{\"path\":\"hello.c\",\"max_lines\":1}");
+    tools_execute(&call,result,sizeof(result));field("text",decoded,sizeof(decoded));
+    assert(!strcmp(decoded,"a\n\n"));assert(strstr(result,"\"next_byte\":3"));
+}
 static int edit_setup(const char *source, const char *old, const char *replacement)
 {
     char revision[80], qo[AGENT_ARGUMENT_CAP], qn[AGENT_ARGUMENT_CAP];
@@ -1090,6 +1120,7 @@ int main(void)
     }
     folder_checks();
     puts("PASS native executor: create/read/collision, encoding, bounds, journal barriers, I/O faults, rename races and uncertain outcomes");
+    page_checks();
     edit_checks();
     inspect_checks();
     view_checks();

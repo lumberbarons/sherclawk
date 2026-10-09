@@ -267,3 +267,8 @@ terminal `quit_observed`. A failed intent journal prevents sending. Once a
 send is attempted, its run ID cannot send another Quit, including after an
 uncertain outcome or refusal. Late and wrong-sender replies cannot advance
 later operations. A tool result of `uncertain` must be reported without retry.
+
+Text read pages use the actual UTF-8/JSON envelope size, bounded to 1536 bytes,
+rather than a fixed raw-byte allowance. The default is 20 lines (maximum 30).
+Escaping and MacRoman conversion reduce page payloads. Use `next_byte` for
+partial lines; CRLF pairs are never divided between pages.
