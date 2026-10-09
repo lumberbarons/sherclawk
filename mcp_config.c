@@ -67,25 +67,25 @@ static int query_secrets(McpConfig *c)
     }
     return 0;
 }
-/* Reject duplicates even when escaped spellings differ, at every depth. */
-static int unique(const char *s, const JsonToken *t, int count)
+/* Case-insensitive match against the header names already rendered. */
+static int fold(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
+static int header_present(const char *headers, const char *name)
 {
-    int i, j, k;
-    char a[MCP_CONFIG_CAP + 1], b[MCP_CONFIG_CAP + 1];
-    for (i = 0; i < count; i++) if (t[i].type == JSON_OBJECT) {
-        for (j = i + 1; j < t[i].next; j = t[j + 1].next) {
-            if (json_string(s, t, j, a, sizeof(a)) < 0) return -1;
-            for (k = i + 1; k < j; k = t[k + 1].next) {
-                if (json_string(s, t, k, b, sizeof(b)) < 0 || !strcmp(a, b)) return -1;
-            }
-        }
+    size_t want = strlen(name);
+    for (; *headers; headers = strstr(headers, "\r\n") + 2) {
+        size_t i, n = strcspn(headers, ":");
+        if (n != want) continue;
+        for (i = 0; i < n && fold(headers[i]) == fold(name[i]); i++) {}
+        if (i == n) return 1;
     }
     return 0;
 }
-int mcp_config_parse(const char *s, size_t len, McpConfig *c, char *err, size_t cap)
+/* Large scratch lives here rather than on the small Toolbox stack; the
+ * wrapper below wipes it on every exit path. */
+static JsonToken t[2048];
+static char url[2048], key[MCP_CONFIG_CAP + 1], val[MCP_CONFIG_CAP + 1];
+static int parse(const char *s, size_t len, McpConfig *c, char *err, size_t cap)
 {
-    static JsonToken t[2048];
-    static char url[2048], key[MCP_CONFIG_CAP + 1], val[MCP_CONFIG_CAP + 1];
     int n, root, server, i, j;
     size_t used = 0, k;
     memset(c, 0, sizeof(*c));
@@ -93,7 +93,7 @@ int mcp_config_parse(const char *s, size_t len, McpConfig *c, char *err, size_t 
     if (len > MCP_CONFIG_CAP) return error(c, err, cap, "8 KiB limit");
     n = json_parse(s, len, t, 2048);
     if (n < 1 || t[0].type != JSON_OBJECT) return error(c, err, cap, "JSON object");
-    if (unique(s, t, n)) return error(c, err, cap, "duplicate key");
+    if (json_keys_unique(s, t, n)) return error(c, err, cap, "duplicate key");
     root = json_member(s, t, 0, "mcpServers");
     if (root != 2 || t[root].type != JSON_OBJECT || t[0].next != t[root].next)
         return error(c, err, cap, "mcpServers (sole root field)");
@@ -151,16 +151,10 @@ int mcp_config_parse(const char *s, size_t len, McpConfig *c, char *err, size_t 
     if (i >= 0) {
         if (t[i].type != JSON_OBJECT) return error(c, err, cap, "headers object");
         for (j = i + 1; j < t[i].next; j = t[j + 1].next) {
-            int wrote, prev;
-            char prior[MCP_CONFIG_CAP + 1];
+            int wrote;
             if (json_string(s, t, j, key, sizeof(key)) < 0 || !header_name(key) || owned_header(key))
                 return error(c, err, cap, "headers name (invalid or transport-owned)");
-            for (prev = i + 1; prev < j; prev = t[prev + 1].next) {
-                if (json_string(s, t, prev, prior, sizeof(prior)) < 0) return error(c, err, cap, "headers name");
-                /* lower_equal's second argument is lowercase. */
-                for (k = 0; prior[k]; k++) if (prior[k] >= 'A' && prior[k] <= 'Z') prior[k] += 32;
-                if (lower_equal(key, prior)) return error(c, err, cap, "duplicate header");
-            }
+            if (header_present(c->headers, key)) return error(c, err, cap, "duplicate header");
             if (json_string(s, t, j + 1, val, sizeof(val)) < 0) return error(c, err, cap, "headers value");
             for (k = 0; val[k]; k++) if ((unsigned char)val[k] < 32 || (unsigned char)val[k] >= 127)
                 return error(c, err, cap, "headers value (visible ASCII only)");
@@ -187,8 +181,13 @@ int mcp_config_parse(const char *s, size_t len, McpConfig *c, char *err, size_t 
         }
     }
     c->enabled = 1;
-    memset(val, 0, sizeof(val)); memset(url, 0, sizeof(url));
     return 0;
+}
+int mcp_config_parse(const char *s, size_t len, McpConfig *c, char *err, size_t cap)
+{
+    int result = parse(s, len, c, err, cap);
+    memset(val, 0, sizeof(val)); memset(url, 0, sizeof(url)); memset(key, 0, sizeof(key));
+    return result;
 }
 static void redact_value(char *s, const char *secret)
 {

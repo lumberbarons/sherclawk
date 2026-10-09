@@ -3,6 +3,7 @@
 #include "json.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <limits.h>
 
 int utf8_emit(unsigned long c, char *out, size_t cap)
@@ -184,6 +185,40 @@ int json_string(const char *s, const JsonToken *t, int index, char *out, size_t 
     if (index < 0 || t[index].type != JSON_STRING) return -1;
     at = (size_t)t[index].start;
     return read_string(s, (size_t)t[index].end, &at, out, cap);
+}
+/* Keys are decoded when compared, so escaped spellings collide. Sorting keeps
+ * the work to O(n log n) decodes per object instead of one per pair. */
+#define KEY_BUFFER 8192
+#define KEY_MAX 4096
+static const char *key_text;
+static const JsonToken *key_tokens;
+static int key_error;
+static char key_a[KEY_BUFFER], key_b[KEY_BUFFER];
+static int key_compare(const void *x, const void *y)
+{
+    if (json_string(key_text, key_tokens, *(const int *)x, key_a, sizeof(key_a)) < 0 ||
+        json_string(key_text, key_tokens, *(const int *)y, key_b, sizeof(key_b)) < 0) {
+        key_error = 1; return 0;
+    }
+    return strcmp(key_a, key_b);
+}
+int json_keys_unique(const char *s, const JsonToken *t, int count)
+{
+    static int order[KEY_MAX];
+    int i, j, n;
+    key_text = s; key_tokens = t; key_error = 0;
+    for (i = 0; i < count; i++) if (t[i].type == JSON_OBJECT) {
+        n = 0;
+        for (j = i + 1; j < t[i].next; j = t[j + 1].next) {
+            if (n == KEY_MAX) return -1;
+            order[n++] = j;
+        }
+        qsort(order, (size_t)n, sizeof(order[0]), key_compare);
+        if (key_error) return -1;
+        /* An undecodable key reads as equal here and is refused too. */
+        for (j = 1; j < n; j++) if (!key_compare(&order[j - 1], &order[j])) return -1;
+    }
+    return 0;
 }
 int json_member(const char *s, const JsonToken *t, int object, const char *key)
 {

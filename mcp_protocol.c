@@ -3,23 +3,17 @@
 #include <string.h>
 
 static JsonToken tokens[8192];
+/* Large scratch lives here rather than on the small Toolbox stack. */
+static char description[8192], quoted[16384];
 static int object(const char *s)
 {
     size_t len = strlen(s);
-    int n, i, j, k;
+    int n;
     if (len > MCP_MESSAGE_CAP) return -1;
     n = json_parse(s, len, tokens, 8192);
-    char a[256], b[256];
     if (n < 1 || tokens[0].type != JSON_OBJECT) return -1;
-    /* Ambiguous keys are protocol failures. Long schema property names are
-     * unsupported rather than silently interpreted differently. */
-    for (i = 0; i < n; i++) if (tokens[i].type == JSON_OBJECT)
-        for (j = i + 1; j < tokens[i].next; j = tokens[j + 1].next) {
-            if (json_string(s, tokens, j, a, sizeof(a)) < 0) return -1;
-            for (k = i + 1; k < j; k = tokens[k + 1].next)
-                if (json_string(s, tokens, k, b, sizeof(b)) < 0 || !strcmp(a, b)) return -1;
-        }
-    return 0;
+    /* Ambiguous keys are protocol failures. */
+    return json_keys_unique(s, tokens, n);
 }
 static int string(const char *s, int ob, const char *key, char *out, size_t cap)
 {
@@ -118,7 +112,7 @@ int mcp_discover_page(const McpConfig *c, McpRegistry *r, const char *s)
     if (cursor >= 0 && (json_string(s, tokens, cursor, r->cursor, sizeof(r->cursor)) < 0 || !r->cursor[0]))
         return discard(r, "invalid discovery cursor");
     for (i = list + 1; i < tokens[list].next; i = tokens[i].next) {
-        char name[64], mapped[64], description[8192], quoted[16384];
+        char name[64], mapped[64];
         int j, schema, annotation, read_only = 0, selected = !c->selection_present, n;
         size_t room;
         if (r->entries == MCP_ENTRY_MAX) return discard(r, "discovery entry limit");

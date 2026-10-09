@@ -117,12 +117,25 @@ static void discover(void)
     assert(mcp_discover_page(&config, &registry, other) == 1 && registry.count == 1);
     memset(&registry, 0, sizeof(registry)); config.selection_present = 1; config.selected_count = 0;
     assert(mcp_discover_page(&config, &registry, other) == 1 && registry.count == 0);
+    /* Many keys stay cheap to validate, and an escaped repeat is still found. */
+    {
+        static char big[MCP_MESSAGE_CAP];
+        size_t at = (size_t)snprintf(big, sizeof(big), "{\"result\":{\"tools\":[{\"name\":\"tavily_search\",\"inputSchema\":{\"properties\":{");
+        int i;
+        config.official_tavily = 1; config.selection_present = 0;
+        for (i = 0; i < 1000; i++) at += (size_t)snprintf(big + at, sizeof(big) - at, "%s\"k%d\":{}", i ? "," : "", i);
+        memset(&registry, 0, sizeof(registry));
+        strcpy(big + at, "}}}]}}");
+        assert(mcp_discover_page(&config, &registry, big) == 1 && registry.count == 1);
+        memset(&registry, 0, sizeof(registry));
+        strcpy(big + at, ",\"k\\u0037\":{}}}}]}}");
+        assert(mcp_discover_page(&config, &registry, big) < 0 && !registry.count);
+    }
     /* An over-long name skips only that tool; its neighbours survive. */
     {
         char longname[512];
         snprintf(longname, sizeof(longname), "{\"result\":{\"tools\":[{\"name\":\"%0100d\",\"inputSchema\":{}},{\"name\":\"tavily_search\",\"inputSchema\":{\"type\":\"object\"}}]}}", 7);
         memset(&registry, 0, sizeof(registry));
-        config.official_tavily = 1; config.selection_present = 0;
         assert(mcp_discover_page(&config, &registry, longname) == 1);
         assert(registry.count == 1 && registry.entries == 2 && strstr(registry.notice, "unsupported name"));
     }

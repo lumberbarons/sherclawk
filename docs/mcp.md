@@ -108,8 +108,8 @@ The new protocol and cooperative-client fixtures also passed host GCC in the
 Retro68 image with `-Wall -Wextra -Werror`. Docker builds passed for both
 `Sherclawk_APPL` and `SherclawkMCPCheck_APPL`.
 
-`powerpc-apple-macos-size` measured the diagnostic at 335,872 bytes text,
-6,576 data and 1,133,272 bss: 1,475,720 bytes total. The main application's
+`powerpc-apple-macos-size` measured the diagnostic at 339,968 bytes text,
+6,624 data and 1,190,632 bss: 1,537,224 bytes total. The main application's
 linked total remains 3,036,744 bytes. These figures exclude TLS/UI heap and
 stack allocations; they do not establish guest minimum-partition acceptance.
 No guest/live Tavily result has been recorded yet.

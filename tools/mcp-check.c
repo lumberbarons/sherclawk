@@ -34,7 +34,10 @@ static int load(void)
         if (!err && count != length) err = ioErr;
     }
     if (ref) { close_err = FSClose(ref); if (!err) err = close_err; }
-    if (err) { fputs("FAIL configuration missing, unreadable or oversized\n", logfile); return -1; }
+    if (err) {
+        fputs("FAIL configuration missing, unreadable or oversized\n", logfile);
+        memset(bytes, 0, sizeof(bytes)); return -1;
+    }
     if (mcp_config_parse(bytes, (size_t)length, &config, error, sizeof(error)) < 0) {
         /* Parser errors contain field names only. */
         fprintf(logfile, "FAIL %s\n", error); memset(bytes, 0, sizeof(bytes)); return -1;

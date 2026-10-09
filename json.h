@@ -7,6 +7,10 @@ typedef struct { int type, start, end, next; } JsonToken;
 int json_parse(const char *s, size_t len, JsonToken *tokens, int cap);
 int json_member(const char *s, const JsonToken *t, int object, const char *key);
 int json_string(const char *s, const JsonToken *t, int index, char *out, size_t cap);
+/* 0 when no object among the first count tokens repeats a key (compared after
+ * decoding escapes); -1 for a duplicate, undecodable or over-long (8 KiB) key,
+ * or more than 4096 keys in one object. Uses static scratch; not reentrant. */
+int json_keys_unique(const char *s, const JsonToken *t, int count);
 /* Strict numeric extraction from a parsed primitive token. json_integer takes
  * digits only, yielding [0, 2147483647]. json_decimal_micros takes a
  * non-negative decimal or exponent form and rounds to millionths, accepting
