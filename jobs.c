@@ -1,5 +1,5 @@
 /* Native File Manager publication preserves LF scripts, snapshot bytes and
- * complete-file ready visibility. No worker-owned files are ever rewritten.
+ * complete-file ready visibility. No executor-owned files are ever rewritten.
  * FlushVol is a visibility barrier, not a verified AFP power-loss guarantee. */
 #include "jobs.h"
 #include <Script.h>

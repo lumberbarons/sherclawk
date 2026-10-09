@@ -1,4 +1,4 @@
-/* Own the worker-lock before the ready rename. Only the current producer's
+/* Native MPW executor. Own the worker-lock before the ready rename. Only the current producer's
  * validated snapshot is eligible; shell text is never interpreted. Copies and
  * reply-log writes are paged. An uncertain command retains ownership until
  * drained, and its claim remains forever without a success/result record.
@@ -108,19 +108,29 @@ void selfbuild_drain(uint32_t now)
         release();
     }
 }
-int selfbuild_begin(const NativeJob *j,const FSSpec *queue,const BuildPlan *p)
+/* Refusals that need no side effects. The caller fills in nothing but the
+ * queue; `dir` receives its directory ID when the queue is usable. */
+static int refusal(const FSSpec *queue,long *dir)
 {
-    CInfoPBRec q,cat; FSSpec s; char marker[12],text[160]; BuildPlan checked; OSErr e;
-    if(!initialized || owned || running || toolserver_busy())return 0;
-    unknown=0;
+    CInfoPBRec q;
+    if(!initialized)return SELFBUILD_UNAVAILABLE;
+    if(owned || running || toolserver_busy())return SELFBUILD_BUSY;
     if(catalog(queue,&q) || !(q.hFileInfo.ioFlAttrib & 16) ||
-        (q.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000))return -1;
+        (q.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000))return SELFBUILD_BLOCKED;
+    snapshot.volume=queue->vRefNum;  /* leaf()/absent() resolve names on it; idle here */
+    if(!absent(q.dirInfo.ioDrDirID,"STOP") || !absent(q.dirInfo.ioDrDirID,"worker-lock"))return SELFBUILD_BLOCKED;
+    *dir=q.dirInfo.ioDrDirID; return 0;
+}
+int selfbuild_check(const FSSpec *queue) { long dir; return refusal(queue,&dir); }
+SelfBuildStart selfbuild_begin(const NativeJob *j,const FSSpec *queue,const BuildPlan *p)
+{
+    CInfoPBRec cat; FSSpec s; char marker[12],text[160]; BuildPlan checked; OSErr e; long dir; int why;
+    unknown=0;
+    why=refusal(queue,&dir); if(why)return (SelfBuildStart)why;
     snapshot=*j; plan=*p; phase=input=step=0;
-    if(!absent(q.dirInfo.ioDrDirID,"STOP"))return 0;
-    leaf(q.dirInfo.ioDrDirID,"worker-lock",&lock);
+    leaf(dir,"worker-lock",&lock);
     e=FSpDirCreate(&lock,smSystemScript,&lock_id);
-    if(e==dupFNErr)return 0;
-    if(e)return -1;
+    if(e)return SELFBUILD_BLOCKED;  /* lost the race, or the volume refuses */
     owned=1;
     if(FlushVol(NULL,lock.vRefNum))goto fail;
     /* Check all native outputs before claiming. Existing claims never replay. */
@@ -141,9 +151,9 @@ int selfbuild_begin(const NativeJob *j,const FSSpec *queue,const BuildPlan *p)
     if(create_file(j->directory,"stdout",&s) || create_file(j->directory,"stderr",&s))goto fail;
     running=1; phase=0; input=step=0; offset=0; log_offsets[0]=log_offsets[1]=0;
     if(snprintf(directory,sizeof(directory),"%s" SHERCLAWK_BUILD_QUEUE ":%s:build:native:",tools_workspace(),j->id)>=(int)sizeof(directory))goto fail;
-    return 1;
+    return SELFBUILD_STARTED;
 fail:
-    uncertain("native claim/setup uncertain; no replay\n",j->start); return -1;
+    uncertain("native claim/setup uncertain; no replay\n",j->start); return SELFBUILD_UNCERTAIN;
 }
 static int folder(long parent,const char *name,long *id,int existing)
 {
@@ -185,7 +195,7 @@ static int status_code(long status)
 { return status==-1 ? 127 : status==2 ? 1 : status>=0 && status<=255 ? (int)status : -1; }
 void selfbuild_step(uint32_t now,int stop)
 {
-    FSSpec s,dest; CInfoPBRec p; char page[JOB_PAGE],text[256]; long n; int r;
+    FSSpec s,dest; CInfoPBRec p; char page[JOB_PAGE],text[256]; long n; int r; OSErr e;
     if(!running)return;
     if(stop || (uint32_t)(now-snapshot.start)>=snapshot.timeout)goto fail;
     if(phase==0) {
@@ -216,7 +226,17 @@ void selfbuild_step(uint32_t now,int stop)
         if(!absent(lock.parID,"STOP") ||
             build_project_command(&plan,step,command,sizeof(command),stage,sizeof(stage)))goto fail;
         snprintf(text,sizeof(text),"%s\n",stage);
-        if(log_bytes(0,text,(long)strlen(text)) || toolserver_send(directory,command,now))goto fail;
+        if(log_bytes(0,text,(long)strlen(text)))goto fail;
+        e=toolserver_send(directory,command,now);
+        if(e && !step && !toolserver_busy()) {
+            /* ToolServer could not be found or launched and nothing was
+             * delivered, so no command ran: a definite rejection. */
+            static const char note[]="ToolServer could not be found or launched; no command ran.\n";
+            snprintf(text,sizeof(text),"protocol=1\nid=%s\noutcome=rejected\n",snapshot.id);
+            if(log_bytes(1,note,(long)sizeof(note)-1) || record(snapshot.directory,"result",text))goto fail;
+            running=0; release(); return;
+        }
+        if(e)goto fail;
         phase=4;
     } else if(phase==4) {
         r=toolserver_poll(now,0,&reply);

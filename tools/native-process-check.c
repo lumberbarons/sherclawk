@@ -1,5 +1,5 @@
-/* Native Process Manager evidence: MacRelix /proc lists its own tasks,
- * not classic applications. Run this as a PPC application after tlsrvr.
+/* Native Process Manager evidence: lists the classic applications actually
+ * running. Build it with build_project as main.c of a starter copy.
  * The fixed diagnostic log lives in the isolated Template01 AFP fixture.
  */
 #include <Types.h>

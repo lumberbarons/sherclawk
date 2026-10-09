@@ -32,10 +32,9 @@ before publication, and reject unsupported inputs explicitly.
 `build_project(path)` binds the descriptor, settings, recipe/toolchain identity
 and all project-owned inputs to an immutable snapshot with revisions. It returns
 a build ID and bounded diagnostics with log continuation. The verified backend
-is MrC/PPCLink/Rez in the guest. ToolServer executes an unowned queue snapshot;
-a separately started MacRelix worker is the exclusive-owner fallback. Both
-backends use the same trusted command generator. Queue locks are not liveness
-proof and are never stolen automatically.
+is MrC/PPCLink/Rez in the guest, executed through MPW ToolServer, the only
+build backend. Queue locks are not liveness proof and are never stolen
+automatically.
 
 `run_application(build_id)` resolves the artifact and persisted authority for
 that successful snapshot, verifies both forks and native identity, and reserves
