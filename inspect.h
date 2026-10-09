@@ -1,4 +1,4 @@
-/* Read-only OS 9 inspection tools (idea 004, first batch). */
+/* Read-only OS 9 inspection tools (see ADR-0003). */
 #ifndef SHERCLAWK_INSPECT_H
 #define SHERCLAWK_INSPECT_H
 #include "agent.h"

@@ -5,7 +5,7 @@
 > evidence is kept unchanged below, and file names it mentions no longer exist.
 
 Tested with the OS 9.2.2 / MacRelix / MPW installation identified in
-[`../templates/ppc-toolbox/VERIFIED.md`](../templates/ppc-toolbox/VERIFIED.md).
+[`../../templates/ppc-toolbox/VERIFIED.md`](../../templates/ppc-toolbox/VERIFIED.md).
 The executor ran in MacRelix; the host only published inputs, inspected files,
 and sent QMP input. No AFP restart, VM flag change or cross-compilation was used.
 

@@ -1,5 +1,10 @@
 # Building sherclawk: lessons from Pi, OpenCode, and AgentBridge
 
+> Historical design note. Proposals, status statements and source-line references
+> describe development at the time of writing and may be superseded. Use the
+> [current guides](../../README.md#documentation) for supported behavior and the
+> [issue tracker](https://github.com/lumberbarons/sherclawk/issues) for active work.
+
 Research date: October 1, 2026; updated October 2, 2026 with verified MacRelix findings (section 17). Audience: someone new to agent harnesses, designing an assistant for **classic Mac OS 9**. Originally written in the imac workspace; references marked "original workspace notes" point at files outside this repository.
 
 **Project requirement:** sherclawk is a native OS 9 application running on the user's Mac. The UI, agent loop, prompt construction, session storage, tool validation, and Toolbox execution live in that application. An external LLM service may provide inference; any optional modern relay is limited to transport/API compatibility. It does not own the loop or execute the Mac's tools. Running the harness locally and running model inference locally are separate requirements; local inference is not assumed here.
@@ -159,7 +164,7 @@ Native Open Transport + embedded TLS + HTTP + provider adapter
 
 Use a request ID, session ID, tool-call ID, protocol version, length bounds, and explicit complete/error markers. If using a relay, keep provider credentials there and authenticate the connection. AgentBridge's mailbox is an optional transport idea; its native Toolbox techniques are the primary inspiration for this project. See sections 13–14.
 
-This workspace already documents a working OS 9 VM, Retro68 cross-compilation, fork-aware deployment, and QMP screenshot/input helpers. These are local setup reports, not independently retested by this research. The QMP route is useful for an emulator prototype but does not solve native input control on a physical Mac ([VM setup notes](macos9-qemu.md) are vendored here; `hello-world/README.md` remains an original workspace note).
+This workspace already documents a working OS 9 VM, Retro68 cross-compilation, fork-aware deployment, and QMP screenshot/input helpers. These are local setup reports, not independently retested by this research. The QMP route is useful for an emulator prototype but does not solve native input control on a physical Mac ([VM setup notes](../macos9-qemu.md) are vendored here; `hello-world/README.md` remains an original workspace note).
 
 ## 7. Supporting file-and-application tools
 
@@ -768,7 +773,7 @@ Genie ships an `aete` resource defining a "Pipe Organ Suite" `execute` command (
 
 ### Remaining work
 
-1. The [PowerPC project template](../templates/ppc-toolbox/README.md) now captures the native shell recipe, exact installed versions and guest verification (October 3, 2026). A `Make`/`BuildProgram` variant remains optional work.
+1. The [PowerPC project template](../../templates/ppc-toolbox/README.md) now captures the native shell recipe, exact installed versions and guest verification (October 3, 2026). A `Make`/`BuildProgram` variant remains optional work.
 2. Nexus job end-to-end test, and a decision on whether sherclawk speaks Nexus or its own job format.
 3. A-line with MPW-only tools (or confirmation that A-line requires Metrowerks).
 4. Build throughput on TCG emulation vs real hardware.

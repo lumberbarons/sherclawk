@@ -54,13 +54,13 @@ defaults, not requirements for every future project. `create_project` embeds
 its editable C/Rez sources; `build_project` also accepts independently
 assembled protocol-2 projects with multiple sources/resources, a chosen output
 name and supported toolchain settings. See the
-[build/run plan](../../PLAN.md#buildrun-contract). Every build runs through
+[build/run contract](../../docs/architecture.md#buildrun-contract). Every build runs through
 the app's native MPW ToolServer executor; the generated recipe is the
 `mpw-ppc-v2` adapter in `build_project.c`.
 
 The fixed native diagnostic also builds the embedded starter sources directly.
 Its two successful builds, deliberately failing compile and Stop during
-linking are recorded in [idea 005, increment 2](../../docs/idea-005-sherclawk-queue-mode.md#increment-2-guest-evidence--october-6-2026).
+linking are recorded in [native executor evidence, increment 2](../../docs/history/native-executor-evidence.md#increment-2-guest-evidence--october-6-2026).
 Those historical results predate the native-widget/runtime-log starter; see
 `VERIFIED.md` for the scope of recorded guest evidence. `VERIFIED.md` also
 records the earlier MacRelix-driven verification of this recipe; that driver
