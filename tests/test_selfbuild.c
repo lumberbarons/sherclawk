@@ -41,7 +41,7 @@ int main(void)
     /* The undrained command still owns the executor: the next build is refused
      * before anything is reserved, and the late reply is not disturbed. */
     strcpy(call.arguments,"{\"path\":\"project\"}");
-    assert(build_project_begin(&call,result,sizeof(result),build_journal,NULL,ticks)==2);
+    r=build_project_begin(&call,result,sizeof(result),build_journal,NULL,ticks);assert(r==2);
     assert(run_to_end()==1 && strstr(result,"NATIVE_EXECUTOR_BUSY") && strstr(result,"\"message\"") &&
            ts_sends==1 && ts_busy && named("worker-lock")>=0);
     {   int jobs=0,k;for(k=0;k<64;k++)if(files[k].used && !strncmp(files[k].name,"build-",6))jobs++;
