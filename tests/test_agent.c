@@ -219,6 +219,74 @@ static void model_metadata(void)
     assert(at < sizeof(big));
     assert(agent_model_info(big, at, "m1", &info) == -1);
 }
+/* The model chooser lists a whole page, filters it locally and resolves a
+ * typed id only by exact match. */
+static void model_page(void)
+{
+    static const char *page =
+        "{\"total_count\":3,\"data\":["
+        "{\"id\":\"openai/gpt-4o-pro\",\"name\":\"GPT-4o Pro\",\"context_length\":262144},"
+        "{\"id\":\"openai/gpt-4o\",\"name\":\"GPT-4o\",\"context_length\":131072,"
+        "\"reasoning\":{\"mandatory\":true,\"default_enabled\":false,\"default_effort\":\"medium\","
+        "\"supported_efforts\":[\"high\",\"medium\",\"low\",\"minimal\",\"none\"]}},"
+        "{\"name\":\"No id\",\"context_length\":1},"
+        "{\"id\":\"\",\"name\":\"Empty id\",\"context_length\":2},"
+        "{\"id\":\"z-ai/glm\",\"name\":\"GLM\",\"context_length\":8192}]}";
+    static char big[65536], query[64];
+    AgentModelRow rows[AGENT_MODEL_ROWS_MAX];
+    size_t i, at = 0;
+    int count;
+    /* The popular page the dialog loads on open is pinned. */
+    assert(agent_popular_query(query, sizeof(query)) ==
+           (int)strlen("/api/v1/models?limit=10&sort=most-popular"));
+    assert(!strcmp(query, "/api/v1/models?limit=10&sort=most-popular"));
+    assert(agent_popular_query(query, 8) == -1);
+    /* Rows keep page order and carry id, name, context and reasoning; rows
+     * without a usable id are skipped, not counted. */
+    count = agent_model_page(page, strlen(page), rows, AGENT_MODEL_ROWS_MAX);
+    assert(count == 3);
+    assert(!strcmp(rows[0].id, "openai/gpt-4o-pro") && !strcmp(rows[0].info.name, "GPT-4o Pro"));
+    assert(rows[0].info.context_length == 262144 && !rows[0].info.reasoning);
+    assert(!strcmp(rows[1].id, "openai/gpt-4o") && !strcmp(rows[1].info.name, "GPT-4o"));
+    assert(rows[1].info.reasoning && rows[1].info.mandatory && rows[1].info.effort_count == 5);
+    assert(!strcmp(rows[1].info.default_effort, "medium"));
+    assert(!strcmp(rows[1].info.supported_efforts[0], "high") &&
+           !strcmp(rows[1].info.supported_efforts[4], "none"));
+    assert(!strcmp(rows[2].id, "z-ai/glm") && rows[2].info.context_length == 8192);
+    /* Typing filters locally: empty matches all, id and name match
+     * case-insensitively, an unrelated query matches nothing. */
+    assert(agent_model_row_match(&rows[0], ""));
+    assert(agent_model_row_match(&rows[0], "gpt"));
+    assert(agent_model_row_match(&rows[0], "4O-PRO"));
+    assert(agent_model_row_match(&rows[0], "pro"));
+    assert(!agent_model_row_match(&rows[0], "glm"));
+    assert(agent_model_row_match(&rows[2], "z-ai"));
+    assert(!agent_model_row_match(&rows[2], "gpt"));
+    /* Only an exact id resolves a typed model; substrings do not. */
+    assert(agent_model_row_find(rows, 3, "openai/gpt-4o") == 1);
+    assert(agent_model_row_find(rows, 3, "openai/gpt-4o-pro") == 0);
+    assert(agent_model_row_find(rows, 3, "gpt-4o") == -1);
+    assert(agent_model_row_find(rows, 3, "openai/gpt-4o-mini") == -1);
+    assert(agent_model_row_find(rows, 3, "") == -1);
+    assert(agent_model_row_find(rows, 0, "openai/gpt-4o") == -1);
+    /* The display cap trims a longer page; a zero cap reads nothing. */
+    assert(agent_model_page(page, strlen(page), rows, 2) == 2);
+    assert(!strcmp(rows[1].id, "openai/gpt-4o"));
+    assert(agent_model_page(page, strlen(page), rows, 0) == 0);
+    /* Malformed, empty and truncated pages read as no rows. */
+    assert(agent_model_page("not json", strlen("not json"), rows, 10) == 0);
+    assert(agent_model_page("{\"data\":{}}", strlen("{\"data\":{}}"), rows, 10) == 0);
+    assert(agent_model_page("{\"data\":[]}", strlen("{\"data\":[]}"), rows, 10) == 0);
+    for (i = 1; i < strlen(page); i++) assert(agent_model_page(page, i, rows, 10) == 0);
+    /* More rows than the shared parser cap reads as no rows, never partial. */
+    at += (size_t)snprintf(big + at, sizeof(big) - at, "{\"data\":[");
+    for (i = 0; i < 1500; i++)
+        at += (size_t)snprintf(big + at, sizeof(big) - at, "%s{\"id\":\"m%lu\",\"context_length\":1024}",
+                               i ? "," : "", (unsigned long)i);
+    at += (size_t)snprintf(big + at, sizeof(big) - at, "]}");
+    assert(at < sizeof(big));
+    assert(agent_model_page(big, at, rows, 10) == 0);
+}
 int main(void)
 {
     const char *final = "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Inspected.\"}}]}";
@@ -349,6 +417,7 @@ int main(void)
     begin();
     assert(agent_request(&a, "model", req, sizeof(req)) > 0 && strstr(req, "\"max_tokens\":6000,"));
     model_metadata();
+    model_page();
     puts("PASS agent tools, usage accounting, history, truncation, Stop, persistence barriers, bounds and model metadata");
     return 0;
 }

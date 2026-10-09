@@ -2,6 +2,7 @@
 #ifndef SHERCLAWK_AGENT_H
 #define SHERCLAWK_AGENT_H
 #include <stddef.h>
+#include "chat.h"
 #define AGENT_HISTORY_CAP 393216
 #define AGENT_RESULT_CAP 1536
 #define AGENT_RESULT_WIRE_CAP (AGENT_RESULT_CAP * 6 + 256)
@@ -16,6 +17,8 @@
 #define AGENT_MODEL_NAME_CAP 64
 #define AGENT_EFFORT_CAP 16
 #define AGENT_EFFORT_MAX 8
+/* Rows shown or read from one catalog page by the model chooser. */
+#define AGENT_MODEL_ROWS_MAX 10
 /* Completion budget per agent request, reasoning included. */
 #define AGENT_MAX_TOKENS 6000
 #define AGENT_HANDOFF_MAX_TOKENS 1536
@@ -34,6 +37,12 @@ typedef struct {
     char supported_efforts[AGENT_EFFORT_MAX][AGENT_EFFORT_CAP];
     int effort_count;
 } AgentModelInfo;
+/* One display row of a /api/v1/models page: the exact id that gets saved and
+ * the metadata of the row that carries it. */
+typedef struct {
+    char id[CHAT_MODEL_CAP];
+    AgentModelInfo info;
+} AgentModelRow;
 typedef int (*AgentJournal)(void *context, const char *event, const char *json);
 typedef struct {
     char history[AGENT_HISTORY_CAP];
@@ -74,6 +83,17 @@ void agent_usage_absorb(Agent *a, const char *body, size_t len);
  * for a malformed, over-cap or matching-free page; absent optional fields
  * keep their zero defaults. */
 int agent_model_info(const char *body, size_t len, const char *model, AgentModelInfo *info);
+/* Read up to max rows of one /api/v1/models page in page order, skipping rows
+ * without a usable id. Returns the row count, 0 for a malformed or empty page. */
+int agent_model_page(const char *body, size_t len, AgentModelRow *rows, int max);
+/* Case-insensitive substring match against a row's id or name for local
+ * filtering; empty text matches every row. */
+int agent_model_row_match(const AgentModelRow *row, const char *text);
+/* Index of the row whose id equals model exactly, or -1. */
+int agent_model_row_find(const AgentModelRow *rows, int count, const char *model);
+/* Path of the popular catalog page the Preferences dialog loads first:
+ * /api/v1/models?limit=10&sort=most-popular. Returns the length, or -1. */
+int agent_popular_query(char *out, size_t cap);
 /* Build the lookup path /api/v1/models?q=<model>&limit=10, percent-encoding
  * model bytes outside [A-Za-z0-9-._~]. Returns the path length, or -1 when
  * it does not fit. */

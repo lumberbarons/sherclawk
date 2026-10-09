@@ -84,11 +84,18 @@ which stays as the compiled fallback. The workspace applies to new tool work
 immediately (tools, new sessions, builds); a session already open keeps
 writing to the folder it was opened in. Limits accept 1–128 and apply per run;
 outside that range, or with a value missing or malformed in the file, the
-compiled default is used. Each executed call shows a compact call line — the tool
-name and rendered arguments — in the Conversation; with the debug toggle on,
-the result and the call's journal event names follow it. The session JSONL is
-byte-identical either way, and the API key never appears in status text, logs,
-prompts or results.
+compiled default is used. The Model field is also the catalog search box: the
+dialog lists the ten most popular models when it opens (once per launch),
+typing filters that list locally, **Find** searches the whole public catalog
+for the typed text, and clicking a row confirms the model and fills the Effort
+choices. OK saves only a model that resolved to a catalog row — an unconfirmed
+typed ID is checked with `GET /api/v1/models?q=<id>&limit=10` first, and a
+typo leaves the dialog open with the closest candidates — while a failed fetch
+or Cancel leaves the typed text in place and changes nothing. Each executed
+call shows a compact call line — the tool name and rendered arguments — in the
+Conversation; with the debug toggle on, the result and the call's journal
+event names follow it. The session JSONL is byte-identical either way, and the
+API key never appears in status text, logs, prompts or results.
 
 The Finder icon ships as a bundle icon family and as an attached custom icon,
 so the AFP file displays correctly without rebuilding the Desktop database.
