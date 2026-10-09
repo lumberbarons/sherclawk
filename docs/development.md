@@ -275,7 +275,7 @@ this is not queue locking or universal executor detection.
 Both success runs, compiler failure and Stop/late-reply behavior passed in OS 9.
 The repeated artifact payloads matched except for a PEF timestamp; full resource
 maps also differed, so complete fork determinism is not claimed. Detailed
-fixtures and timings are in [idea 005](archive/idea-005-sherclawk-queue-mode.md).
+fixtures and timings are in [native executor evidence](history/native-executor-evidence.md).
 This fixed diagnostic remains separate from the [native executor](native-builds.md#native-executor).
 
 ## Timing and transport experiments
