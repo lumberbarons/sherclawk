@@ -10,6 +10,7 @@
 #endif
 #include "config.h"
 #include "json.h"
+#include "text.h"
 #include <Quickdraw.h>
 #include <Fonts.h>
 #include <Windows.h>
@@ -19,8 +20,10 @@
 #include <Events.h>
 #include <Processes.h>
 #include <Resources.h>
+#include <Script.h>
 #include <stdio.h>
 #include <string.h>
+#include "diagnostic-tools.h"
 static FILE *logfile;
 static char result[AGENT_RESULT_CAP],folder[64];
 static AgentCall call;
@@ -42,6 +45,35 @@ static void write_file(const char *name,const char *text)
     snprintf(path,sizeof(path),"%s:%s",folder,name);
     json_quote(path,qp,sizeof(qp)); json_quote(text,qt,sizeof(qt));
     snprintf(args,sizeof(args),"{\"path\":%s,\"text\":%s}",qp,qt); invoke("write_text",args);
+}
+/* A valid native source after its deliberate error is repaired. Fixture
+ * creation uses native writes, independently of the create-only 4 KiB tool. */
+static void write_large_source(const char *text)
+{
+    static char bytes[TOOLS_FILE_CAP+1],page[TOOLS_WORK_CHUNK];
+    char path[128];FSSpec spec;short ref;OSErr err,c;long at;
+    size_t n=(size_t)text_to_macroman_strict(text,bytes,sizeof(bytes));
+    if(n>TOOLS_FILE_CAP-5) { failures++;return; }
+    memcpy(bytes+n,"/*",2);memset(bytes+n+2,' ',TOOLS_FILE_CAP-n-4);
+    memcpy(bytes+TOOLS_FILE_CAP-2,"*/",2);
+    snprintf(path,sizeof(path),"%s:extra.c",folder);err=tools_resolve(path,&spec);
+    if(err==fnfErr)err=FSpCreate(&spec,'ttxt','TEXT',smSystemScript);
+    if(!err)err=FSpOpenDF(&spec,fsWrPerm,&ref);
+    if(err) { failures++;return; }
+    for(at=0;!err && at<TOOLS_FILE_CAP;at+=TOOLS_WORK_CHUNK) {
+        EventRecord event;long count=TOOLS_WORK_CHUNK;
+        err=FSWrite(ref,&count,bytes+at);if(!err && count!=TOOLS_WORK_CHUNK)err=ioErr;
+        WaitNextEvent(everyEvent,&event,0,NULL);SystemTask();
+    }
+    c=FSClose(ref);if(!err)err=c;if(!err)err=FlushVol(NULL,spec.vRefNum);
+    if(!err)err=FSpOpenDF(&spec,fsRdPerm,&ref);
+    if(err) { failures++;return; }
+    for(at=0;!err && at<TOOLS_FILE_CAP;at+=TOOLS_WORK_CHUNK) {
+        long count=TOOLS_WORK_CHUNK;err=FSRead(ref,&count,page);
+        if(!err && (count!=TOOLS_WORK_CHUNK || memcmp(page,bytes+at,TOOLS_WORK_CHUNK)))err=ioErr;
+    }
+    c=FSClose(ref);if(err || c)failures++;
+    fprintf(logfile,"LARGE_SOURCE path=%s bytes=%ld exact=%d\n",path,TOOLS_FILE_CAP,!err && !c);
 }
 static void replace(const char *name,const char *old,const char *replacement)
 {
@@ -203,7 +235,7 @@ static int build(WindowPtr window,int success)
 }
 int main(void)
 {
-    char args[512],revision[80]; JsonToken t[64]; WindowPtr window; Rect bounds;
+    char args[640],revision[80],repair[sizeof("#error deliberate build_project compiler error\r")],qr[300]; JsonToken t[64]; WindowPtr window; Rect bounds;
     InitGraf(&qd.thePort); InitFonts(); InitWindows(); InitMenus(); TEInit(); InitDialogs(NULL); InitCursor();
     #ifdef QUIT_CHECK
     logfile=fopen(SHERCLAWK_WORKSPACE "SherclawkQuitCheck.log","w");
@@ -229,7 +261,7 @@ int main(void)
     replace("main.c","if(event.what==keyDown","if(event.what==kHighLevelEvent)AEProcessAppleEvent(&event); if(event.what==keyDown");
 #endif
     write_file("shared.h","const unsigned char *message(void);\n");
-    write_file("extra.c","#error deliberate build_project compiler error\n#include \"shared.h\"\nconst unsigned char *message(void) { return \"\\pTwo source files compiled natively\"; }\n");
+    write_large_source("#error deliberate build_project compiler error\n#include \"shared.h\"\nconst unsigned char *message(void) { return \"\\pTwo source files compiled natively\"; }\n");
     write_file("app.r","#include \"Types.r\"\nresource 'SIZE' (-1) { reserved, acceptSuspendResumeEvents, reserved, canBackground, doesActivateOnFGSwitch, backgroundAndForeground, dontGetFrontClicks, ignoreAppDiedEvents, is32BitCompatible, isHighLevelEventAware, onlyLocalHLEvents, notStationeryAware, dontUseTextEditServices, reserved, reserved, reserved, 524288, 524288 };\n");
     SetRect(&bounds,70,210,570,310); window=NewWindow(NULL,&bounds,(const unsigned char *)"\025Sherclawk build check",true,documentProc,(WindowPtr)-1,false,0);
     if(build(window,0))goto done;
@@ -238,7 +270,9 @@ int main(void)
 #endif
     snprintf(args,sizeof(args),"{\"path\":\"%s:extra.c\"}",folder); invoke("read_text",args);
     if(json_parse(result,strlen(result),t,64)<1 || json_string(result,t,json_member(result,t,0,"revision"),revision,sizeof(revision))<0){failures++;goto done;}
-    snprintf(args,sizeof(args),"{\"path\":\"%s:extra.c\",\"expected_revision\":\"%s\",\"old_text\":\"#error deliberate build_project compiler error\\n\",\"new_text\":\"\"}",folder,revision); invoke("edit_text",args);
+    memset(repair,' ',sizeof(repair)-2);repair[sizeof(repair)-2]='\r';repair[sizeof(repair)-1]=0;
+    json_quote(repair,qr,sizeof(qr));
+    snprintf(args,sizeof(args),"{\"path\":\"%s:extra.c\",\"expected_revision\":\"%s\",\"old_text\":\"#error deliberate build_project compiler error\\n\",\"new_text\":%s}",folder,revision,qr); invoke("edit_text",args);
     if(build(window,1))goto done;
 #ifdef SELF_BUILD_CHECK
     replace("extra.c","Two source files compiled natively","Fresh revision compiled natively");

@@ -14,6 +14,7 @@
 #include <Files.h>
 #include <stdio.h>
 #include <string.h>
+#include "diagnostic-tools.h"
 static FILE *logfile;
 static int records, failures;
 static int journal(void *ctx, const char *event, const char *json)

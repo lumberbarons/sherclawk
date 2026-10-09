@@ -91,7 +91,8 @@ replace their combined sources list with separate C sources/Rez resources, add
 `toolchain` and `output`, and set `protocol` to 2 through ordinary guarded edits.
 
 Declared C/Rez/header files are capped at `BUILD_INPUTS` (`build_plan.h`), with a 4 KiB descriptor;
-each input is at most 4 KiB, plain Finder `TEXT`, MacRoman/CR, without resource
+each input is at most 4 KiB in shipping builds (64 KiB in guest acceptance
+builds), plain Finder `TEXT`, MacRoman/CR, without resource
 forks or aliases. Declare all project-owned headers. Relative paths use colon
 separators and lowercase ASCII letters, digits, underscore, dash and dot;
 components are 1–31 bytes, cannot start with dot/dash, and paths are at most
@@ -241,3 +242,12 @@ observes process exit asynchronously for 30 seconds. It never force quits,
 discards changes, retries a send, or cleans up apps automatically. Stop after
 submission cannot cancel Quit. See the [implementation spec](quit-application.md)
 and [tool contract](tools.md#quit-an-owned-application).
+
+Large-input acceptance uses a 128 KiB immutable source arena, retaining offsets
+and lengths rather than allocating ten maximum-sized file buffers. Reads,
+validation, hashing and exact second-pass comparison advance in 1 KiB chunks.
+The actual aggregate includes descriptor, all inputs, recipe and manifest and
+must stay within 128 KiB. `SNAPSHOT_SIZE_LIMIT` reports the limits; rejection
+precedes queue creation, snapshot journaling and job reservation. The descriptor
+remains 4 KiB and there are still ten declared inputs. See [large-text
+acceptance](large-text.md) before enabling the shipping cap.

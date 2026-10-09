@@ -16,6 +16,9 @@ set(MCP_CORE mcp_config.c mcp_protocol.c mcp_stream.c mcp_client.c)
 add_application(SherclawkMCPCheck tools/mcp-check.c ${MCP_CORE} json.c text.c vendor/http.c hello.r)
 set(CHAT_CORE chat.c json.c text.c network.c timing.c vendor/http.c)
 add_application(Sherclawk main.c agent.c session.c preferences.c ${TOOLS_SRC} view_image.c build_project.c selfbuild.c toolserver.c ae_dispatch.c run_application.c application_process.c jobs.c ${CHAT_CORE} hello.r build/art.r CREATOR ShCk)
+# Full-app acceptance target; shipping Sherclawk retains its verified 4 KiB cap.
+add_application(SherclawkLargeTextCheck main.c agent.c session.c preferences.c ${TOOLS_SRC} view_image.c build_project.c selfbuild.c toolserver.c ae_dispatch.c run_application.c application_process.c jobs.c ${CHAT_CORE} hello.r build/art.r CREATOR ShCk)
+target_compile_definitions(SherclawkLargeTextCheck PRIVATE SHERCLAWK_LARGE_TEXT_CHECK=1)
 add_application(SherclawkProbe tools/probe.c agent.c ${TOOLS_SRC} ${CHAT_CORE} hello.r)
 add_application(SherclawkWriteCheck tools/write-check.c ${TOOLS_SRC} json.c text.c hello.r)
 add_application(SherclawkSearchCheck tools/search-check.c ${TOOLS_SRC} json.c text.c hello.r)
@@ -43,7 +46,7 @@ add_application(SherclawkInspectCheck tools/inspect-check.c ${TOOLS_SRC} json.c 
 add_application(SherclawkViewImageCheck tools/view-image-check.c ${TOOLS_SRC} view_image.c json.c text.c hello.r)
 add_application(SherclawkScrollCheck tools/scroll-check.c agent.c session.c preferences.c ${TOOLS_SRC} build_project.c selfbuild.c toolserver.c ae_dispatch.c run_application.c application_process.c jobs.c ${CHAT_CORE} hello.r build/art.r CREATOR ShCk)
 add_application(SherclawkHandoffCheck tools/handoff-check.c agent.c session.c preferences.c ${TOOLS_SRC} build_project.c selfbuild.c toolserver.c ae_dispatch.c run_application.c application_process.c jobs.c ${CHAT_CORE} hello.r build/art.r CREATOR ShCk)
-foreach(app SherclawkQuitCheck SherclawkMCPCheck SherclawkSelfBuildStopCheck SherclawkSelfBuildCheck SherclawkNativeBuildErrorCheck SherclawkNativeBuildCheck SherclawkToolServerCheck Sherclawk SherclawkProbe SherclawkScrollCheck SherclawkHandoffCheck SherclawkWriteCheck SherclawkEditCheck SherclawkSearchCheck SherclawkProjectCheck SherclawkBuildCheck SherclawkRunCheck SherclawkInspectCheck SherclawkViewImageCheck)
+foreach(app SherclawkLargeTextCheck SherclawkQuitCheck SherclawkMCPCheck SherclawkSelfBuildStopCheck SherclawkSelfBuildCheck SherclawkNativeBuildErrorCheck SherclawkNativeBuildCheck SherclawkToolServerCheck Sherclawk SherclawkProbe SherclawkScrollCheck SherclawkHandoffCheck SherclawkWriteCheck SherclawkEditCheck SherclawkSearchCheck SherclawkProjectCheck SherclawkBuildCheck SherclawkRunCheck SherclawkInspectCheck SherclawkViewImageCheck)
     target_include_directories(${app} PRIVATE . vendor)
     target_link_libraries(${app} certainly FontManager)
     target_compile_options(${app} PRIVATE -Wall -Wextra -ffunction-sections)
@@ -57,6 +60,10 @@ foreach(app SherclawkQuitCheck SherclawkMCPCheck SherclawkSelfBuildStopCheck She
 endforeach()
 
 # Main-window controls use the OS 9 Appearance Manager's default-button ring.
-foreach(app Sherclawk SherclawkScrollCheck SherclawkHandoffCheck)
+foreach(app SherclawkLargeTextCheck Sherclawk SherclawkScrollCheck SherclawkHandoffCheck)
     target_link_libraries(${app} AppearanceLib)
+endforeach()
+
+foreach(app SherclawkEditCheck SherclawkBuildCheck SherclawkRunCheck SherclawkQuitCheck SherclawkSelfBuildCheck SherclawkSelfBuildStopCheck)
+    target_compile_definitions(${app} PRIVATE SHERCLAWK_LARGE_TEXT_CHECK=1)
 endforeach()

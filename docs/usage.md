@@ -194,3 +194,17 @@ Sherclawk instance. New Chat retains that authority; restarting Sherclawk loses
 it. Closing a chat or Sherclawk does not quit applications. Applications that
 require interaction may refuse a noninteractive Quit; a timeout is an uncertain
 outcome, and the agent must report it without retrying.
+
+For a source repair, search for the relevant location, read nearby text to get a
+whole-file revision, submit a small unique exact replacement, reread to verify,
+and request a fresh build. Search cursors are observations and never authorize
+an edit. Read pages fill the 1536-byte JSON budget; use `next_byte` for partial
+lines and `next_line` when available. Both read and edit advance cooperatively
+and have 60-second deadlines. Stop before an edit's first rename preserves the
+original path and reports any stage; interruption after a rename attempt is
+uncertain. Inspect retained recovery paths before continuing.
+
+The 64 KiB workflow is currently available in acceptance targets only. Shipping
+Sherclawk retains its verified 4 KiB file/input cap until OS 9.2.2 acceptance is
+recorded. Replacement strings and create-only writes remain 4 KiB, arguments
+8 KiB, results 1536 bytes, descriptors 4 KiB and total build snapshots 128 KiB.

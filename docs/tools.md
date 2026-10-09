@@ -205,15 +205,23 @@ use its current `full-...` revision. Repeated or overlapping matches, stale
 revisions, missing matches and unchanged replacements fail before staging.
 An empty `new_text` deletes the match. UTF-8 arguments convert strictly to
 MacRoman, with LF/CRLF normalized to CR; binary controls are refused. Both
-the source and edited result must fit 4,096 bytes. Existing LF/CRLF files
+the source and edited result must fit the selected file limit (4 KiB shipping;
+64 KiB in acceptance builds). Each replacement string remains at most 4,096
+MacRoman bytes. Existing LF/CRLF files
 are refused rather than silently converting unrelated source bytes.
 
-Reads of files up to 4 KiB return a whole-file revision based on catalog
+Reads of files up to the selected file limit return a whole-file revision based on catalog
 identity, modification time, byte count and a hash of every byte, independent
 of the displayed line range or byte page. `revision_scope` identifies this
 as `whole_file`; `editable` identifies CR text within the edit limit. Larger
 reads return `scan-...` observational tokens, which editing never accepts.
-Revision hashes detect ordinary changes; they are not cryptographic signatures.
+The snapshot is read and validated in 1 KiB chunks, then reread and compared
+byte for byte with catalog checks and a successful close. Line navigation spans
+the complete snapshot. Revision hashes detect ordinary changes; they are not
+cryptographic signatures. Read and edit are pending tools with 60-second
+deadlines; transfer, verification and matching work is cooperative. Stop before
+the first rename leaves the original in place and reports any retained stage;
+from the first rename attempt onward, interruption is uncertain.
 
 Editing refuses aliases (including parents), folders, resource forks and
 binary files. It holds an exclusive File Manager read/write open on the
@@ -272,3 +280,10 @@ Text read pages use the actual UTF-8/JSON envelope size, bounded to 1536 bytes,
 rather than a fixed raw-byte allowance. The default is 20 lines (maximum 30).
 Escaping and MacRoman conversion reduce page payloads. Use `next_byte` for
 partial lines; CRLF pairs are never divided between pages.
+
+The larger-file workflow remains guest-gated: see [its design and acceptance
+requirements](large-text.md). Shipping schemas and `get_environment` report the
+verified 4 KiB limit until that gate passes. Environment also reports
+`edit_string_max_bytes`, `build_input_max_bytes`, `descriptor_max_bytes` and
+`total_snapshot_max_bytes`; replacement strings stay 4 KiB and the descriptor
+and aggregate snapshot remain 4 KiB and 128 KiB respectively.

@@ -4,6 +4,23 @@ Dated acceptance evidence for the OS 9 guest, host checks and live model runs,
 retained from earlier development. Entries describe the state on their recorded
 dates. Use the [current guides](../../README.md#documentation) for present behavior.
 
+Recorded October 9, 2026 (large text, **host/build evidence only; guest pending**):
+Clang and GCC 13 ASan/UBSan checks passed the 64 KiB read/edit and immutable
+build-arena fixtures, all transfer/open/close/flush fault positions in a
+multi-chunk edit, journal/rename faults, phase cancellation, tick wrap, JSON
+page reconstruction, large search continuations and aggregate rejection before
+queue creation. A separate shipping-gate test keeps normal tools at 4 KiB.
+Transport checks, shellcheck and cppcheck passed; ruff was unavailable (no
+Python source changes). Docker builds passed for the app, full-app large-text
+acceptance target, edit diagnostic and build diagnostic. Linked app size was
+561,152 text + 9,440 data + 2,922,856 bss = 3,493,448 bytes (3.33 MiB), excluding
+heap/stack. The partition requests 6 MiB minimum / 8 MiB preferred; the starter
+is unchanged. Native phase timings, maximum step duration, heap headroom,
+visible Stop/responsiveness and a model-driven search/read/edit/read/build
+have **not** been measured: no AFP host/guest connection was configured in the
+implementation workspace. The shipping cap remains 4 KiB. See
+[the pending acceptance procedure](../large-text.md).
+
 Recorded October 9, 2026: `view_image` was exercised in OS 9.2.2. The
 `SherclawkViewImageCheck` diagnostic reported zero failures against the real
 File Manager: a PNG at the 128 KiB cap read in eight bounded steps and handed

@@ -310,3 +310,15 @@ app remains running; close it manually with Command-Q after reviewing evidence.
 Run in a clean diagnostic session or account for prior ignore-log lines. Record
 actual guest evidence in `docs/history/verification.md` before advertising the
 tool in both model schemas and environment discovery.
+
+### Large text acceptance
+
+`./build.sh SherclawkLargeTextCheck_APPL` builds the full app with the
+experimental 64 KiB file/input cap; shipping `Sherclawk_APPL` remains gated at
+4 KiB. `SherclawkEditCheck` writes 16/64 KiB native fixtures and logs step/phase
+ticks, heap headroom, exact backups/replacements and fresh revisions.
+`SherclawkBuildCheck` repairs an exactly 64 KiB input and builds a new immutable
+snapshot with ToolServer. Set the diagnostic's partition to the 6 MiB minimum
+before measuring. Preserve logs, journals and backups. See
+[the complete acceptance procedure](large-text.md); do not set
+`SHERCLAWK_LARGE_TEXT_VERIFIED` until guest evidence is recorded.

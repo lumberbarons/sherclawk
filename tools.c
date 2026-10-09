@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+extern unsigned long TickCount(void);
 
 /* Runtime workspace root; the app replaces the compiled default from the saved
  * preferences before any tool runs. Tests keep the compiled default. */
@@ -113,17 +114,19 @@ static int valid_keys(const char *s, const JsonToken *tokens, const char *allowe
 static void environment(char *out, size_t cap)
 {
     char root[768], q[1024];
-    long system = 0;
+    long system = 0; int length;
     Gestalt(gestaltSystemVersion, &system);
     if (text_to_utf8(tools_workspace(), strlen(tools_workspace()), root, sizeof(root)) < 0 ||
         json_quote(root, q, sizeof(q)) < 0) { fail(out, cap, "CONFIG", "Invalid workspace encoding.", 0); return; }
-    snprintf(out, cap, "{\"status\":\"ok\",\"os\":\"classic Mac OS\",\"system_version_hex\":\"%04lx\","
+    length=snprintf(out, cap, "{\"status\":\"ok\",\"os\":\"classic Mac OS\",\"system_version_hex\":\"%04lx\","
         "\"architecture\":\"PowerPC\",\"workspace\":%s,\"paths\":\"relative colon-separated\","
         "\"encoding\":\"MacRoman data fork to UTF-8\",\"read_only\":false,\"free_heap_bytes\":%ld,"
         "\"tools\":[\"get_environment\",\"list_files\",\"read_text\",\"search_text\",\"write_text\",\"edit_text\",\"create_folder\",\"create_project\",\"build_project\",\"read_build_log\",\"run_application\",\"quit_application\",\"get_file_info\",\"resolve_alias\",\"list_processes\",\"list_fonts\",\"measure_text\",\"list_resources\",\"read_resource\",\"view_image\"],"
         "\"write_policy\":\"create_only_existing_parent\",\"folder_policy\":\"create_only_existing_parent\",\"write_max_bytes\":4096,"
-        "\"edit_policy\":\"unique_exact_whole_revision_CR_backup\",\"edit_max_bytes\":4096,"
-        "\"build_supported\":true,\"launch_supported\":true}", system, q, (long)FreeMem());
+        "\"edit_policy\":\"unique_exact_whole_revision_CR_backup\",\"edit_max_bytes\":%ld,"
+        "\"edit_string_max_bytes\":%d,\"build_input_max_bytes\":%ld,\"descriptor_max_bytes\":%d,\"total_snapshot_max_bytes\":%ld,"
+        "\"build_supported\":true,\"launch_supported\":true}", system, q, (long)FreeMem(), TOOLS_ACCEPTED_FILE_CAP, TOOLS_STRING_CAP, TOOLS_ACCEPTED_FILE_CAP, TOOLS_DESCRIPTOR_CAP, TOOLS_SNAPSHOT_CAP);
+    if(length<0 || (size_t)length>=cap)fail(out,cap,"LIMIT","Environment report exceeds result capacity.",0);
 }
 static void list(const char *s, const JsonToken *tokens, char *out, size_t cap)
 {
@@ -211,90 +214,177 @@ static int same_file(const CInfoPBRec *a, const CInfoPBRec *b)
         a->hFileInfo.ioFlFndrInfo.fdCreator == b->hFileInfo.ioFlFndrInfo.fdCreator &&
         a->hFileInfo.ioFlFndrInfo.fdFlags == b->hFileInfo.ioFlFndrInfo.fdFlags;
 }
-static void read(const char *s, const JsonToken *tokens, char *out, size_t cap)
+/* Read and edit share one retained source snapshot; only one may be active. */
+static char text_source[TOOLS_FILE_CAP + 1], text_edited[TOOLS_FILE_CAP + 1];
+static char text_scratch[TOOLS_WORK_CHUNK];
+static int text_active;
+static int text_arguments(const AgentCall *call, JsonToken *tokens, char *out, size_t cap, int mutation)
 {
-    static char bytes[8193], utf8[AGENT_RESULT_CAP * 3 + 1];
-    char path[512], header[512], revision[80], quoted[AGENT_RESULT_CAP], line_info[100];
-    FSSpec spec;
-    CInfoPBRec pb;
-    short ref;
-    OSErr err, closed;
-    long size, wanted;
-    size_t begin = 0, end = 0, at = 0, i;
-    int line = 1, start = int_arg(s, tokens, "start_line", 1, 1, 100000), maximum = int_arg(s, tokens, "max_lines", 20, 1, 30);
-    int emitted = 0, truncated, whole, editable, base = int_arg(s, tokens, "start_byte", 0, 0, 2147483647);
-    unsigned long hash = 2166136261UL;
-    if (valid_keys(s, tokens, "|path||start_byte||start_line||max_lines|") || string_arg(s, tokens, "path", path, sizeof(path)) < 0 || start < 0 || maximum < 0 || base < 0 || (base && start != 1)) {
-        fail(out, cap, "ARGUMENTS", "Expected path, optional start_line or start_byte, and max_lines.", 0); return;
+    char path[512]; size_t i;
+    if(cap<AGENT_RESULT_CAP || strlen(call->arguments)>=AGENT_ARGUMENT_CAP ||
+       json_parse(call->arguments,strlen(call->arguments),tokens,128)<1 || tokens[0].type!=JSON_OBJECT) {
+        fail(out,cap,"ARGUMENTS","Tool arguments must be a bounded JSON object.",0);return -1;
     }
-    err = spec_for(path, 0, &spec); if (!err) err = catalog(&spec, &pb);
-    if (err) { fail(out, cap, "FILE", "Cannot resolve the workspace file.", err); return; }
-    if (!plain_file(&spec, &pb)) { fail(out, cap, "NOT_TEXT", "Only plain data-fork text is supported; binary files, aliases and resource forks are refused.", 0); return; }
-    err = FSpOpenDF(&spec, fsRdPerm, &ref);
-    if (err) { fail(out, cap, "READ", "Cannot open text file.", err); return; }
-    whole = pb.hFileInfo.ioFlLgLen <= 4096;
-    editable = whole;
-    if ((long)base > pb.hFileInfo.ioFlLgLen || SetFPos(ref, fsFromStart, whole ? 0L : (long)base)) {
-        FSClose(ref); fail(out, cap, "RANGE", "Byte cursor is outside the file.", 0); return;
+    if(mutation && string_arg(call->arguments,tokens,"path",path,sizeof(path))>=0) {
+        for(i=0;path[i];i++)if(path[i]>='A' && path[i]<='Z')path[i]=(char)(path[i]+'a'-'A');
+        if(!strncmp(path,"worker01:buildjobs",18) && (!path[18] || path[18]==':')) {
+            fail(out,cap,"EXECUTION_EVIDENCE_READ_ONLY","Worker queue and snapshots are read-only to source tools.",0);return -1;
+        }
     }
-    size = pb.hFileInfo.ioFlLgLen - (whole ? 0L : (long)base); if (size > 8192) size = 8192;
-    wanted = size;
-    err = FSRead(ref, &size, bytes); closed = FSClose(ref);
-    if (err || closed || size != wanted) { fail(out, cap, "READ", "Text read failed or was short.", err ? err : closed); return; }
-    bytes[size] = 0;
-    for (i = 0; i < (size_t)size; i++) {
-        unsigned char c = (unsigned char)bytes[i];
-        if (!c || c == 127 || (c < 32 && c != 9 && c != 10 && c != 13)) { fail(out, cap, "NOT_TEXT", "The data fork contains binary control bytes.", 0); return; }
-        if (c == 10) editable = 0;
-        hash = ((hash ^ c) * 16777619UL) & 0xffffffffUL;
+    return 0;
+}
+static unsigned long hash_more(unsigned long h,const char *bytes,long n)
+{
+    long i;for(i=0;i<n;i++)h=((h^(unsigned char)bytes[i])*16777619UL)&0xffffffffUL;
+    return h;
+}
+static void revision_hash(const CInfoPBRec *pb,long size,unsigned long h,char *out,size_t cap)
+{
+    snprintf(out,cap,"full-%08lx-%08lx-%08lx-%08lx",(unsigned long)pb->hFileInfo.ioDirID,
+        (unsigned long)pb->hFileInfo.ioFlMdDat,(unsigned long)size,h);
+}
+static struct {
+    FSSpec spec; CInfoPBRec original;
+    short ref; long size,offset,base,begin;
+    int phase,whole,editable,start,maximum,line;
+    uint32_t started; unsigned long hash;
+    char revision[80],quoted[AGENT_RESULT_CAP];
+    size_t quoted_size; long end; int emitted;
+} text_read;
+static int read_finish(char *out,size_t cap,const char *code,int native,int stop)
+{
+    OSErr closed=0;
+    if(text_read.ref>=0) { closed=FSClose(text_read.ref);text_read.ref=-1; }
+    text_active=0;
+    if(code || closed)fail(out,cap,closed ? "CLOSE" : code,"Read failed; no editable revision supplied.",native ? native : closed);
+    return stop || closed ? 1 : 0;
+}
+int read_text_begin(const AgentCall *call,char *out,size_t cap,AgentJournal journal,void *context,uint32_t now)
+{
+    if(cap<AGENT_RESULT_CAP) { if(cap)out[0]=0;return 1; }
+    cap=AGENT_RESULT_CAP;
+    JsonToken tokens[128]; char path[512]; OSErr err;
+    (void)journal;(void)context;
+    if(text_active) { fail(out,cap,"TEXT_BUSY","A text operation is already active.",0);return 1; }
+    if(text_arguments(call,tokens,out,cap,0))return 0;
+    memset(&text_read,0,sizeof(text_read));text_read.ref=-1;
+    text_read.start=int_arg(call->arguments,tokens,"start_line",1,1,100000);
+    text_read.maximum=int_arg(call->arguments,tokens,"max_lines",20,1,30);
+    text_read.base=int_arg(call->arguments,tokens,"start_byte",0,0,2147483647);
+    if(valid_keys(call->arguments,tokens,"|path||start_byte||start_line||max_lines|") ||
+       string_arg(call->arguments,tokens,"path",path,sizeof(path))<0 || text_read.start<0 ||
+       text_read.maximum<0 || text_read.base<0 || (text_read.base && text_read.start!=1)) {
+        fail(out,cap,"ARGUMENTS","Expected path, optional start_line or start_byte, and max_lines.",0);return 0;
     }
-    if (whole) {
-        CInfoPBRec after;
-        err = catalog(&spec, &after);
-        if (err || !same_file(&pb, &after)) { fail(out, cap, "CHANGED", "File changed during read; read it again.", err); return; }
-        full_revision(&pb, bytes, size, revision, sizeof(revision));
-        memmove(bytes, bytes + base, (size_t)(size - base)); size -= base; bytes[size] = 0;
-    } else snprintf(revision, sizeof(revision), "scan-%08lx-%08lx-%08lx", (unsigned long)pb.hFileInfo.ioFlMdDat,
-        (unsigned long)pb.hFileInfo.ioFlLgLen, hash);
-    while (begin < (size_t)size && line < start) {
-        if (bytes[begin] == 13 || (bytes[begin] == 10 && (!begin || bytes[begin - 1] != 13))) line++;
-        begin++;
+    err=tools_resolve(path,&text_read.spec);if(!err)err=catalog(&text_read.spec,&text_read.original);
+    if(err)return read_finish(out,cap,"FILE",err,0);
+    if(!plain_file(&text_read.spec,&text_read.original))return read_finish(out,cap,"NOT_TEXT",0,0);
+    if(text_read.base>text_read.original.hFileInfo.ioFlLgLen)return read_finish(out,cap,"RANGE",0,0);
+    text_read.whole=text_read.original.hFileInfo.ioFlLgLen<=TOOLS_ACCEPTED_FILE_CAP;
+    text_read.editable=text_read.whole;
+    text_read.size=text_read.original.hFileInfo.ioFlLgLen-(text_read.whole ? 0 : text_read.base);
+    if(!text_read.whole && text_read.size>8192)text_read.size=8192;
+    err=FSpOpenDF(&text_read.spec,fsRdPerm,&text_read.ref);
+    if(!err)err=SetFPos(text_read.ref,fsFromStart,text_read.whole ? 0 : text_read.base);
+    if(err)return read_finish(out,cap,"READ",err,0);
+    text_read.started=now;text_read.hash=2166136261UL;text_read.line=1;text_active=1;return 2;
+}
+static int read_page(char *out,size_t cap)
+{
+    char utf8[8],quoted[20],header[512],tail[160],line_info[100];
+    long byte_base=text_read.whole ? 0 : text_read.base;
+    int work=0;
+    for(;;) {
+        long end=text_read.end;
+        int emitted=text_read.emitted,truncated,partial,n=0,q=0;
+        size_t quoted_size=text_read.quoted_size;
+        if(end<text_read.size && emitted<text_read.maximum) {
+            n=text_source[end]==13 && end+1<text_read.size && text_source[end+1]==10 ? 2 : 1;
+            if(work+n>TOOLS_WORK_CHUNK)return 2;
+            if(text_to_utf8(text_source+end,(size_t)n,utf8,sizeof(utf8))<0 ||
+                (q=json_quote(utf8,quoted,sizeof(quoted)))<0)return read_finish(out,cap,"ENCODING",0,0);
+            q-=2;end+=n;quoted_size+=(size_t)q;
+            if(text_source[end-1]==13 || text_source[end-1]==10)emitted++;
+        }
+        truncated=byte_base+end<text_read.original.hFileInfo.ioFlLgLen;
+        partial=end>text_read.begin && text_source[end-1]!=13 && text_source[end-1]!=10 && truncated;
+        if(text_read.base)strcpy(line_info,"\"start_line\":null,\"next_line\":null");
+        else if(partial)snprintf(line_info,sizeof(line_info),"\"start_line\":%d,\"next_line\":null",text_read.start);
+        else snprintf(line_info,sizeof(line_info),"\"start_line\":%d,\"next_line\":%d",text_read.start,
+            text_read.start+emitted+(end>text_read.begin && text_source[end-1]!=13 && text_source[end-1]!=10));
+        snprintf(header,sizeof(header),"{\"status\":\"ok\",\"encoding\":\"MacRoman\",\"revision\":\"%s\",\"revision_scope\":\"%s\",\"editable\":%s,%s,\"text\":\"",text_read.revision,
+            text_read.whole ? "whole_file" : "scan",text_read.editable ? "true" : "false",line_info);
+        snprintf(tail,sizeof(tail),"\",\"truncated\":%s,\"start_byte\":%ld,\"next_byte\":%ld,\"line_partial\":%s}",
+            truncated ? "true" : "false",byte_base+text_read.begin,byte_base+end,partial ? "true" : "false");
+        if(strlen(header)+quoted_size+strlen(tail)>=cap) {
+            if(!text_read.quoted_size)return read_finish(out,cap,"LIMIT",0,0);
+            /* Reformat the already accepted prefix without adding a byte. */
+            text_read.maximum=text_read.emitted;
+            continue;
+        }
+        if(n) {
+            memcpy(text_read.quoted+text_read.quoted_size,quoted+1,(size_t)q);
+            text_read.quoted_size=quoted_size;text_read.quoted[quoted_size]=0;
+            text_read.end=end;text_read.emitted=emitted;work+=n;
+        } else {
+            size_t at=0;
+            if(append(out,cap,&at,header) || append(out,cap,&at,text_read.quoted) || append(out,cap,&at,tail))
+                return read_finish(out,cap,"LIMIT",0,0);
+            text_active=0;return 0;
+        }
     }
-    if (line != start) { fail(out, cap, "RANGE", "Requested line is beyond the bounded 8192-byte prefix. Read an earlier line.", 0); return; }
-    if (begin && begin < (size_t)size && bytes[begin] == 10 && bytes[begin - 1] == 13) begin++;
-    end = begin;
-    /* Keep results compact enough for guaranteed tool-result history reserve. */
-    while (end < (size_t)size && emitted < maximum && end - begin < AGENT_RESULT_CAP) {
-        char c = bytes[end++];
-        if (c == 13 || (c == 10 && (end < 2 || bytes[end - 2] != 13))) emitted++;
-    }
-    if (end > begin && end < (size_t)size && bytes[end - 1] == 13 && bytes[end] == 10) end++;
-    /* Measure the converted text and complete JSON envelope. Shrinking can
-     * change cursor digits and partial-line fields, so measure them together. */
-    for (;;) {
-        if (end > begin && end < (size_t)size && bytes[end - 1] == 13 && bytes[end] == 10) end--;
-        if (text_to_utf8(bytes + begin, end - begin, utf8, sizeof(utf8)) < 0 ||
-            json_quote(utf8, quoted, sizeof(quoted)) < 0) goto smaller;
-        emitted = 0;
-        for (i = begin; i < end; i++) if (bytes[i] == 13 || (bytes[i] == 10 && (!i || bytes[i - 1] != 13))) emitted++;
-        if (end > begin && bytes[end - 1] != 13 && bytes[end - 1] != 10) emitted++;
-        truncated = (long)end + base < pb.hFileInfo.ioFlLgLen;
-        if (base) strcpy(line_info, "\"start_line\":null,\"next_line\":null");
-        else if (end > begin && bytes[end - 1] != 10 && bytes[end - 1] != 13 && truncated)
-            snprintf(line_info, sizeof(line_info), "\"start_line\":%d,\"next_line\":null", start);
-        else snprintf(line_info, sizeof(line_info), "\"start_line\":%d,\"next_line\":%d", start, start + emitted);
-        snprintf(header, sizeof(header), "{\"status\":\"ok\",\"encoding\":\"MacRoman\",\"revision\":\"%s\",\"revision_scope\":\"%s\",\"editable\":%s,%s,\"text\":", revision, whole ? "whole_file" : "scan", editable ? "true" : "false", line_info);
-        at = 0;
-        if (append(out, cap, &at, header) || append(out, cap, &at, quoted)) goto smaller;
-        snprintf(header, sizeof(header), ",\"truncated\":%s,\"start_byte\":%ld,\"next_byte\":%ld,\"line_partial\":%s}",
-            truncated ? "true" : "false", base + (long)begin, base + (long)end,
-            end > begin && bytes[end - 1] != 10 && bytes[end - 1] != 13 && truncated ? "true" : "false");
-        if (!append(out, cap, &at, header)) return;
-smaller:
-        if (end == begin) { fail(out, cap, "LIMIT", "Text result exceeds output capacity.", 0); return; }
-        end--;
-    }
+}
+int read_text_step(char *out,size_t cap,uint32_t now,int stop)
+{
 
+    long n,got,i; OSErr err; CInfoPBRec after;
+    if(text_active!=1) { fail(out,cap,"NO_ACTIVE_READ","No active text read.",0);return 1; }
+    if(cap<AGENT_RESULT_CAP)return read_finish(out,cap,"LIMIT",0,1);
+    cap=AGENT_RESULT_CAP;
+    if(stop || (uint32_t)(now-text_read.started)>=60UL*60UL)return read_finish(out,cap,stop ? "STOPPED" : "DEADLINE",0,1);
+    n=text_read.size-text_read.offset;if(n>TOOLS_WORK_CHUNK)n=TOOLS_WORK_CHUNK;
+    if(text_read.phase<2) {
+        got=n;
+        err=FSRead(text_read.ref,&got,text_read.phase ? text_scratch : text_source+text_read.offset);
+        if(err || got!=n)return read_finish(out,cap,"READ",err ? err : ioErr,0);
+        if(text_read.phase) {
+            if(memcmp(text_scratch,text_source+text_read.offset,(size_t)n))return read_finish(out,cap,"CHANGED",0,0);
+        } else {
+            for(i=0;i<n;i++) {
+                unsigned char c=(unsigned char)text_source[text_read.offset+i];
+                if(!c || c==127 || (c<32 && c!=9 && c!=10 && c!=13))return read_finish(out,cap,"NOT_TEXT",0,0);
+                if(c==10)text_read.editable=0;
+            }
+            text_read.hash=hash_more(text_read.hash,text_source+text_read.offset,n);
+        }
+        text_read.offset+=n;
+        if(text_read.offset<text_read.size)return 2;
+        if(text_read.whole && !text_read.phase) {
+            text_read.offset=0;text_read.phase=1;
+            err=SetFPos(text_read.ref,fsFromStart,0);
+            if(err)return read_finish(out,cap,"READ",err,0);
+            return 2;
+        }
+        err=catalog(&text_read.spec,&after);
+        if(err || !same_file(&text_read.original,&after))return read_finish(out,cap,"CHANGED",err,0);
+        if(read_finish(out,cap,NULL,0,0))return 1;
+        if(text_read.whole)revision_hash(&after,text_read.size,text_read.hash,text_read.revision,sizeof(text_read.revision));
+        else snprintf(text_read.revision,sizeof(text_read.revision),"scan-%08lx-%08lx-%08lx",(unsigned long)after.hFileInfo.ioFlMdDat,(unsigned long)after.hFileInfo.ioFlLgLen,text_read.hash);
+        text_read.begin=text_read.whole ? text_read.base : 0;
+        text_read.phase=2;text_active=1;return 2;
+    }
+    if(text_read.phase==3)return read_page(out,cap);
+    /* Line navigation over the verified snapshot is cooperative as well. */
+    for(i=0;i<TOOLS_WORK_CHUNK && text_read.begin<text_read.size && text_read.line<text_read.start;i++) {
+        long b=text_read.begin++;
+        if(text_source[b]==13 || (text_source[b]==10 && (!b || text_source[b-1]!=13)))text_read.line++;
+    }
+    if(text_read.line<text_read.start) {
+        if(text_read.begin<text_read.size)return 2;
+        return read_finish(out,cap,"RANGE",0,0);
+    }
+    if(text_read.begin && text_read.begin<text_read.size && text_source[text_read.begin]==10 && text_source[text_read.begin-1]==13)text_read.begin++;
+    text_read.end=text_read.begin;text_read.phase=3;return 2;
 }
 /* AGENTS.md: one bounded whole-file read of <folder>:AGENTS.md with the same
  * plain-text rules as read_text. Absence is ordinary and silent; anything
@@ -586,7 +676,7 @@ static int mutation_result(char *out, size_t cap, const char *status, const char
 static int write_text(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap,
                       AgentJournal journal, void *context)
 {
-    static char utf8[AGENT_ARGUMENT_CAP], bytes[4097], observed[4097];
+    static char utf8[AGENT_ARGUMENT_CAP], bytes[TOOLS_STRING_CAP+1], observed[4097];
     char path[512], temporary[768], tempname[32], revision[80] = "", record[AGENT_RESULT_CAP];
     char call_id[800], envelope[AGENT_RESULT_CAP + 900];
     FSSpec target, stage;
@@ -697,173 +787,277 @@ static int edit_result(char *out, size_t cap, const char *status, const char *co
  * journal both sibling paths before moving anything, retain the original,
  * recheck its identity/bytes after rename, and stop on any uncertain outcome.
  * External POSIX writers bypass AFP locks; never edit concurrently that way. */
-static int edit_text(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap,
-                     AgentJournal journal, void *context)
+/* Every phase advances at most one transfer or a bounded comparison budget.
+ * The original remains exclusively open through both renames. */
+enum TextEditPhase { E_READ, E_REWIND, E_INITIAL_VERIFY, E_PREFIX, E_MATCH,
+    E_COPY, E_NAME, E_WRITE, E_STAGE_OPEN, E_STAGE_VERIFY, E_STAGED,
+    E_ORIGINAL_OPEN, E_ORIGINAL_VERIFY, E_BACKUP_RENAME, E_BACKUP_OPEN,
+    E_BACKUP_VERIFY, E_BACKED_UP, E_PUBLISH, E_PUBLISHED_OPEN,
+    E_PUBLISHED_VERIFY, E_COMMIT };
+static struct {
+    FSSpec target,stage,backup; CInfoPBRec original,staged;
+    short ref,aux; enum TextEditPhase phase;
+    long size,length,offset,found; int old_len,new_len,matched,matches,attempt,renamed,retained,changed;
+    int prefix_at,prefix_match; unsigned short prefix[TOOLS_STRING_CAP];
+    unsigned long source_hash,edited_hash; uint32_t started;
+    AgentJournal journal; void *context;
+    char path[512],temporary[768],backup_path[768],expected[80],previous[80],revision[80],call_id[800];
+    char old[TOOLS_STRING_CAP+1],replacement[TOOLS_STRING_CAP+1];
+} text_edit;
+static int edit_finish(char *out,size_t cap,const char *code,int native,int stop)
 {
-    static char utf8[AGENT_ARGUMENT_CAP], old[4097], replacement[4097], source[4097],
-        bytes[4097], observed[4097];
-    char path[512], temporary[768], backup_path[768], tempname[32], backupname[32];
-    char expected[80], revision[80] = "", previous[80], call_id[800];
-    char record[AGENT_RESULT_CAP], envelope[AGENT_RESULT_CAP + 900];
-    FSSpec target, stage, backup;
-    CInfoPBRec original, staged, pb;
-    OSErr err, closed;
-    short ref = -1, stage_ref;
-    long size, count;
-    int old_len, new_len, length, attempt, matches = 0, found = 0, stop = 0;
-    size_t prefix, i;
-    const char *code = "STAGE_FAILED_INSPECT_TEMP", *status = "error";
-    if (valid_keys(call->arguments, tokens, "|path||expected_revision||old_text||new_text|") ||
-        string_arg(call->arguments, tokens, "path", path, sizeof(path)) < 0 ||
-        string_arg(call->arguments, tokens, "expected_revision", expected, sizeof(expected)) < 0 ||
-        strncmp(expected, "full-", 5) ||
-        string_arg(call->arguments, tokens, "old_text", utf8, sizeof(utf8)) < 0) {
-        fail(out, cap, "ARGUMENTS", "Expected path, whole-file expected_revision, nonempty old_text and new_text.", 0); return 0;
+    OSErr c;
+    if(text_edit.aux>=0) { c=FSClose(text_edit.aux);text_edit.aux=-1;if(c) { native=c;stop=1; } }
+    if(text_edit.ref>=0) { c=FSClose(text_edit.ref);text_edit.ref=-1;if(c) { native=c;stop=1; } }
+    text_active=0;
+    if(text_edit.retained || text_edit.renamed)
+        edit_result(out,cap,text_edit.renamed ? "uncertain" : "error",code,text_edit.path,text_edit.temporary,
+                    text_edit.backup_path,text_edit.length,text_edit.revision,text_edit.previous,native);
+    else fail(out,cap,code,"Edit refused; source unchanged. Requires a current whole-file revision and one unique exact match.",native);
+    return stop || text_edit.renamed ? 1 : 0;
+}
+static int edit_record(const char *event,const char *status)
+{
+    static char record[AGENT_RESULT_CAP],envelope[AGENT_RESULT_CAP+900];
+    if(edit_result(record,sizeof(record),status,!strcmp(status,"ok") ? "EDITED" : "EXACT_EDIT",text_edit.path,!strcmp(status,"ok") ? "" : text_edit.temporary,
+                   text_edit.backup_path,text_edit.length,text_edit.revision,text_edit.previous,0))return -1;
+    snprintf(envelope,sizeof(envelope),"{\"call_id\":%s,\"mutation\":%s}",text_edit.call_id,record);
+    return text_edit.journal(text_edit.context,event,envelope);
+}
+int edit_text_begin(const AgentCall *call,char *out,size_t cap,AgentJournal journal,void *context,uint32_t now)
+{
+    if(cap<AGENT_RESULT_CAP) { if(cap)out[0]=0;return 1; }
+    cap=AGENT_RESULT_CAP;
+    static char utf8[AGENT_ARGUMENT_CAP];JsonToken tokens[128];OSErr err;int i;
+    if(text_active) { fail(out,cap,"TEXT_BUSY","A text operation is already active.",0);return 1; }
+    if(text_arguments(call,tokens,out,cap,1))return 0;
+    memset(&text_edit,0,sizeof(text_edit));text_edit.ref=text_edit.aux=-1;
+    if(valid_keys(call->arguments,tokens,"|path||expected_revision||old_text||new_text|") ||
+       string_arg(call->arguments,tokens,"path",text_edit.path,sizeof(text_edit.path))<0 ||
+       string_arg(call->arguments,tokens,"expected_revision",text_edit.expected,sizeof(text_edit.expected))<0 ||
+       strncmp(text_edit.expected,"full-",5) || string_arg(call->arguments,tokens,"old_text",utf8,sizeof(utf8))<0)
+        return edit_finish(out,cap,"ARGUMENTS",0,0);
+    text_edit.old_len=text_to_macroman_strict(utf8,text_edit.old,sizeof(text_edit.old));
+    if(string_arg(call->arguments,tokens,"new_text",utf8,sizeof(utf8))<0)return edit_finish(out,cap,"ARGUMENTS",0,0);
+    text_edit.new_len=text_to_macroman_strict(utf8,text_edit.replacement,sizeof(text_edit.replacement));
+    if(text_edit.old_len<1 || text_edit.new_len<0)return edit_finish(out,cap,"ENCODING_LIMIT",0,0);
+    for(i=0;i<text_edit.old_len+text_edit.new_len;i++) {
+        unsigned char c=(unsigned char)(i<text_edit.old_len ? text_edit.old[i] : text_edit.replacement[i-text_edit.old_len]);
+        if(c==127 || (c<32 && c!=9 && c!=13))return edit_finish(out,cap,"NOT_TEXT",0,0);
     }
-    old_len = text_to_macroman_strict(utf8, old, sizeof(old));
-    if (string_arg(call->arguments, tokens, "new_text", utf8, sizeof(utf8)) < 0) {
-        fail(out, cap, "ARGUMENTS", "new_text must be a string.", 0); return 0;
-    }
-    new_len = text_to_macroman_strict(utf8, replacement, sizeof(replacement));
-    if (old_len < 1 || new_len < 0) {
-        fail(out, cap, "ENCODING_LIMIT", "old_text must be nonempty; both strings must fit 4096 MacRoman bytes.", 0); return 0;
-    }
-    for (i = 0; i < (size_t)(old_len + new_len); i++) {
-        unsigned char c = (unsigned char)(i < (size_t)old_len ? old[i] : replacement[i - old_len]);
-        if ((c < 32 && c != 9 && c != 13) || c == 127) {
-            fail(out, cap, "NOT_TEXT", "Binary controls are refused.", 0); return 0;
+    err=tools_resolve(text_edit.path,&text_edit.target);if(!err)err=catalog(&text_edit.target,&text_edit.original);
+    if(err)return edit_finish(out,cap,"PATH",err,0);
+    if(!plain_file(&text_edit.target,&text_edit.original))return edit_finish(out,cap,"NOT_TEXT",0,0);
+    text_edit.size=text_edit.original.hFileInfo.ioFlLgLen;
+    if(text_edit.size<0 || text_edit.size>TOOLS_ACCEPTED_FILE_CAP)return edit_finish(out,cap,"LIMIT",0,0);
+    if(!journal || json_quote(call->id,text_edit.call_id,sizeof(text_edit.call_id))<0)return edit_finish(out,cap,"JOURNAL",0,1);
+    err=FSpOpenDF(&text_edit.target,fsRdWrPerm,&text_edit.ref);
+    if(err)return edit_finish(out,cap,"BUSY",err,0);
+    text_edit.journal=journal;text_edit.context=context;text_edit.started=now;
+    text_edit.source_hash=text_edit.edited_hash=2166136261UL;text_edit.prefix_at=1;
+    text_active=2;return 2;
+}
+/* A verification phase compares exact retained bytes, never just hashes. */
+static int edit_compare(short ref,const char *expected,long length)
+{
+    long n=length-text_edit.offset,got;OSErr err;
+    if(n>TOOLS_WORK_CHUNK)n=TOOLS_WORK_CHUNK;
+    got=n;err=FSRead(ref,&got,text_scratch);
+    if(err || got!=n || memcmp(text_scratch,expected+text_edit.offset,(size_t)n))return err ? err : ioErr;
+    text_edit.offset+=n;return 0;
+}
+int edit_text_step(char *out,size_t cap,uint32_t now,int stop)
+{
+
+    CInfoPBRec pb;OSErr err=0,c;long n,got,i;int budget;
+    if(text_active!=2) { fail(out,cap,"NO_ACTIVE_EDIT","No active text edit.",0);return 1; }
+    if(cap<AGENT_RESULT_CAP)return edit_finish(out,cap,"LIMIT",0,1);
+    cap=AGENT_RESULT_CAP;
+    if(stop || (uint32_t)(now-text_edit.started)>=60UL*60UL)
+        return edit_finish(out,cap,stop ? "STOPPED_INSPECT_PATHS" : "DEADLINE_INSPECT_PATHS",0,1);
+    switch(text_edit.phase) {
+    case E_READ:
+        n=text_edit.size-text_edit.offset;if(n>TOOLS_WORK_CHUNK)n=TOOLS_WORK_CHUNK;
+        got=n;err=FSRead(text_edit.ref,&got,text_source+text_edit.offset);
+        if(err || got!=n)return edit_finish(out,cap,"READ",err ? err : ioErr,0);
+        for(i=0;i<n;i++) {
+            unsigned char ch=(unsigned char)text_source[text_edit.offset+i];
+            if(ch==127 || (ch<32 && ch!=9 && ch!=13))return edit_finish(out,cap,ch==10 ? "LINE_ENDINGS" : "NOT_TEXT",0,0);
         }
-    }
-    err = tools_resolve(path, &target); if (!err) err = catalog(&target, &original);
-    if (err) { fail(out, cap, "PATH", "Expected an existing workspace file with non-alias parents.", err); return 0; }
-    if (!plain_file(&target, &original)) { fail(out, cap, "NOT_TEXT", "Only plain data-fork text can be edited.", 0); return 0; }
-    size = original.hFileInfo.ioFlLgLen;
-    if (size < 0 || size > 4096) { fail(out, cap, "LIMIT", "Editable source must be at most 4096 bytes.", 0); return 0; }
-    err = FSpOpenDF(&target, fsRdWrPerm, &ref);
-    if (err) { fail(out, cap, "BUSY", "Cannot exclusively open source; close other users of the file.", err); return 0; }
-    count = size; err = FSRead(ref, &count, source);
-    if (!err && count != size) err = ioErr;
-    if (!err) err = catalog(&target, &pb);
-    if (!err && !same_file(&original, &pb)) err = ioErr;
-    if (err) { code = "READ"; goto before_stage; }
-    source[size] = 0;
-    for (i = 0; i < (size_t)size; i++) {
-        unsigned char c = (unsigned char)source[i];
-        if ((c < 32 && c != 9 && c != 13) || c == 127) { code = c == 10 ? "LINE_ENDINGS" : "NOT_TEXT"; goto before_stage; }
-    }
-    full_revision(&original, source, size, previous, sizeof(previous));
-    if (strcmp(expected, previous)) { code = "REVISION_MISMATCH"; goto before_stage; }
-    /* Count overlapping matches as ambiguous too. */
-    for (i = 0; i + (size_t)old_len <= (size_t)size; i++)
-        if (!memcmp(source + i, old, (size_t)old_len)) { matches++; found = (int)i; }
-    if (matches != 1) { code = matches ? "AMBIGUOUS_MATCH" : "NO_MATCH"; goto before_stage; }
-    length = (int)size - old_len + new_len;
-    if (length > 4096) { code = "LIMIT"; goto before_stage; }
-    memcpy(bytes, source, (size_t)found);
-    memcpy(bytes + found, replacement, (size_t)new_len);
-    memcpy(bytes + found + new_len, source + found + old_len, (size_t)(size - found - old_len));
-    bytes[length] = 0;
-    if (length == size && !memcmp(bytes, source, (size_t)size)) { code = "NO_CHANGE"; goto before_stage; }
-    if (!journal || json_quote(call->id, call_id, sizeof(call_id)) < 0) { code = "JOURNAL"; stop = 1; goto before_stage; }
-    prefix = strrchr(path, ':') ? (size_t)(strrchr(path, ':') - path + 1) : 0;
-    for (attempt = 0; attempt < 100; attempt++) {
-        extern unsigned long TickCount(void);
-        unsigned long tick = (unsigned long)TickCount() & 0xffffffffUL;
-        snprintf(tempname, sizeof(tempname), "Sherclawk tmp %08lx %02x", tick, attempt);
-        snprintf(backupname, sizeof(backupname), "Sherclawk bak %08lx %02x", tick, attempt);
-        stage = backup = target;
-        stage.name[0] = (unsigned char)strlen(tempname); memcpy(stage.name + 1, tempname, stage.name[0]);
-        backup.name[0] = (unsigned char)strlen(backupname); memcpy(backup.name + 1, backupname, backup.name[0]);
-        err = catalog(&stage, &pb); if (!err) continue;
-        if (err != fnfErr) { code = "STAGE"; goto before_stage; }
-        err = catalog(&backup, &pb); if (!err) continue;
-        if (err != fnfErr) { code = "STAGE"; goto before_stage; }
-        snprintf(temporary, sizeof(temporary), "%.*s%s", (int)prefix, path, tempname);
-        snprintf(backup_path, sizeof(backup_path), "%.*s%s", (int)prefix, path, backupname);
-        /* Reserve room for the longer error codes before creating a stage. */
-        if (edit_result(record, sizeof(record) - 100, "pending", "EXACT_EDIT", path, temporary,
-                        backup_path, length, expected, previous, 0)) { code = "LIMIT"; goto before_stage; }
-        snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
-        if (journal(context, "mutation_intent", envelope)) { code = "JOURNAL"; stop = 1; goto before_stage; }
-        err = FSpCreate(&stage, 'ttxt', 'TEXT', smSystemScript);
-        if (err == dupFNErr) continue;
+        text_edit.source_hash=hash_more(text_edit.source_hash,text_source+text_edit.offset,n);
+        text_edit.offset+=n;if(text_edit.offset==text_edit.size)text_edit.phase=E_REWIND;
         break;
+    case E_REWIND:
+        err=catalog(&text_edit.target,&pb);
+        if(!err && !same_file(&text_edit.original,&pb))err=ioErr;
+        if(!err)err=SetFPos(text_edit.ref,fsFromStart,0);
+        if(err)return edit_finish(out,cap,"CHANGED",err,0);
+        text_edit.offset=0;text_edit.phase=E_INITIAL_VERIFY;break;
+    case E_INITIAL_VERIFY:
+        err=edit_compare(text_edit.ref,text_source,text_edit.size);
+        if(err)return edit_finish(out,cap,"CHANGED",err,0);
+        if(text_edit.offset<text_edit.size)break;
+        err=catalog(&text_edit.target,&pb);
+        if(err || !same_file(&text_edit.original,&pb))return edit_finish(out,cap,"CHANGED",err,0);
+        revision_hash(&pb,text_edit.size,text_edit.source_hash,text_edit.previous,sizeof(text_edit.previous));
+        if(strcmp(text_edit.previous,text_edit.expected))return edit_finish(out,cap,"REVISION_MISMATCH",0,0);
+        text_edit.phase=E_PREFIX;break;
+    case E_PREFIX:
+        /* KMP prefix construction and matching each charge every comparison,
+         * including fallback comparisons, against the same per-step budget. */
+        budget=TOOLS_WORK_CHUNK;
+        while(text_edit.prefix_at<text_edit.old_len && budget--) {
+            int at=text_edit.prefix_at,m=text_edit.prefix_match;
+            if(text_edit.old[at]==text_edit.old[m]) {
+                text_edit.prefix_match=m+1;text_edit.prefix[at]=(unsigned short)(m+1);text_edit.prefix_at++;
+            } else if(m)text_edit.prefix_match=text_edit.prefix[m-1];
+            else { text_edit.prefix[at]=0;text_edit.prefix_at++; }
+        }
+        if(text_edit.prefix_at==text_edit.old_len) { text_edit.offset=0;text_edit.phase=E_MATCH; }
+        break;
+    case E_MATCH:
+        budget=TOOLS_WORK_CHUNK;
+        while(text_edit.offset<text_edit.size && budget--) {
+            int m=text_edit.matched;
+            if(text_source[text_edit.offset]==text_edit.old[m]) {
+                text_edit.offset++;text_edit.matched++;
+                if(text_edit.matched==text_edit.old_len) {
+                    text_edit.found=text_edit.offset-text_edit.old_len;
+                    if(++text_edit.matches==2)return edit_finish(out,cap,"AMBIGUOUS_MATCH",0,0);
+                    text_edit.matched=text_edit.prefix[text_edit.matched-1];
+                }
+            } else if(m)text_edit.matched=text_edit.prefix[m-1];
+            else text_edit.offset++;
+        }
+        if(text_edit.offset<text_edit.size)break;
+        if(!text_edit.matches)return edit_finish(out,cap,"NO_MATCH",0,0);
+        text_edit.length=text_edit.size-text_edit.old_len+text_edit.new_len;
+        if(text_edit.length>TOOLS_ACCEPTED_FILE_CAP)return edit_finish(out,cap,"LIMIT",0,0);
+        text_edit.changed=text_edit.length!=text_edit.size;
+        text_edit.offset=0;text_edit.phase=E_COPY;break;
+    case E_COPY:
+        n=text_edit.length-text_edit.offset;if(n>TOOLS_WORK_CHUNK)n=TOOLS_WORK_CHUNK;
+        for(i=0;i<n;i++) {
+            long at=text_edit.offset+i;
+            text_edited[at]=at<text_edit.found ? text_source[at] :
+                at<text_edit.found+text_edit.new_len ? text_edit.replacement[at-text_edit.found] :
+                text_source[at-text_edit.new_len+text_edit.old_len];
+        }
+        if(!text_edit.changed && memcmp(text_edited+text_edit.offset,text_source+text_edit.offset,(size_t)n))text_edit.changed=1;
+        text_edit.edited_hash=hash_more(text_edit.edited_hash,text_edited+text_edit.offset,n);
+        text_edit.offset+=n;if(text_edit.offset==text_edit.length) {
+            if(!text_edit.changed)return edit_finish(out,cap,"NO_CHANGE",0,0);
+            text_edit.phase=E_NAME;
+        }
+        break;
+    case E_NAME: {
+        char tmp[32],bak[32];size_t prefix=strrchr(text_edit.path,':') ? (size_t)(strrchr(text_edit.path,':')-text_edit.path+1) : 0;
+        static char record[AGENT_RESULT_CAP];
+        if(text_edit.attempt==100)return edit_finish(out,cap,"STAGE",0,0);
+        snprintf(tmp,sizeof(tmp),"Sherclawk tmp %08lx %02x",(unsigned long)text_edit.started,text_edit.attempt);
+        snprintf(bak,sizeof(bak),"Sherclawk bak %08lx %02x",(unsigned long)text_edit.started,text_edit.attempt++);
+        text_edit.stage=text_edit.backup=text_edit.target;
+        text_edit.stage.name[0]=(unsigned char)strlen(tmp);memcpy(text_edit.stage.name+1,tmp,text_edit.stage.name[0]);
+        text_edit.backup.name[0]=(unsigned char)strlen(bak);memcpy(text_edit.backup.name+1,bak,text_edit.backup.name[0]);
+        err=catalog(&text_edit.stage,&pb);if(!err)break;
+        if(err!=fnfErr)return edit_finish(out,cap,"STAGE",err,0);
+        err=catalog(&text_edit.backup,&pb);if(!err)break;
+        if(err!=fnfErr)return edit_finish(out,cap,"STAGE",err,0);
+        snprintf(text_edit.temporary,sizeof(text_edit.temporary),"%.*s%s",(int)prefix,text_edit.path,tmp);
+        snprintf(text_edit.backup_path,sizeof(text_edit.backup_path),"%.*s%s",(int)prefix,text_edit.path,bak);
+        if(edit_result(record,sizeof(record)-100,"pending","EXACT_EDIT",text_edit.path,text_edit.temporary,
+            text_edit.backup_path,text_edit.length,text_edit.expected,text_edit.previous,0))return edit_finish(out,cap,"LIMIT",0,0);
+        strcpy(text_edit.revision,text_edit.expected);
+        if(edit_record("mutation_intent","pending"))return edit_finish(out,cap,"JOURNAL",0,1);
+        err=FSpCreate(&text_edit.stage,'ttxt','TEXT',smSystemScript);
+        if(err==dupFNErr)break;
+        text_edit.retained=1;
+        if(!err)err=FSpOpenDF(&text_edit.stage,fsWrPerm,&text_edit.aux);
+        if(err)return edit_finish(out,cap,"STAGE_FAILED_INSPECT_TEMP",err,0);
+        text_edit.offset=0;text_edit.phase=E_WRITE;break;
     }
-    if (attempt == 100) { code = "STAGE"; goto before_stage; }
-    if (err) goto staged_error;
-    err = FSpOpenDF(&stage, fsWrPerm, &stage_ref); if (err) goto staged_error;
-    count = length; err = FSWrite(stage_ref, &count, bytes); closed = FSClose(stage_ref);
-    if (!err && count != length) err = ioErr;
-    if (!err) err = closed;
-    if (err) goto staged_error;
-    err = FlushVol(NULL, stage.vRefNum); if (err) goto staged_error;
-    err = catalog(&stage, &pb);
-    if (!err && (pb.hFileInfo.ioFlLgLen != length || !plain_file(&stage, &pb) || pb.hFileInfo.ioFlFndrInfo.fdType != 'TEXT')) err = ioErr;
-    if (err) goto staged_error;
-    err = FSpOpenDF(&stage, fsRdPerm, &stage_ref); if (err) goto staged_error;
-    count = length; err = FSRead(stage_ref, &count, observed); closed = FSClose(stage_ref);
-    if (!err && (count != length || memcmp(bytes, observed, (size_t)length))) err = ioErr;
-    if (!err) err = closed;
-    if (err) goto staged_error;
-    full_revision(&pb, bytes, length, revision, sizeof(revision));
-    staged = pb;
-    edit_result(record, sizeof(record), "staged", "EXACT_EDIT", path, temporary, backup_path, length, revision, previous, 0);
-    snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
-    if (journal(context, "mutation_staged", envelope)) { code = "JOURNAL_STAGE_RETAINED"; stop = 1; goto staged_error; }
-    err = catalog(&target, &pb);
-    if (!err && !same_file(&original, &pb)) err = ioErr;
-    if (!err) err = SetFPos(ref, fsFromStart, 0);
-    count = size; if (!err) err = FSRead(ref, &count, observed);
-    if (!err && (count != size || memcmp(source, observed, (size_t)size))) err = ioErr;
-    if (err) { code = "CHANGED_STAGE_RETAINED"; goto staged_error; }
-    /* From here every failure is uncertain: no automatic rollback/retry. */
-    stop = 1; status = "uncertain"; code = "PUBLISH_INSPECT_PATHS";
-    err = FSpRename(&target, backup.name); if (err) goto staged_error;
-    err = FlushVol(NULL, target.vRefNum); if (err) goto staged_error;
-    err = catalog(&backup, &pb);
-    /* Some filesystems update modification time on rename; identity, content,
-     * size and original Finder metadata must still match. */
-    pb.hFileInfo.ioFlMdDat = original.hFileInfo.ioFlMdDat;
-    if (!err && !same_file(&original, &pb)) err = ioErr;
-    if (!err) err = SetFPos(ref, fsFromStart, 0);
-    count = size; if (!err) err = FSRead(ref, &count, observed);
-    if (!err && (count != size || memcmp(source, observed, (size_t)size))) err = ioErr;
-    if (err) goto staged_error;
-    edit_result(record, sizeof(record), "backed_up", "EXACT_EDIT", path, temporary, backup_path, length, revision, previous, 0);
-    snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
-    if (journal(context, "mutation_backed_up", envelope)) { code = "JOURNAL_BACKUP_RETAINED"; goto staged_error; }
-    err = FSpRename(&stage, target.name); if (err) goto staged_error;
-    err = FlushVol(NULL, target.vRefNum); if (err) goto staged_error;
-    err = catalog(&target, &pb);
-    if (!err) {
-        CInfoPBRec renamed = pb;
-        renamed.hFileInfo.ioFlMdDat = staged.hFileInfo.ioFlMdDat;
-        if (!same_file(&staged, &renamed) || !plain_file(&target, &pb)) err = ioErr;
+    case E_WRITE:
+        n=text_edit.length-text_edit.offset;if(n>TOOLS_WORK_CHUNK)n=TOOLS_WORK_CHUNK;
+        got=n;err=FSWrite(text_edit.aux,&got,text_edited+text_edit.offset);
+        if(err || got!=n)return edit_finish(out,cap,"STAGE_FAILED_INSPECT_TEMP",err ? err : ioErr,0);
+        text_edit.offset+=n;
+        if(text_edit.offset==text_edit.length) {
+            c=FSClose(text_edit.aux);text_edit.aux=-1;
+            if(!c)c=FlushVol(NULL,text_edit.stage.vRefNum);
+            if(c)return edit_finish(out,cap,"STAGE_FAILED_INSPECT_TEMP",c,0);
+            text_edit.phase=E_STAGE_OPEN;
+        }
+        break;
+    case E_STAGE_OPEN:
+        err=catalog(&text_edit.stage,&text_edit.staged);
+        if(!err && (text_edit.staged.hFileInfo.ioFlLgLen!=text_edit.length || !plain_file(&text_edit.stage,&text_edit.staged) ||
+            text_edit.staged.hFileInfo.ioFlFndrInfo.fdType!='TEXT' || text_edit.staged.hFileInfo.ioFlFndrInfo.fdCreator!='ttxt'))err=ioErr;
+        if(!err)err=FSpOpenDF(&text_edit.stage,fsRdPerm,&text_edit.aux);
+        if(err)return edit_finish(out,cap,"STAGE_FAILED_INSPECT_TEMP",err,0);
+        text_edit.offset=0;text_edit.phase=E_STAGE_VERIFY;break;
+    case E_STAGE_VERIFY:
+    case E_PUBLISHED_VERIFY:
+        err=edit_compare(text_edit.aux,text_edited,text_edit.length);
+        if(err)return edit_finish(out,cap,"STAGE_FAILED_INSPECT_TEMP",err,0);
+        if(text_edit.offset<text_edit.length)break;
+        c=FSClose(text_edit.aux);text_edit.aux=-1;
+        if(c)return edit_finish(out,cap,"CLOSE_INSPECT_PATHS",c,1);
+        err=catalog(text_edit.phase==E_STAGE_VERIFY ? &text_edit.stage : &text_edit.target,&pb);
+        { CInfoPBRec normalized=pb;normalized.hFileInfo.ioFlMdDat=text_edit.staged.hFileInfo.ioFlMdDat;
+          if(!err && !same_file(&text_edit.staged,&normalized))err=ioErr; }
+        if(err)return edit_finish(out,cap,"CHANGED_INSPECT_PATHS",err,0);
+        revision_hash(&pb,text_edit.length,text_edit.edited_hash,text_edit.revision,sizeof(text_edit.revision));
+        text_edit.phase=text_edit.phase==E_STAGE_VERIFY ? E_STAGED : E_COMMIT;break;
+    case E_STAGED:
+        if(edit_record("mutation_staged","staged"))return edit_finish(out,cap,"JOURNAL_STAGE_RETAINED",0,1);
+        text_edit.phase=E_ORIGINAL_OPEN;break;
+    case E_ORIGINAL_OPEN:
+    case E_BACKUP_OPEN:
+        err=catalog(text_edit.phase==E_ORIGINAL_OPEN ? &text_edit.target : &text_edit.backup,&pb);
+        if(text_edit.phase==E_BACKUP_OPEN)pb.hFileInfo.ioFlMdDat=text_edit.original.hFileInfo.ioFlMdDat;
+        if(!err && !same_file(&text_edit.original,&pb))err=ioErr;
+        if(!err)err=SetFPos(text_edit.ref,fsFromStart,0);
+        if(err)return edit_finish(out,cap,"CHANGED_STAGE_RETAINED",err,0);
+        text_edit.offset=0;text_edit.phase=text_edit.phase==E_ORIGINAL_OPEN ? E_ORIGINAL_VERIFY : E_BACKUP_VERIFY;break;
+    case E_ORIGINAL_VERIFY:
+    case E_BACKUP_VERIFY:
+        err=edit_compare(text_edit.ref,text_source,text_edit.size);
+        if(err)return edit_finish(out,cap,"CHANGED_STAGE_RETAINED",err,0);
+        if(text_edit.offset<text_edit.size)break;
+        err=catalog(text_edit.phase==E_ORIGINAL_VERIFY ? &text_edit.target : &text_edit.backup,&pb);
+        if(text_edit.phase==E_BACKUP_VERIFY)pb.hFileInfo.ioFlMdDat=text_edit.original.hFileInfo.ioFlMdDat;
+        if(!err && !same_file(&text_edit.original,&pb))err=ioErr;
+        if(err)return edit_finish(out,cap,"CHANGED_STAGE_RETAINED",err,0);
+        text_edit.phase=text_edit.phase==E_ORIGINAL_VERIFY ? E_BACKUP_RENAME : E_BACKED_UP;break;
+    case E_BACKUP_RENAME:
+        text_edit.renamed=1;
+        err=FSpRename(&text_edit.target,text_edit.backup.name);
+        if(!err)err=FlushVol(NULL,text_edit.target.vRefNum);
+        if(err)return edit_finish(out,cap,"PUBLISH_INSPECT_PATHS",err,1);
+        text_edit.phase=E_BACKUP_OPEN;break;
+    case E_BACKED_UP:
+        if(edit_record("mutation_backed_up","backed_up"))return edit_finish(out,cap,"JOURNAL_BACKUP_RETAINED",0,1);
+        text_edit.phase=E_PUBLISH;break;
+    case E_PUBLISH:
+        err=FSpRename(&text_edit.stage,text_edit.target.name);
+        if(!err)err=FlushVol(NULL,text_edit.target.vRefNum);
+        if(err)return edit_finish(out,cap,"PUBLISH_INSPECT_PATHS",err,1);
+        text_edit.phase=E_PUBLISHED_OPEN;break;
+    case E_PUBLISHED_OPEN:
+        err=catalog(&text_edit.target,&pb);
+        pb.hFileInfo.ioFlMdDat=text_edit.staged.hFileInfo.ioFlMdDat;
+        if(!err && !same_file(&text_edit.staged,&pb))err=ioErr;
+        if(!err)err=FSpOpenDF(&text_edit.target,fsRdPerm,&text_edit.aux);
+        if(err)return edit_finish(out,cap,"PUBLISH_INSPECT_PATHS",err,1);
+        text_edit.offset=0;text_edit.phase=E_PUBLISHED_VERIFY;break;
+    case E_COMMIT:
+        c=FSClose(text_edit.ref);text_edit.ref=-1;
+        if(c)return edit_finish(out,cap,"CLOSE_INSPECT_PATHS",c,1);
+        if(edit_record("mutation_committed","ok"))return edit_finish(out,cap,"JOURNAL_AFTER_PUBLISH",0,1);
+        edit_result(out,cap,"ok","EDITED",text_edit.path,"",text_edit.backup_path,text_edit.length,text_edit.revision,text_edit.previous,0);
+        text_active=0;return 0;
     }
-    if (err) goto staged_error;
-    /* Verify the published bytes too; a successful rename alone is not proof. */
-    err = FSpOpenDF(&target, fsRdPerm, &stage_ref); if (err) goto staged_error;
-    count = length; err = FSRead(stage_ref, &count, observed); closed = FSClose(stage_ref);
-    if (!err && (count != length || memcmp(bytes, observed, (size_t)length))) err = ioErr;
-    if (!err) err = closed;
-    if (err) goto staged_error;
-    full_revision(&pb, bytes, length, revision, sizeof(revision));
-    err = FSClose(ref); ref = -1; if (err) goto staged_error;
-    edit_result(out, cap, "ok", "EDITED", path, "", backup_path, length, revision, previous, 0);
-    snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, out);
-    if (journal(context, "mutation_committed", envelope)) {
-        edit_result(out, cap, "uncertain", "JOURNAL_AFTER_PUBLISH", path, temporary, backup_path, length, revision, previous, 0); return 1;
-    }
-    return 0;
-before_stage:
-    closed = FSClose(ref);
-    if (closed) { stop = 1; err = closed; code = "CLOSE"; }
-    fail(out, cap, code, "Edit refused; source unchanged. Requires one exact match, current whole-file revision, CR text and durable journal.", err);
-    return stop;
-staged_error:
-    if (ref >= 0) { closed = FSClose(ref); if (closed) { stop = 1; if (!err) err = closed; } }
-    edit_result(out, cap, status, code, path, temporary, backup_path, length, revision, previous, err);
-    return stop;
+    return 2;
 }
 /* Create-only folder publication: HFS creation is atomic, so one intent record
  * precedes it and one committed record follows verification. */
@@ -1041,30 +1235,16 @@ int tools_execute_recorded(const AgentCall *call, char *out, size_t cap, AgentJo
 {
     JsonToken tokens[128];
     if (cap < AGENT_RESULT_CAP) { if (cap) out[0] = 0; return 1; }
-    if (json_parse(call->arguments, strlen(call->arguments), tokens, 128) < 1 || tokens[0].type != JSON_OBJECT) {
-        fail(out, cap, "ARGUMENTS", "Tool arguments must be a bounded JSON object.", 0); return 0;
-    }
-    /* The worker queue is retained execution evidence, never model-editable
-     * source. HFS names are case-insensitive; do not allow text tools to forge
-     * worker results, rewrite immutable snapshots, or alter launch authority. */
-    if (!strcmp(call->name,"write_text") || !strcmp(call->name,"edit_text") ||
-        !strcmp(call->name,"create_folder") || !strcmp(call->name,"create_project")) {
-        char path[512]; size_t i;
-        if(string_arg(call->arguments,tokens,"path",path,sizeof(path))>=0) {
-            for(i=0;path[i];i++)if(path[i]>='A' && path[i]<='Z')path[i]=(char)(path[i]+'a'-'A');
-            if(!strncmp(path,"worker01:buildjobs",18) && (!path[18] || path[18]==':')) {
-                fail(out,cap,"EXECUTION_EVIDENCE_READ_ONLY","Worker queue and snapshots are read-only to source tools.",0);return 0;
-            }
-        }
-    }
+    if(text_arguments(call,tokens,out,cap,!strcmp(call->name,"write_text") || !strcmp(call->name,"edit_text") ||
+        !strcmp(call->name,"create_folder") || !strcmp(call->name,"create_project")))return 0;
     if (!strcmp(call->name, "get_environment")) {
         if (tokens[0].next != 1) fail(out, cap, "ARGUMENTS", "get_environment takes no arguments.", 0);
         else environment(out, cap);
     } else if (!strcmp(call->name, "list_files")) list(call->arguments, tokens, out, cap);
-    else if (!strcmp(call->name, "read_text")) read(call->arguments, tokens, out, cap);
+    else if (!strcmp(call->name, "read_text")) return read_text_begin(call,out,cap,journal,context,(uint32_t)TickCount());
     else if (!strcmp(call->name, "search_text")) search_text(call->arguments, tokens, out, cap);
     else if (!strcmp(call->name, "write_text")) return write_text(call, tokens, out, cap, journal, context);
-    else if (!strcmp(call->name, "edit_text")) return edit_text(call, tokens, out, cap, journal, context);
+    else if (!strcmp(call->name, "edit_text")) return edit_text_begin(call,out,cap,journal,context,(uint32_t)TickCount());
     else if (!strcmp(call->name, "create_project")) return create_project(call, tokens, out, cap, journal, context);
     else if (!strcmp(call->name, "create_folder")) return create_folder(call, tokens, out, cap, journal, context);
     else if (!strcmp(call->name, "get_file_info") || !strcmp(call->name, "resolve_alias") ||
@@ -1074,7 +1254,25 @@ int tools_execute_recorded(const AgentCall *call, char *out, size_t cap, AgentJo
     else fail(out, cap, "UNKNOWN_TOOL", "This tool is not installed.", 0);
     return 0;
 }
-void tools_execute(const AgentCall *call, char *out, size_t cap)
+int tools_execute(const AgentCall *call, char *out, size_t cap)
 {
-    (void)tools_execute_recorded(call, out, cap, NULL, NULL);
+    return tools_execute_recorded(call,out,cap,NULL,NULL);
+}
+int tools_text_step(char *out,size_t cap,uint32_t now,int stop)
+{
+    if(text_active==1)return read_text_step(out,cap,now,stop);
+    if(text_active==2)return edit_text_step(out,cap,now,stop);
+    fail(out,cap,"NO_ACTIVE_TEXT","No active text operation.",0);return 1;
+}
+
+const char *tools_text_phase(void)
+{
+    static const char *const reads[]={"read","read_verify","line_navigation","page"};
+    static const char *const edits[]={"original_read","original_rewind","initial_verify","KMP_prefix","KMP_match",
+        "splice","intent_stage","stage_write","stage_open","stage_verify","staged_journal","original_recheck_open",
+        "original_recheck","backup_rename","backup_open","backup_verify","backed_up_journal","publication_rename",
+        "publication_open","publication_verify","committed_journal"};
+    if(text_active==1)return reads[text_read.phase];
+    if(text_active==2)return edits[text_edit.phase];
+    return "idle";
 }

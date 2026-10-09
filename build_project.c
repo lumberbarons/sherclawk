@@ -15,14 +15,17 @@
 #include <string.h>
 #include <stdarg.h>
 #define INPUTS BUILD_INPUTS
-#define FILE_BYTES 4096
+#define FILE_BYTES TOOLS_ACCEPTED_FILE_CAP
 #define RECIPE_BYTES 12288
 #define QUEUE SHERCLAWK_BUILD_QUEUE
 #define ADAPTER "mpw-ppc-v2"
 typedef BuildPlan Descriptor;
 static Descriptor descriptor;
 static NativeJob job;
-static char data[INPUTS+1][FILE_BYTES+1], recipe[RECIPE_BYTES], manifest[4096];
+static char arena[TOOLS_SNAPSHOT_CAP + INPUTS + 1], recipe[RECIPE_BYTES], manifest[4096];
+static size_t arena_used,source_offsets[INPUTS+1];
+static char *input_bytes(int i) { return arena+source_offsets[i]; }
+static uint32_t hashes[INPUTS+1];
 static char project[512], id[25], diagnostic[257];
 static size_t diagnostic_size;
 static FSSpec specs[INPUTS+1];
@@ -45,7 +48,7 @@ static int plain(const CInfoPBRec *p)
 {
     return !(p->hFileInfo.ioFlAttrib & 16) && !p->hFileInfo.ioFlRLgLen &&
         p->hFileInfo.ioFlFndrInfo.fdType=='TEXT' && !(p->hFileInfo.ioFlFndrInfo.fdFlags & 0x8000) &&
-        p->hFileInfo.ioFlLgLen>=0 && p->hFileInfo.ioFlLgLen<=FILE_BYTES;
+        p->hFileInfo.ioFlLgLen>=0;
 }
 static int same(const CInfoPBRec *a,const CInfoPBRec *b)
 {
@@ -268,6 +271,8 @@ int build_project_begin(const AgentCall *call,char *out,size_t cap,AgentJournal 
     journal_fn=journal; journal_context=ctx; start_ticks=now;
     if(resolve_input(0))return error(out,cap,"DESCRIPTOR_TEXT_OR_SIZE",0);
     sizes[0]=infos[0].hFileInfo.ioFlLgLen;
+    if(sizes[0]>TOOLS_DESCRIPTOR_CAP)return error_message(out,cap,"SNAPSHOT_SIZE_LIMIT","Descriptor limit 4096 bytes; input limit " TOOLS_FILE_CAP_DESCRIPTION " bytes; total snapshot limit 131072 bytes.",0);
+    source_offsets[0]=0;arena_used=(size_t)sizes[0]+1;hashes[0]=2166136261UL;
     native_attempted=native_claimed=not_started=0; diagnostic_size=0; diagnostic[0]=0; phase=0; file_index=0; offset=0; second_pass=0; active=1;
     return 2;
 }
@@ -284,13 +289,18 @@ static int read_step(int i)
     if(!e)e=FSRead(ref,&got,page);
     closed=FSClose(ref);
     if((e && !(e==eofErr && got==n)) || closed || got!=n)return -1;
-    if(second_pass) { if(memcmp(page,data[i]+offset,(size_t)n))return -1; }
-    else memcpy(data[i]+offset,page,(size_t)n);
-    offset+=n; data[i][sizes[i]]=0;
+    if(second_pass) { if(memcmp(page,input_bytes(i)+offset,(size_t)n))return -1; }
+    else {
+        long k;
+        for(k=0;k<n;k++) {
+            unsigned char c=(unsigned char)page[k];
+            if(c==127 || (c<32 && c!='\r' && c!='\t'))return -1;
+            hashes[i]=(hashes[i]^c)*16777619UL;
+        }
+        memcpy(input_bytes(i)+offset,page,(size_t)n);
+    }
+    offset+=n; input_bytes(i)[sizes[i]]=0;
     if(offset==sizes[i]) {
-        size_t k;
-        for(k=0;k<(size_t)sizes[i];k++)if((unsigned char)data[i][k]<32 && data[i][k]!='\r' && data[i][k]!='\t')return -1;
-        if(memchr(data[i],127,(size_t)sizes[i]))return -1;
         offset=0;
         if(!second_pass)second_pass=1;
         else { second_pass=0; return 1; }
@@ -387,10 +397,12 @@ int build_project_step(char *out,size_t cap,uint32_t now,int stop)
         if(r<0)return error(out,cap,"INPUT_CHANGED_OR_UNREADABLE",0);
         if(!r)return 2;
         if(phase==0) {
-            if(parse(data[0],&descriptor) || build_project_recipe(data[0],recipe,sizeof(recipe)))return error(out,cap,"DESCRIPTOR_UNSUPPORTED_USE_PROTOCOL_2",0);
+            if(parse(input_bytes(0),&descriptor) || build_project_recipe(input_bytes(0),recipe,sizeof(recipe)))return error(out,cap,"DESCRIPTOR_UNSUPPORTED_USE_PROTOCOL_2",0);
             for(int i=1;i<=descriptor.count;i++) {
                 if(resolve_input(i))return error(out,cap,"INPUT_MISSING_TEXT_OR_SIZE",0);
                 sizes[i]=infos[i].hFileInfo.ioFlLgLen;
+                if(sizes[i]>FILE_BYTES || (size_t)sizes[i]+1>sizeof(arena)-arena_used)return error_message(out,cap,"SNAPSHOT_SIZE_LIMIT","Descriptor limit 4096 bytes; input limit " TOOLS_FILE_CAP_DESCRIPTION " bytes; total snapshot limit 131072 bytes.",0);
+                source_offsets[i]=arena_used;arena_used+=(size_t)sizes[i]+1;hashes[i]=2166136261UL;
             }
             phase=1; file_index=1; return 2;
         }
@@ -398,6 +410,16 @@ int build_project_step(char *out,size_t cap,uint32_t now,int stop)
         {
             FSSpec queue; JobInput inputs[JOB_INPUT_MAX]; size_t at=0; int i;
             snprintf(id,sizeof(id),"build-%08lx-%04lx",(unsigned long)now,(++sequence)&0xffffUL);
+            if(add(manifest,sizeof(manifest),&at,"{\"build_id\":\"%s\",\"adapter\":\"" ADAPTER "\",\"recipe_hash\":\"%08lx\",\"inputs\":[",id,(unsigned long)hash(recipe,strlen(recipe))))return error(out,cap,"MANIFEST_LIMIT",0);
+            for(i=0;i<=descriptor.count;i++) {
+                char q[1024],path[768];
+                snprintf(path,sizeof(path),"%s:%s",project,i ? descriptor.paths[i-1] : "project.json");
+                if(json_quote(path,q,sizeof(q))<0 || add(manifest,sizeof(manifest),&at,"%s{\"path\":%s,\"snapshot_file\":\"%s\",\"revision\":\"full-%08lx-%08lx-%08lx-%08lx\"}",i ? "," : "",q,i ? descriptor.staged[i-1] : "project.json",(unsigned long)infos[i].hFileInfo.ioDirID,(unsigned long)infos[i].hFileInfo.ioFlMdDat,(unsigned long)sizes[i],(unsigned long)hashes[i]))return error(out,cap,"MANIFEST_LIMIT",0);
+                inputs[i].name=i ? descriptor.staged[i-1] : "project.json"; inputs[i].bytes=input_bytes(i); inputs[i].size=(size_t)sizes[i];
+            }
+            if(add(manifest,sizeof(manifest),&at,"]}"))return error(out,cap,"MANIFEST_LIMIT",0);
+            if(arena_used-(size_t)(descriptor.count+1)+strlen(recipe)+strlen(manifest)>TOOLS_SNAPSHOT_CAP)
+                return error_message(out,cap,"SNAPSHOT_SIZE_LIMIT","Descriptor limit 4096 bytes; input limit " TOOLS_FILE_CAP_DESCRIPTION " bytes; total snapshot limit 131072 bytes.",0);
             if(tools_resolve(QUEUE,&queue)) {
                 if(ensure_queue() || tools_resolve(QUEUE,&queue))return error(out,cap,"QUEUE_MISSING",0);
             }
@@ -405,14 +427,7 @@ int build_project_step(char *out,size_t cap,uint32_t now,int stop)
              * take the build; begin below still decides any later race. */
             { int why=selfbuild_check(&queue);
               if(why)return error_message(out,cap,start_code(why),start_message(why),1); }
-            if(add(manifest,sizeof(manifest),&at,"{\"build_id\":\"%s\",\"adapter\":\"" ADAPTER "\",\"recipe_hash\":\"%08lx\",\"inputs\":[",id,(unsigned long)hash(recipe,strlen(recipe))))return error(out,cap,"MANIFEST_LIMIT",0);
-            for(i=0;i<=descriptor.count;i++) {
-                char q[1024],path[768];
-                snprintf(path,sizeof(path),"%s:%s",project,i ? descriptor.paths[i-1] : "project.json");
-                if(json_quote(path,q,sizeof(q))<0 || add(manifest,sizeof(manifest),&at,"%s{\"path\":%s,\"snapshot_file\":\"%s\",\"revision\":\"full-%08lx-%08lx-%08lx-%08lx\"}",i ? "," : "",q,i ? descriptor.staged[i-1] : "project.json",(unsigned long)infos[i].hFileInfo.ioDirID,(unsigned long)infos[i].hFileInfo.ioFlMdDat,(unsigned long)sizes[i],(unsigned long)hash(data[i],(size_t)sizes[i])))return error(out,cap,"MANIFEST_LIMIT",0);
-                inputs[i].name=i ? descriptor.staged[i-1] : "project.json"; inputs[i].bytes=data[i]; inputs[i].size=(size_t)sizes[i];
-            }
-            if(add(manifest,sizeof(manifest),&at,"]}") || journal_fn(journal_context,"build_snapshot",manifest))return error(out,cap,"JOURNAL_SNAPSHOT",1);
+            if(journal_fn(journal_context,"build_snapshot",manifest))return error(out,cap,"JOURNAL_SNAPSHOT",1);
             inputs[i].name="manifest.json"; inputs[i].bytes=manifest; inputs[i++].size=strlen(manifest);
             inputs[i].name="script"; inputs[i].bytes=recipe; inputs[i++].size=strlen(recipe);
             build_queue=queue;
