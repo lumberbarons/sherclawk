@@ -108,3 +108,13 @@ cp config.example.h config.local.h  # optional local config; gitignored
   when tool behavior changes. Runtime usage is in [docs/usage.md](docs/usage.md),
   and lasting design principles are in [docs/architecture.md](docs/architecture.md).
 - The Python tools are stdlib-only; keep them that way.
+
+## Architectural Decisions
+
+ADRs live in `docs/adr/`. Read the relevant ADRs before proposing architectural changes — they encode constraints and rejected alternatives. When writing or modifying a spec, cite the ADRs that constrained it in the spec's own frontmatter; ADRs do not track their downstream consumers.
+
+| ADR | When this applies |
+|---|---|
+| `docs/adr/0001-execute-builds-natively-through-toolserver.md` | Any change to how builds execute: `selfbuild.c`, `toolserver.c`, the build queue, `worker-lock` ownership, retry/replay of builds, or reintroducing MacRelix or a shell worker |
+| `docs/adr/0002-run-tests-in-separate-native-app.md` | Designing `test_project`, a test target in the project descriptor, or any place project-authored code would run |
+| `docs/adr/0003-admit-tools-read-only-first.md` | Adding or changing a model-facing tool, especially one that mutates files, Finder metadata, resources or other processes |

@@ -63,6 +63,30 @@ and aliases, and preserve classic MacRoman/CR `TEXT` files. Model requests,
 responses and journals use UTF-8. Argument JSON must not pass through lossy UI
 conversion. Detailed mutation recovery rules belong in [tools](tools.md).
 
+## Deliberate costs
+
+Some apparently wasteful work is a guarantee. Changing any of the following
+changes a documented contract, not just a timing, so treat it as a design
+decision rather than a tuning knob. Performance work must measure in the guest
+and leave these alone unless the contract and its tests change with it.
+
+- `FlushVol` after journal records, per log line (so a host can tail it) and
+  per completed staged input. These are visibility and crash-evidence barriers,
+  not power-loss durability.
+- Closed-file write-then-verify-read cycles for staged inputs, and the second
+  pre-read of every descriptor and input in `build_project` before publication.
+  These are the exact-bytes and revision guarantees.
+- `run_application` hashes both artifact forks at authorization and again at
+  launch, because the artifact may change in between.
+- The one-tick event cadence while a run is active, and small bounded result
+  and read pages. A File Manager call cannot be interrupted, so page size sets
+  Stop granularity. Model-visible page sizes are also a product decision: they
+  change what the model sees per result and how many rounds a task takes.
+- Open Transport is fully cycled around every model request, because a failed
+  connection can wedge it for all later attempts. The yields around that cycle
+  are tunable and soaked; see the comment on `CloseChatContext` in `main.c` and
+  [development](development.md).
+
 ## Preferences implementation notes
 
 The modal dialog uses classic Dialog Manager edit items and Control Manager
@@ -76,8 +100,14 @@ On the initial implementation, `FSMakeFSSpec` returning `fnfErr` for a missing
 preferences file had to be treated as an ordinary first-run case. `ModalDialog`
 reported checkbox clicks without toggling them, so the application updated the
 control value and redrew it explicitly. Those guest findings remain useful when
-changing the dialog. The retired proposal's remaining considerations are
-[historical preferences notes](archive/preferences-notes.md).
+changing the dialog.
+
+The storage choice was an app-owned `pref` file rather than `TEXT` or
+resources. Per-key compiled fallbacks, immediate workspace changes for new work
+and a display-only debug toggle were intentional. Classic conventions place
+Preferences last in the Edit menu, separated from editing commands; Return
+accepts and Escape or Command-. cancels. The model chooser uses Preferences as
+the sole source. Remaining follow-ups are tracked as issues.
 
 ## Model catalog and context display
 

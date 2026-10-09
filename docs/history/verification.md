@@ -178,7 +178,7 @@ switching focus. A background run received its reply, but had a maximum event-lo
 gap of 303 ticks (about five seconds). Abrupt process death and reply delivery
 during window dragging remain untested. This is ToolServer-channel evidence,
 not acceptance of a native queue executor or full C build. Detailed IDs, retained
-fixtures and limitations are in [idea 005](../archive/idea-005-sherclawk-queue-mode.md);
+fixtures and limitations are in [native executor evidence](native-executor-evidence.md#increment-1-guest-evidence--october-6-2026);
 raw evidence is under ignored `build/toolserver-check-verified.log` and
 `build/toolserver-final.png` / `build/toolserver-background.png`.
 
@@ -192,7 +192,7 @@ or launch. Stop during linking retained an unknown outcome and drained a late
 reply without Rez or launch. The reusable ToolServer client and fixed diagnostic
 are separate from the queue and model tools. Retained fixture IDs, repeat-byte
 comparison limits and ignored raw evidence are in
-[idea 005](../archive/idea-005-sherclawk-queue-mode.md#increment-2-guest-evidence--october-6-2026).
+[native executor evidence](native-executor-evidence.md#increment-2-guest-evidence--october-6-2026).
 
 Integrated self-build verification, October 6, 2026: `SherclawkSelfBuildCheck`
 reported `RESULT failures=0` in OS 9.2.2 with MacRelix absent before each build.
@@ -202,7 +202,7 @@ successful launches, two correctly refused failed builds. Resource checks read
 `cfrg`/0 and `SIZE`/-1 for every successful artifact. The independent window showed
 both the original text and the edited “Fresh revision compiled natively” text.
 The detailed build IDs and retained evidence are in
-[idea 005](../archive/idea-005-sherclawk-queue-mode.md#increment-3-guest-evidence--october-6-2026).
+[native executor evidence](native-executor-evidence.md#increment-3-guest-evidence--october-6-2026).
 Host ASan/UBSan checks and all seven Python worker compatibility tests pass.
 
 The integrated Stop fixture also reported `RESULT failures=0`: first MrC command
