@@ -132,7 +132,8 @@ diagnostic built as its own CMake target; launch it in the guest and read
 | `SherclawkScrollCheck` | Toolbox scrollbar behavior |
 
 Host-side tests are in `tests/`, compiled against the stubs in `tests/toolbox/`
-by `tools/check.sh`; `tools/lint.sh` adds shellcheck, cppcheck and ruff for the
+by `tools/check.sh`; the starter's `io.c`, `png.c` and `selfrender.c` have their
+own Toolbox model in `tests/template/`; `tools/lint.sh` adds shellcheck, cppcheck and ruff for the
 same sources, and `.github/workflows/ci.yml` runs those checks on `ubuntu-24.04`
 for pushes to main and pull requests. Python helpers: `tools/make-art.py`
 (icon and window art), `tools/netatalk_meta.py` (fork-aware publication),

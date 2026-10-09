@@ -11,12 +11,12 @@ root = Path(__file__).resolve().parents[1]
 output = root / 'build/project-template.h'
 output.parent.mkdir(parents=True, exist_ok=True)
 entries = []
-for name in ('main.c', 'app.r'):
+for name in ('main.c', 'scene.c', 'io.c', 'png.c', 'selfrender.c', 'app.r', 'tmpl.h'):
     source = (root / 'templates/ppc-toolbox' / name).read_text()
     source.encode('ascii')  # C string escapes below must preserve exact bytes.
     assert len(source) <= 4096
     entries.append((name, source.replace('\n', '\r')))
-entries.append(('project.json', '{"protocol":2,"toolchain":"mpw-ppc-v2","template":"ppc-toolbox-v1","sources":["main.c"],"resources":["app.r"],"headers":[],"include_paths":[],"output":"template","settings":{"warnings":"off","libraries":["InterfaceLib","StdCLib"],"creator":"SHTP"}}\r'))
+entries.append(('project.json', '{"protocol":2,"toolchain":"mpw-ppc-v2","template":"ppc-toolbox-v1","sources":["main.c","scene.c","io.c","png.c","selfrender.c"],"resources":["app.r"],"headers":["tmpl.h"],"include_paths":["."],"output":"template","settings":{"warnings":"off","libraries":["InterfaceLib","StdCLib"],"creator":"SHTP"}}\r'))
 with output.open('w') as stream:
     stream.write('/* Generated from templates/ppc-toolbox; do not edit. */\n')
     stream.write('static const struct { const char *name, *bytes; } project_inputs[] = {\n')

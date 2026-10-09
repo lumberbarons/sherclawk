@@ -107,7 +107,7 @@ Host success alone is not guest acceptance.
 | [Architecture](docs/architecture.md) | Native execution and persistence principles |
 | [Limits](docs/limits.md) | Buffer, token, memory and deadline relationships |
 | [MCP](docs/mcp.md) | Protocol diagnostic and remaining integration gates |
-| [PowerPC template](templates/ppc-toolbox/README.md) | Starter UI, native compilation and runtime logging |
+| [PowerPC template](templates/ppc-toolbox/README.md) | Starter UI, native compilation, runtime logging and self-render |
 | [OS 9 guest setup](docs/macos9-qemu.md) | Optional QEMU/UTM testbed notes |
 | [Verification history](docs/history/verification.md) | Dated acceptance evidence |
 | [Archived design notes](docs/archive/README.md) | Historical proposals and research |

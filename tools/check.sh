@@ -113,3 +113,13 @@ fi
     "$HERE/tests/test_session.c" "$HERE/session.c" "$HERE/agent.c" "$HERE/json.c" "$HERE/text.c" \
     -o "$HERE/build/tests/test-session"
 "$HERE/build/tests/test-session"
+
+# The starter's file output and self-render run against a modelled Toolbox
+# (tests/template); the scene, controls and real GWorld are guest-only.
+"${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" -Wno-multichar -Wno-deprecated-declarations \
+    -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -I"$HERE/tests/template" -I"$HERE/templates/ppc-toolbox" \
+    "$HERE/tests/template/test_template.c" "$HERE/templates/ppc-toolbox/io.c" \
+    "$HERE/templates/ppc-toolbox/png.c" "$HERE/templates/ppc-toolbox/selfrender.c" \
+    -o "$HERE/build/tests/test-template"
+"$HERE/build/tests/test-template"

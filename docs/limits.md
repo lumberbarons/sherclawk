@@ -38,6 +38,38 @@ in the headers today; the headers win if this drifts.
 `SIZE` asks for 8 MiB preferred and 4 MiB minimum. The static data below counts
 against it, along with dynamic TLS and UI allocations.
 
+### Generated-app starter (`templates/ppc-toolbox`)
+
+The starter that `create_project` copies has its own partition in `app.r`:
+2 MiB preferred and 1.5 MiB minimum (it was 1 MiB), raised for self-render.
+Each source file stays at or under 4096 bytes, the `edit_text`, `write_text`
+and `build_project` limit, which is why the starter is several files; they use
+the project's declared inputs, capped by `BUILD_INPUTS` (`build_plan.h`).
+
+| Item | Size | Notes |
+|---|---|---|
+| Linked starter | 76,416 bytes | text + data + bss with `powerpc-apple-macos-size` under Retro68 |
+| Offscreen `GWorld` | `width * height` bytes plus row padding | 8-bit, allocated per frame and freed after it; 58,500 bytes for the default 390 × 150 window; about 786 KB for 1024 × 768 |
+| PNG row buffer | `width + 6` bytes | The file is streamed one row at a time; nothing else is image-sized |
+| PNG file | about `height * (width + 6) + 800` bytes | Stored deflate blocks, no compression: 60,243 bytes for the default window |
+| `runtime.log` | 4096 bytes | Unchanged |
+
+The partition must hold the linked size, the `GWorld`, the stack, the menu and
+window records and TextEdit; a content size that does not fit makes
+`NewGWorld` fail and the frame reports `status=error code=-108`. The heap
+figures are computed, not yet measured in the guest. The largest content size
+that renders at the minimum partition is still to be recorded (see the
+[starter's `VERIFIED.md`](../templates/ppc-toolbox/VERIFIED.md)).
+
+`BUILD_INPUTS` and `JOB_INPUT_MAX` rose together so the starter's inputs do
+not use up the projects' room: a build job carries every declared input plus
+`project.json`, the manifest and the recipe, so `JOB_INPUT_MAX` must stay at
+least three above `BUILD_INPUTS`. The Sherclawk executable grew by 31,040
+bytes (3,068,448 to 3,099,488 bytes of text plus data plus bss, measured with
+`powerpc-apple-macos-size` on `build/Sherclawk.xcoff` at the same commit
+without and with the change): 22,816 bytes of build-plan and staging buffers
+in bss and 8,224 bytes of text and data, mostly the embedded starter.
+
 ## How they relate
 
 1. **Response bytes ≥ `AGENT_MAX_TOKENS` × bytes per token.** A completion can

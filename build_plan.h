@@ -2,7 +2,7 @@
 #ifndef SHERCLAWK_BUILD_PLAN_H
 #define SHERCLAWK_BUILD_PLAN_H
 #include <stddef.h>
-#define BUILD_INPUTS 5
+#define BUILD_INPUTS 10
 typedef struct {
     char paths[BUILD_INPUTS][96], staged[BUILD_INPUTS][32], includes[3][96];
     int count, sources, resources, include_count, stdclib;

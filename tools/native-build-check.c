@@ -32,11 +32,14 @@ static WindowPtr window;
 static char fixture[160], status_line[240];
 static int stage, failures, finished, quit, stop;
 static uint32_t last_tick, max_gap, loops;
+#define COMPILE(file, object) {"compile", "MrC " file " -o " object " -i \"{CIncludes}\" -i \":\" -w off"}
 static const struct { const char *stage, *command; } steps[] = {
-    {"compile", "MrC main.c -o main.o -i \"{CIncludes}\" -w off"},
-    {"link", "PPCLink -o Template main.o \"{SharedLibraries}\"InterfaceLib \"{SharedLibraries}\"StdCLib \"{PPCLibraries}\"StdCRuntime.o \"{PPCLibraries}\"PPCCRuntime.o -t APPL"},
+    COMPILE("main.c", "main.o"), COMPILE("scene.c", "scene.o"), COMPILE("io.c", "io.o"),
+    COMPILE("png.c", "png.o"), COMPILE("selfrender.c", "selfrender.o"),
+    {"link", "PPCLink -o Template main.o scene.o io.o png.o selfrender.o \"{SharedLibraries}\"InterfaceLib \"{SharedLibraries}\"StdCLib \"{PPCLibraries}\"StdCRuntime.o \"{PPCLibraries}\"PPCCRuntime.o -t APPL"},
     {"resources", "Rez app.r -o Template -append -i \"{RIncludes}\""}
 };
+#define STEPS ((int)(sizeof(steps)/sizeof(steps[0])))
 static void record(const char *fmt,...)
 {
     va_list args; va_start(args,fmt); vfprintf(logfile,fmt,args); va_end(args);
@@ -152,7 +155,7 @@ static int verify_and_launch(void)
         if(valid) {
             HLock(h);
             /* SIZE flags + big-endian preferred/minimum allocations. */
-            valid=GetHandleSize(h)==10 && !memcmp(*h+2,"\000\020\000\000\000\020\000\000",8);
+            valid=GetHandleSize(h)==10 && !memcmp(*h+2,"\000\040\000\000\000\030\000\000",8);
             HUnlock(h); record("resource=SIZE/-1 bytes=%ld allocation_exact=%d",(long)GetHandleSize(h),valid);
             ReleaseResource(h);
         }
@@ -187,7 +190,7 @@ static int verify_and_launch(void)
 int main(void)
 {
     EventRecord event; Rect bounds; Str255 path; FSSpec folder;
-    char full[160]; long dir; OSErr e; uint32_t now; static ToolServerReply reply;
+    char full[160]; long dir; OSErr e; uint32_t now; int i; static ToolServerReply reply;
     InitGraf(&qd.thePort); InitFonts(); InitWindows(); InitMenus(); TEInit(); InitDialogs(NULL); InitCursor();
     logfile=fopen(SHERCLAWK_WORKSPACE LOG_NAME,"w"); if(!logfile)return 1;
     snprintf(fixture,sizeof(fixture),SHERCLAWK_WORKSPACE "NativeBuildCheck%08lx:",(unsigned long)TickCount());
@@ -195,15 +198,18 @@ int main(void)
     strcpy(full,fixture); full[strlen(full)-1]=0;
     path[0]=(unsigned char)strlen(full); memcpy(path+1,full,path[0]);
     e=FSMakeFSSpec(0,0,path,&folder);
-    if(e!=fnfErr || FSpDirCreate(&folder,smSystemScript,&dir) ||
-        write_file(project_inputs[0].name,
+    if(e!=fnfErr || FSpDirCreate(&folder,smSystemScript,&dir)) {
+        fail("fixture setup",0); fclose(logfile); return 1;
+    }
+    for(i=0;i<(int)(sizeof(project_inputs)/sizeof(project_inputs[0]));i++) {
+        const char *bytes=project_inputs[i].bytes;
+        if(!strcmp(project_inputs[i].name,"project.json"))continue;
 #ifdef NATIVE_BUILD_ERROR
-            "#error Sherclawk deliberate native compiler failure\r"
-#else
-            project_inputs[0].bytes
+        if(!strcmp(project_inputs[i].name,"main.c"))bytes="#error Sherclawk deliberate native compiler failure\r";
 #endif
-        ) ||
-        write_file(project_inputs[1].name,project_inputs[1].bytes) || FlushVol(NULL,folder.vRefNum)) {
+        if(write_file(project_inputs[i].name,bytes)) break;
+    }
+    if(i<(int)(sizeof(project_inputs)/sizeof(project_inputs[0])) || FlushVol(NULL,folder.vRefNum)) {
         fail("fixture setup",0); fclose(logfile); return 1;
     }
     if(toolserver_init(record)) { fail("Apple-event handler installation",0); fclose(logfile); return 1; }
@@ -249,7 +255,7 @@ int main(void)
                 else fail("deliberate compiler error unexpectedly succeeded",0);
 #else
                 else if(stop)fail("Stop before next command",0);
-                else if(++stage<3)send_step(now);
+                else if(++stage<STEPS)send_step(now);
                 else verify_and_launch();
 #endif
             }

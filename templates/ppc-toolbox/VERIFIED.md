@@ -4,7 +4,8 @@ These results describe the original two-line, content-click-to-quit starter.
 The native Clear button, TextEdit field and bounded runtime logger added in
 issue #87 have not yet been verified with MrC or in the OS 9 guest. The current
 interaction/log acceptance steps are in README.md; host and Retro68 checks
-do not establish guest behavior or MrC compatibility.
+do not establish guest behavior or MrC compatibility. The same applies to the
+self-render files added in issue #82; see the section at the end of this file.
 
 | Component | Recorded identity |
 |---|---|
@@ -73,3 +74,46 @@ Evidence remains in the guest fixture: build directories, `bad05.log`,
 is under ignored `build/native-template/`; screenshots and binary
 forks are ignored. No AFP restart, disk-image change or host compilation was
 needed for these native applications.
+
+## Self-render (issue #82) — host and Retro68 only, not yet run in the guest
+
+Checked on the host and with Retro68 (GCC), which does not establish MrC or
+Mac OS 9 behavior:
+
+- `tests/template/test_template.c` runs `io.c`, `png.c` and `selfrender.c`
+  against a modelled Toolbox under ASan/UBSan: the PNG is parsed by an
+  independent decoder (chunk CRCs, stored-block lengths, Adler-32, palette,
+  every pixel, widths around the 8-bit length boundary), and the request/marker
+  protocol, frame spacing, clamping, stale-marker removal and error reporting
+  are asserted. The same bytes also decompress with Python's `zlib`.
+- `./build.sh SherclawkTemplate_APPL` compiles and links all five sources with
+  `-Wall -Wextra` and no warnings; `tools/native-build-check.c` was
+  updated for the same sources but not run.
+
+Linked starter size from `powerpc-apple-macos-size` (Retro68, not MrC): text
+73,728 + data 1,536 + bss 1,152 bytes. The heap cost of a frame is
+`width * height` plus row padding for the `GWorld` and `width + 6` bytes for the
+PNG row, computed, not measured.
+
+Still to run on OS 9.2.2, then record here with the build ID and the log:
+
+1. The five sources compile under MrC with `-i ":"`, in the `build_project`
+   path and in the fixed `native-build-check` recipe, and
+   `SIZE` reads 2 MiB / 1.5 MiB.
+2. Launch through `run_application` (`launchDontSwitch`), leave Sherclawk in
+   front, and read `frame.ready`: `status=ok`. Confirm `frame1.png` shows the
+   field frame, the Clear button and any typed text, and that the window was
+   never fronted. This is the occluded-window claim; it has not been observed.
+3. Offscreen drawing of the push button (swapped `contrlOwner`, including its
+   active/inactive look while the app is backgrounded) and of TextEdit (swapped
+   `inPort`, no flicker in the real window) behave as intended; the window
+   after the frame is unchanged.
+4. A `frame.req` containing `overlay selftest frames=3` is picked up while the
+   app is in the background within about a second, produces three frames, and
+   the image reads `selftest PASS`. Break the hit test (swap `h` and `v` in
+   `SetRect` for the button) and confirm the overlay and `selftest FAIL` show it.
+5. A window far larger than the heap reports `status=error code=-108` and the
+   app keeps running; record the largest content size that renders at the
+   minimum partition.
+6. Existing behavior still holds: updates, Clear, drag, close box, Command-Q and
+   the `Logging unavailable` title with a read-only folder.
