@@ -1,5 +1,11 @@
 # Guest verification — October 3, 2026
 
+These results describe the original two-line, content-click-to-quit starter.
+The native Clear button, TextEdit field and bounded runtime logger added in
+issue #87 have not yet been verified with MrC or in the OS 9 guest. The current
+interaction/log acceptance steps are in README.md; host and Retro68 checks
+do not establish guest behavior or MrC compatibility.
+
 | Component | Recorded identity |
 |---|---|
 | Guest | Mac OS 9.2.2, PowerPC G3 under QEMU/UTM |

@@ -187,6 +187,17 @@ Finder `TEXT`/`ttxt` data forks. The default output is `template`; edit the
 descriptor to add sources or change the output. The folder name does not change
 the window title. Projects contain no shell recipes.
 
+The starter demonstrates a real Control Manager Clear button and a TextEdit
+field. Sherclawk's system policy requires suitable standard Toolbox components
+for application UIs and recommends bounded application-side logging for runtime
+diagnosis. The starter writes a fresh, at-most-4096-byte MacRoman/CR `TEXT`
+`runtime.log` beside its built executable, recording lifecycle events, actions
+and failure codes without typed text or secrets. Read it with `read_text` using
+the artifact folder from the build result; it is separate from build stdout/
+stderr. Save it before relaunching, which resets it. See the
+[template guide](templates/ppc-toolbox/README.md#runtime-diagnosis) for limits
+and guest interaction checks. Existing projects retain their original sources.
+
 ### Native project builds
 
 The descriptor is editable JSON with this initial supported contract:
