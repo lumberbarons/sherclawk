@@ -96,8 +96,10 @@ so the other fields can be changed while the catalog is unreachable. A failed
 fetch or Cancel leaves the typed text in place and changes nothing. Return and
 Enter press OK; Escape and Command-. press Cancel. Each executed
 call shows a compact call line — the tool name and rendered arguments — in the
-Conversation; with the debug toggle on, the result and the call's journal
-event names follow it. The session JSONL is byte-identical either way, and the
+Conversation. Consecutive calls to the same tool fold into one counted line
+(`• read_text x12`) until another message or tool appears; with the debug
+toggle on, every call stays on its own line and the result and the call's
+journal event names follow it. The session JSONL is byte-identical either way, and the
 API key never appears in status text, logs, prompts or results.
 
 The Finder icon ships as a bundle icon family and as an attached custom icon,
