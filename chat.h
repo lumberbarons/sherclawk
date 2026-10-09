@@ -14,6 +14,12 @@ typedef struct {
     size_t offsets[CHAT_MESSAGE_MAX], used;
     int messages;
     char transcript[CHAT_TRANSCRIPT_CAP];
+    /* The last transcript entry, when it is a tool call line that a following
+     * call to the same tool may fold into: where it starts, where the
+     * transcript ended after it (0 when there is none), its tool and run. */
+    size_t tool_at, tool_end;
+    int tool_count;
+    char tool_name[64];
 } Chat;
 void chat_reset(Chat *chat);
 int chat_request(const Chat *chat, const char *model, const char *prompt,
@@ -21,5 +27,13 @@ int chat_request(const Chat *chat, const char *model, const char *prompt,
 /* Returns 0 reply, -1 API/protocol error; error is safe human-readable text. */
 int chat_reply(const char *body, size_t len, int status, char *reply, size_t cap,
                int *limited, char *error, size_t error_cap);
+/* Collapsible tool lines. chat_tool_note marks the entry that starts at start
+ * (the transcript's newest) as one call of tool name; chat_tool_forget drops
+ * the mark. chat_tool_collapse returns 1 after rewriting that entry as
+ * "<bullet> name xN" when the transcript still ends with it and the next call is
+ * to the same tool, and 0 (nothing changed) when the caller must append. */
+void chat_tool_note(Chat *chat, size_t start, const char *name);
+void chat_tool_forget(Chat *chat);
+int chat_tool_collapse(Chat *chat, const char *name);
 int chat_commit(Chat *chat, const char *prompt, const char *reply, int limited);
 #endif

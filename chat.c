@@ -13,6 +13,29 @@ static int append(char *out, size_t cap, size_t *at, const char *s)
     if (*at >= cap || n >= cap - *at) return -1;
     memcpy(out + *at, s, n + 1); *at += n; return 0;
 }
+void chat_tool_forget(Chat *c) { c->tool_end = 0; }
+void chat_tool_note(Chat *c, size_t start, const char *name)
+{
+    size_t end = strlen(c->transcript);
+    c->tool_end = 0;
+    if (strlen(name) >= sizeof(c->tool_name) || start >= end) return;
+    strcpy(c->tool_name, name);
+    c->tool_at = start; c->tool_end = end; c->tool_count = 1;
+}
+int chat_tool_collapse(Chat *c, const char *name)
+{
+    char utf8[96], line[96];
+    size_t n;
+    if (!c->tool_end || strcmp(c->tool_name, name) || strlen(c->transcript) != c->tool_end ||
+        c->tool_count >= 99999) return 0;
+    snprintf(utf8, sizeof(utf8), "\xE2\x80\xA2 %s x%d", name, c->tool_count + 1);
+    if (text_to_macroman(utf8, line, sizeof(line)) < 0) return 0;
+    n = strlen(line);
+    if (n + 3 >= sizeof(c->transcript) - c->tool_at) return 0;
+    memcpy(c->transcript + c->tool_at, line, n); memcpy(c->transcript + c->tool_at + n, "\r\r", 3);
+    c->tool_count++; c->tool_end = c->tool_at + n + 2;
+    return 1;
+}
 static int quoted(char *out, size_t cap, size_t *at, const char *s)
 {
     int n = json_quote(s, out + *at, cap - *at);
@@ -97,6 +120,7 @@ int chat_commit(Chat *c, const char *prompt, const char *reply, int limited)
     }
     /* Every possible failure has been checked before mutating the history. */
     memcpy(c->transcript, display, at + 1);
+    c->tool_end = 0;
     c->offsets[messages] = c->used;
     memcpy(c->history + c->used, prompt, pn); c->used += pn;
     c->offsets[messages + 1] = c->used;

@@ -141,6 +141,57 @@ static void history(void)
     memset(out, '\n', CHAT_REQUEST_CAP); out[CHAT_REQUEST_CAP] = 0;
     assert(chat_request(&c, "model", out, req, sizeof(req)) == -1);
 }
+/* Append one transcript entry the way the app's ShowMessage does. */
+static size_t add_entry(Chat *c, const char *text)
+{
+    size_t at = strlen(c->transcript);
+    chat_tool_forget(c);
+    strcat(c->transcript, text); strcat(c->transcript, "\r\r");
+    return at;
+}
+static void tool_collapse(void)
+{
+    Chat c;
+    size_t at;
+    int i;
+    chat_reset(&c);
+    assert(!chat_tool_collapse(&c, "read_text"));
+    add_entry(&c, "You:\rhi");
+    at = add_entry(&c, "\xA5 read_text(path: \"a\")");
+    chat_tool_note(&c, at, "read_text");
+    assert(chat_tool_collapse(&c, "read_text"));
+    assert(!strcmp(c.transcript, "You:\rhi\r\r\xA5 read_text x2\r\r"));
+    for (i = 3; i <= 12; i++) assert(chat_tool_collapse(&c, "read_text"));
+    assert(!strcmp(c.transcript, "You:\rhi\r\r\xA5 read_text x12\r\r"));
+    /* A different tool starts its own line; the run before it stays closed. */
+    assert(!chat_tool_collapse(&c, "list_files"));
+    at = add_entry(&c, "\xA5 list_files()");
+    chat_tool_note(&c, at, "list_files");
+    assert(!chat_tool_collapse(&c, "read_text"));
+    assert(chat_tool_collapse(&c, "list_files"));
+    assert(strstr(c.transcript, "\xA5 list_files x2\r\r") && strstr(c.transcript, "read_text x12"));
+    /* Any other entry, even a debug-view tool block, ends the run. */
+    add_entry(&c, "Sherclawk:\rdone");
+    assert(!chat_tool_collapse(&c, "list_files"));
+    at = add_entry(&c, "\xA5 read_text()");
+    chat_tool_note(&c, at, "read_text");
+    c.transcript[strlen(c.transcript) - 2] = 0;    /* transcript changed behind our back */
+    assert(!chat_tool_collapse(&c, "read_text"));
+    /* A name too long to remember is never collapsed. */
+    at = add_entry(&c, "\xA5 long");
+    { char name[80]; memset(name, 'n', 79); name[79] = 0; chat_tool_note(&c, at, name); assert(!chat_tool_collapse(&c, name)); }
+    /* A committed turn ends the run, and a full transcript falls back to appending. */
+    chat_reset(&c);
+    at = add_entry(&c, "\xA5 read_text()");
+    chat_tool_note(&c, at, "read_text");
+    assert(chat_commit(&c, "q", "a", 0) == 0 && !chat_tool_collapse(&c, "read_text"));
+    chat_reset(&c);
+    memset(c.transcript, 'x', sizeof(c.transcript) - 8); c.transcript[sizeof(c.transcript) - 8] = 0;
+    at = add_entry(&c, "\xA5 t()");
+    chat_tool_note(&c, at, "t");
+    assert(strlen(c.transcript) == sizeof(c.transcript) - 1 && !chat_tool_collapse(&c, "t"));
+    assert(!strcmp(c.transcript + at, "\xA5 t()\r\r"));
+}
 static void numbers(void)
 {
     static const struct { const char *text; long value; } ints[] = {
@@ -190,7 +241,7 @@ static void numbers(void)
 }
 int main(void)
 {
-    framing(); json(); numbers(); encoding(); history();
-    puts("PASS HTTP framing, JSON, numbers, encoding, history and rollback");
+    framing(); json(); numbers(); encoding(); history(); tool_collapse();
+    puts("PASS HTTP framing, JSON, numbers, encoding, history, rollback and tool collapse");
     return 0;
 }

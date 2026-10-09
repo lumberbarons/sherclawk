@@ -1693,11 +1693,13 @@ static void HandleEvent(const EventRecord *event)
 
 /* ── Chat flow ───────────────────────────────────────────────────── */
 /* The session journal and handoff files live in session.c. */
-static void ShowMessage(const char *label, const char *text)
+/* Returns where the entry starts in the transcript, or -1 when it was not shown. */
+static long ShowMessage(const char *label, const char *text)
 {
     static char display[CHAT_TRANSCRIPT_CAP];
     size_t at = strlen(gChat.transcript), len, i, lines = 0;
     size_t prefix = (label && *label) ? strlen(label) + 2 : 0; /* "label:\r" */
+    chat_tool_forget(&gChat);
     if (text_to_macroman(text, display, sizeof(display)) < 0) strcpy(display, "[Text exceeds display capacity; see session file.]");
     len = strlen(display);
     for (i = 0; i < at; i++) if (gChat.transcript[i] == 13) lines++;
@@ -1714,11 +1716,12 @@ static void ShowMessage(const char *label, const char *text)
         strcpy(gChat.transcript, "[Earlier conversation is saved in the session file.]\r\r");
         at = strlen(gChat.transcript);
     }
-    if (prefix + len + 5 >= sizeof(gChat.transcript) - at) return;
+    if (prefix + len + 5 >= sizeof(gChat.transcript) - at) return -1;
     if (prefix) { strcpy(gChat.transcript + at, label); strcat(gChat.transcript, ":\r"); }
     strcat(gChat.transcript, display); strcat(gChat.transcript, "\r\r");
     ResponseSetText(gChat.transcript, strlen(gChat.transcript));
     ResponseScrollTo(GetControlMaximum(gResponseScroll));
+    return (long)at;
 }
 
 /* ── Tool debug view (display only; the session file is unaffected) ─ */
@@ -1804,7 +1807,17 @@ static void ShowToolResult(const AgentCall *call, const char *label, const char 
     char header[400];
     if (!call) { ShowMessage(label, text); return; }
     RenderToolCall(call, header, sizeof(header));
-    if (!gPrefs.show_tool_debug) { ShowMessage(NULL, header); return; }
+    if (!gPrefs.show_tool_debug) {
+        /* A run of calls to one tool folds into a single counted line. */
+        if (chat_tool_collapse(&gChat, call->name)) {
+            ResponseSetText(gChat.transcript, strlen(gChat.transcript));
+            ResponseScrollTo(GetControlMaximum(gResponseScroll));
+        } else {
+            long at = ShowMessage(NULL, header);
+            if (at >= 0) chat_tool_note(&gChat, (size_t)at, call->name);
+        }
+        return;
+    }
     snprintf(block, sizeof(block), "%s\r  \xC2\xBB %s\r  journal: %s",
         header, text, gToolEvents[0] ? gToolEvents : "(none)");
     ShowMessage(NULL, block);
