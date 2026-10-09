@@ -29,9 +29,9 @@ results before requesting a follow-up. Dated acceptance evidence is in
 ## Build and publish
 
 Prerequisites: Docker with the `ghcr.io/autc04/retro68` image, host Python 3
-(stdlib only) for `build.sh` and the artwork converter, `curl`/`unzip` for the
-one-time interface fetch, and `ssh`/`scp` for publishing, plus a Certainly
-clone next to this repository, Apple's Universal Interfaces fetched once, and
+(stdlib only) for `build.sh` and the artwork converter, and `ssh`/`scp` for
+publishing, plus a Certainly clone next to this repository, your own lawfully
+obtained Apple Universal Interfaces 3.4 SDK, and
 the vendored `patches/` + `art/` in this tree. Publishing needs an AFP
 share host reachable over `ssh`/`scp` with passwordless `sudo -n`, a `macos9`
 user and group, python3 and netatalk; files go to `/srv/retro68` unless
@@ -41,12 +41,25 @@ user and group, python3 and netatalk; files go to `/srv/retro68` unless
 
 ```bash
 git clone --recursive --depth 1 https://github.com/minorbug/certainly.git ../Certainly
-tools/get-universal-interfaces.sh
+# Supply your own SDK; this is the Interfaces&Libraries folder, not its parent.
+export INTERFACES_DIR="/path/to/Interfaces&Libraries"
 cp config.example.h config.local.h
 # Set SHERCLAWK_API_KEY and optionally SHERCLAWK_MODEL / SHERCLAWK_WORKSPACE.
 ./build.sh
 SHARE_HOST=<afp-server> tools/deploy-to-share.sh
 ```
+
+The SDK is not included or downloaded by this repository. Obtain it yourself
+under its applicable license. `INTERFACES_DIR` must contain
+`Interfaces/CIncludes/OpenTransport.h`, `Interfaces/RIncludes/`, and the
+SDK's `Libraries/SharedLibraries/` and `Libraries/PPCLibraries/` directories
+(including `OpenTransportAppPPC.o`). Preserve the libraries' resource forks
+or their AppleDouble/MacBinary representations. Alternatively, place
+the complete `Interfaces&Libraries` folder at `../InterfacesAndLibraries`
+and leave `INTERFACES_DIR` unset. `build.sh` mounts that local directory
+read-only and stages its headers and import libraries into the build container.
+The open-source Multiversal Interfaces supplied by Retro68 lack the Open
+Transport headers needed by Certainly.
 
 Host checks need no Docker, VM or API key; the network suites need the
 Certainly clone above:
@@ -58,8 +71,10 @@ python3 tests/test_worker.py
 ```
 
 `config.local.h` is ignored, and credentials are embedded only in local
-binaries. Builds without credentials still launch. Quit a running copy before
-publishing/relaunching. Normal runtime uses no host executor or model relay.
+binaries. For a distributable build, omit `config.local.h` and let users enter
+their own key in Preferences. Builds without credentials still launch. Quit a
+running copy before publishing/relaunching. Normal runtime uses no host executor
+or model relay.
 Model requests identify the client as `Sherclawk/1.0 (Certainly; Mac OS 9)`;
 Sherclawk's build defines `SHERCLAWK_APP`, which selects that User-Agent in the
 vendored POST builder.
@@ -771,6 +786,14 @@ a unique fixture folder; its log includes flushed mutation recovery records.
 
 MIT, see [LICENSE](LICENSE). Bundled and fetched third-party code is listed in
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+The lobster artwork in `art/sherclawk.png` was generated with ChatGPT and is
+offered under the same MIT license to the extent the project holds rights in it.
+Binary distributions must include the applicable third-party notices described
+in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+Macintosh, Mac OS and iMac are trademarks of Apple Inc. Sherclawk is an
+independent project and is not affiliated with or endorsed by Apple Inc.
 
 ## Remote MCP development
 

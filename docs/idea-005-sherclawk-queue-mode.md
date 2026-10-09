@@ -1,6 +1,6 @@
 # 005 — Sherclawk as its own build-queue worker
 
-**Status:** ToolServer diagnostic, fixed native build and integrated self-build fixtures guest-verified; general queue service remains planned. Feasibility checked against the current source tree, the vendored Universal Interfaces, and the upstream ToolServer client
+**Status:** ToolServer diagnostic, fixed native build and integrated self-build fixtures guest-verified; general queue service remains planned. Feasibility checked against the current source tree, the locally installed, user-supplied Universal Interfaces, and the upstream ToolServer client
 that this workspace already drives via `tlsrvr`. Guest evidence for increments 1–3 is recorded below; general queue service
 still needs its own implementation and acceptance.
 

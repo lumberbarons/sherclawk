@@ -280,7 +280,7 @@ Inclusion rule, matching the existing harness:
 
 ## Evidence
 
-- Vendored Universal Interfaces, `InterfacesAndLibraries/Interfaces/CIncludes/`:
+- Locally installed, user-supplied Universal Interfaces, `InterfacesAndLibraries/Interfaces/CIncludes/`:
   - `Resources.h` — `CountResources` :344, `GetIndResource` :368,
     `Get1Resource` :410, `GetResInfo` :527, `GetResourceSizeOnDisk` :574.
   - `Finder.h` — `kHasCustomIcon` :186, `kHasBundle` :189, `kIsAlias` :191,
