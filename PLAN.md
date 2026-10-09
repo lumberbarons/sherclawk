@@ -89,13 +89,12 @@ This establishes flexibility before adding more application-specific fixtures.
 3. Capture a reproducible PowerPC Toolbox template and exact installed
    MrC/PPCLink/Rez/SDK versions. The `templates/ppc-toolbox/` fixture is now
    guest-verified for compiler failure, fresh rebuild, native launch and
-   actual ToolServer process identity. The MacRelix file-job worker now
-   implements complete-file publication, rename claim, stage/log/completion
-   records and uncertain outcomes. Native File Manager production and bounded
-   cooperative polling are implemented in `jobs.c`, with an event-driven
-   `SherclawkJobCheck` diagnostic. Trusted recipe inputs are closed and verified
-   before ready publication; Stop/deadline never cancel or replay a published
-   job. The Python producer remains diagnostic only. Source revision binding
+   actual ToolServer process identity. Native File Manager production and
+   bounded cooperative polling are implemented in `jobs.c`; the native executor
+   claims the snapshot (the earlier MacRelix file-job worker was removed, its
+   evidence kept in `docs/macrelix-worker-verified.md`). Trusted recipe inputs
+   are closed and verified before ready publication; Stop/deadline never cancel
+   or replay a published job. Source revision binding
    and model-facing build/run integration belong to step 4.
 4. Template-backed `create_project` is implemented: verified C/Rez source and a
    versioned descriptor published by one journaled, create-only folder rename.
@@ -127,7 +126,7 @@ This establishes flexibility before adding more application-specific fixtures.
 
 The native app owns prompts, tool validation, sessions, and execution. Direct
 OpenRouter HTTPS provides inference. Native ToolServer self-builds implement idea
-005 increment 3; MacRelix remains the exclusive-owner build fallback. Queue
+005 increment 3 and are the only build backend. Queue
 creation landed (the app creates `Worker01:buildjobs` before first
 publication); generalized queue service and convenience features remain later
 work.

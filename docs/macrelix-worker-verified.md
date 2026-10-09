@@ -1,5 +1,9 @@
 # Worker verification — October 3, 2026
 
+> Historical record. The MacRelix file-job worker and its helpers have been
+> removed from the repository; MPW ToolServer is the only build backend. This
+> evidence is kept unchanged below, and file names it mentions no longer exist.
+
 Tested with the OS 9.2.2 / MacRelix / MPW installation identified in
 [`../templates/ppc-toolbox/VERIFIED.md`](../templates/ppc-toolbox/VERIFIED.md).
 The executor ran in MacRelix; the host only published inputs, inspected files,

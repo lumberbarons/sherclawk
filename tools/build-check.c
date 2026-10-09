@@ -1,5 +1,5 @@
 /* Exercise the real build tool through native File Manager snapshots and the
- * self-build executor (or external lock fallback). Keeps fresh independent
+ * native MPW executor. Keeps fresh independent
  * and starter projects, repaired snapshots and revision-bound rebuild IDs. */
 #include "build_project.h"
 #include "selfbuild.h"
@@ -60,10 +60,9 @@ static int process_check(void)
         memset(&info,0,sizeof(info)); info.processInfoLength=sizeof(info);
         info.processName=name; info.processAppSpec=&spec;
         if(GetProcessInformation(&psn,&info))return -1;
-        if((name[0]==8 && !memcmp(name+1,"MacRelix",8)) ||
-            (spec.name[0]==8 && !memcmp(spec.name+1,"MacRelix",8)))return -1;
+        fprintf(logfile,"PROCESS name=%.*s app=%.*s\n",name[0],name+1,spec.name[0],spec.name+1);
     }
-    fprintf(logfile,"PROCESS MacRelix_absent=%d\n",e==procNotFound);fflush(logfile);
+    fflush(logfile);
     return e==procNotFound ? 0 : -1;
 }
 #endif

@@ -1,5 +1,6 @@
 /* Reuse the File Manager fault model to check descriptor rejection and source
- * revision binding before publication. Native compiler behavior is guest-tested. */
+ * revision binding before publication, then drive the native executor through
+ * a mocked ToolServer. Real compiler behavior is guest-tested. */
 #define TEST_EXTERNAL_PROCESS_INFO 1
 #define FSRead model_FSRead
 #define FSClose model_FSClose
@@ -16,13 +17,13 @@
 #include "selfbuild.h"
 #include <Processes.h>
 /* Queued transport model: replies arrive only when explicitly released. */
-static int ts_busy,ts_ready,ts_sends,ts_abandoned,ts_failure,ts_malformed,ts_send_error;
+static int ts_busy,ts_ready,ts_sends,ts_abandoned,ts_failure,ts_malformed,ts_send_error,ts_unreachable;
 static char ts_directory[256],ts_command[2048];
 OSErr toolserver_init(ToolServerLog log) { (void)log;return 0; }
 void toolserver_close(void) { ts_busy=ts_ready=0; }
 int toolserver_busy(void) { return ts_busy; }
 OSErr toolserver_send(const char *directory,const char *command,uint32_t now)
-{ (void)now;assert(!ts_busy);ts_sends++;strcpy(ts_directory,directory);strcpy(ts_command,command);ts_busy=1;ts_abandoned=0;return ts_send_error ? ioErr : 0; }
+{ (void)now;if(ts_unreachable)return fnfErr;assert(!ts_busy);ts_sends++;strcpy(ts_directory,directory);strcpy(ts_command,command);ts_busy=1;ts_abandoned=0;return ts_send_error ? ioErr : 0; }
 int toolserver_poll(uint32_t now,int stop,ToolServerReply *reply)
 {
     (void)now;
@@ -82,6 +83,8 @@ static int entry(const char *name)
 static int fixture(const char *descriptor_text)
 {
     int d,i,w,q; reset();build_journals=0;build_event_count=0;
+    selfbuild_close();ts_busy=ts_ready=ts_sends=ts_abandoned=ts_failure=ts_malformed=ts_send_error=ts_unreachable=0;
+    assert(!selfbuild_init());
     d=add(10,"project",1); i=add(files[d].id,"project.json",0);
     strcpy(files[i].bytes,descriptor_text);files[i].size=(long)strlen(descriptor_text);files[i].info.fdType='TEXT';
     i=add(files[d].id,"main.c",0);strcpy(files[i].bytes,"int main(void) { return 0; }\r");files[i].size=(long)strlen(files[i].bytes);files[i].info.fdType='TEXT';
@@ -95,29 +98,27 @@ static int record_file(long parent,const char *name,const char *bytes)
 {
     int i=add(parent,name,0);strcpy(files[i].bytes,bytes);files[i].size=(long)strlen(bytes);files[i].info.fdType='TEXT';return i;
 }
+/* Run a whole build through the native executor with ToolServer replies
+ * released by hand: compile and link succeed, the linker's PEF is planted, and
+ * the executor publishes success. A PEF without a resource fork is refused by
+ * the executor itself, so the build ends uncertain with no result record. */
 static void terminal_check(const char *good,int artifact_ok)
 {
-    int i,r=2,dir,ready=-1;char terminal[200],build_id[25];
+    int i,r=2,turns;uint32_t now=2;
     fixture(good);
-    for(i=0;i<100 && ready<0;i++) {
-        assert(build_project_step(result,sizeof(result),(uint32_t)i+2,0)==2);
-        for(int k=0;k<64;k++)if(files[k].used && !strcmp(files[k].name,"ready"))ready=k;
-    }
-    assert(ready>=0);dir=files[ready].parent;
-    for(i=0;i<64;i++)if(files[i].used && files[i].id==dir)break;
-    assert(i<64);  /* the fixture always records dir */
-    strcpy(build_id,files[i].name);
-    snprintf(terminal,sizeof(terminal),"protocol=1\nid=%s\noutcome=succeeded\nexit=0\nsignal=0\nwait_status=0\n",build_id);
-    record_file(dir,"result",terminal);
-    i=add(dir,"build",1);i=add(files[i].id,"native",1);dir=files[i].id;
-    record_file(dir,"success.txt","artifact=sample\n");
-    i=record_file(dir,"sample","PEF bytes");files[i].info.fdType='APPL';files[i].resource=artifact_ok ? 1 : 0;
-    r=build_project_step(result,sizeof(result),500,0);
-    for(int step=0;r==2 && step<100;step++)r=build_project_step(result,sizeof(result),501+step,0);
+    for(turns=0;ts_sends<1 && turns<300;turns++) { r=build_project_step(result,sizeof(result),now++,0);assert(r==2); }
+    assert(ts_sends==1);ts_ready=1;
+    for(turns=0;ts_sends<2 && turns<300;turns++) { r=build_project_step(result,sizeof(result),now++,0);assert(r==2); }
+    assert(ts_sends==2);
+    i=entry("native");assert(i>=0);
+    i=record_file(files[i].id,"sample","Joy!peffpwpc............................");files[i].resource=artifact_ok ? 100 : 0;
+    ts_ready=1;
+    for(turns=0;r==2 && turns<300;turns++,now+=60)r=build_project_step(result,sizeof(result),now,0);
+    if(!artifact_ok) { assert(r==1 && strstr(result,"uncertain") && entry("result")<0 && entry("launch.rec")<0);return; }
     if(build_result_failure) { assert(r==1 && strstr(result,"JOURNAL_AFTER_BUILD"));
         for(int k=0;k<64;k++)assert(!files[k].used || strcmp(files[k].name,"launch.rec"));
         return; }
-    assert(artifact_ok ? r==0 && strstr(result,"\"status\":\"ok\"") && strstr(result,"native:sample") : r==1 && strstr(result,"ARTIFACT_INVALID"));
+    assert(r==0 && strstr(result,"\"status\":\"ok\"") && strstr(result,"native:sample") && entry("launch.rec")>=0);
 }
 
 #ifdef TEST_SELFBUILD
@@ -210,10 +211,9 @@ int main(void)
       assert(!run_application_begin(&call,result,sizeof(result),build_journal,NULL,1500) && strstr(result,"RUN_ARGUMENTS"));
       snprintf(result,sizeof(result),"{\"build_id\":\"%s\"}",bid);
     }
-    { char bid[25];int dir=0,log;JsonToken t[64];
+    { char bid[25];int log;JsonToken t[64];
       field("build_id",bid,sizeof(bid));
-      for(i=0;i<64;i++)if(files[i].used && !strcmp(files[i].name,bid))dir=(int)files[i].id;
-      assert(dir);log=record_file(dir,"stdout","");memset(files[log].bytes,'\r',512);files[log].size=512;
+      log=entry("stdout");assert(log>=0);memset(files[log].bytes,'\r',512);files[log].size=512;
       snprintf(call.arguments,sizeof(call.arguments),"{\"build_id\":\"%s\",\"stream\":\"stdout\"}",bid);
       build_project_log(&call,result,sizeof(result));assert(json_parse(result,strlen(result),t,64)>0 && strstr(result,"\"next_byte\":128") && strstr(result,"\"truncated\":true"));
       files[log].info.fdFlags=0x8000;build_project_log(&call,result,sizeof(result));assert(strstr(result,"error"));

@@ -28,7 +28,7 @@ static size_t diagnostic_size;
 static FSSpec specs[INPUTS+1];
 static CInfoPBRec infos[INPUTS+1];
 static long sizes[INPUTS+1];
-static int active, phase, file_index, second_pass, native_attempted, native_claimed;
+static int active, phase, file_index, second_pass, native_attempted, native_claimed, not_started;
 static FSSpec build_queue;
 static long offset;
 static uint32_t start_ticks;
@@ -224,11 +224,26 @@ int build_project_recipe(const char *s,char *out,size_t cap)
     }
     return add(out,cap,&at,"/Developer/Tools/SetFile -t APPL -c %s %s\ntest -s %s\necho 'artifact=%s' > success.txt\necho 'stage=complete status=0'\n",d.creator,d.output,d.output,d.output);
 }
-static int error(char *out,size_t cap,const char *code,int stop)
+static int error_message(char *out,size_t cap,const char *code,const char *message,int stop)
 {
     active=0;
-    snprintf(out,cap,"{\"status\":\"error\",\"code\":\"%s\",\"build_id\":\"%s\",\"queue\":\"" QUEUE "\",\"adapter\":\"" ADAPTER "\"}",code,id);
+    snprintf(out,cap,"{\"status\":\"error\",\"code\":\"%s\",%s%s%s\"build_id\":\"%s\",\"queue\":\"" QUEUE "\",\"adapter\":\"" ADAPTER "\"}",
+        code,message ? "\"message\":\"" : "",message ? message : "",message ? "\"," : "",id);
     return stop;
+}
+static int error(char *out,size_t cap,const char *code,int stop) { return error_message(out,cap,code,NULL,stop); }
+/* Actionable text for a build that never started. None of these ran a
+ * compiler, so the snapshot is retained but nothing is uncertain. */
+static const char *start_code(int why)
+{
+    return why==SELFBUILD_BUSY ? "NATIVE_EXECUTOR_BUSY" :
+        why==SELFBUILD_BLOCKED ? "NATIVE_QUEUE_BLOCKED" : "NATIVE_EXECUTOR_UNAVAILABLE";
+}
+static const char *start_message(int why)
+{
+    return why==SELFBUILD_BUSY ? "An earlier ToolServer command is still draining, so no build was started. Tell the user and wait before requesting another build." :
+        why==SELFBUILD_BLOCKED ? "The build queue holds a worker-lock or STOP marker, or cannot be used, so no build was started. Tell the user to inspect Worker01:buildjobs; do not try to remove either." :
+        "MPW ToolServer is unavailable, so no build ran. Tell the user to install MPW ToolServer with the SDK, or quit and relaunch Sherclawk, and retry.";
 }
 static int resolve_input(int i)
 {
@@ -253,7 +268,7 @@ int build_project_begin(const AgentCall *call,char *out,size_t cap,AgentJournal 
     journal_fn=journal; journal_context=ctx; start_ticks=now;
     if(resolve_input(0))return error(out,cap,"DESCRIPTOR_TEXT_OR_SIZE",0);
     sizes[0]=infos[0].hFileInfo.ioFlLgLen;
-    native_attempted=native_claimed=0; diagnostic_size=0; diagnostic[0]=0; phase=0; file_index=0; offset=0; second_pass=0; active=1;
+    native_attempted=native_claimed=not_started=0; diagnostic_size=0; diagnostic[0]=0; phase=0; file_index=0; offset=0; second_pass=0; active=1;
     return 2;
 }
 static int read_step(int i)
@@ -285,8 +300,11 @@ static int read_step(int i)
 static int finish(char *out,size_t cap,uint32_t now)
 {
     const char *status=job.state==JOB_SUCCEEDED ? "ok" : job.state==JOB_UNKNOWN ? "uncertain" : "error";
-    char artifact[256],q[520],utf8[1025],qd[1300];
-    artifact[0]=0;
+    char artifact[256],q[520],utf8[1025],qd[1300],reason[400];
+    artifact[0]=0; reason[0]=0;
+    /* A rejected record means ToolServer never received the first command. */
+    if(job.state==JOB_REJECTED)not_started=SELFBUILD_UNAVAILABLE;
+    if(not_started)snprintf(reason,sizeof(reason),"\"code\":\"%s\",\"message\":\"%s\",",start_code(not_started),start_message(not_started));
     if(job.state==JOB_SUCCEEDED) {
         FSSpec s; CInfoPBRec p; char expected[80],observed[80]; short ref; long n; OSErr e,c;
         snprintf(artifact,sizeof(artifact),QUEUE ":%s:build:native:success.txt",id);
@@ -301,7 +319,7 @@ static int finish(char *out,size_t cap,uint32_t now)
     json_quote(artifact,q,sizeof(q));
     for(size_t k=0;k<diagnostic_size;k++)if((unsigned char)diagnostic[k]<32 && diagnostic[k]!='\r' && diagnostic[k]!='\n' && diagnostic[k]!='\t')diagnostic[k]='?';
     if(text_to_utf8(diagnostic,diagnostic_size,utf8,sizeof(utf8))<0 || json_quote(utf8,qd,sizeof(qd))<0)strcpy(qd,"\"[Use read_build_log]\"");
-    snprintf(out,cap,"{\"status\":\"%s\",\"build_id\":\"%s\",\"snapshot\":\"" QUEUE ":%s\",\"adapter\":\"" ADAPTER "\",\"state\":%d,\"exit\":%d,\"os_error\":%d,\"artifact\":%s,\"logs\":\"read_build_log with stream stdout or stderr and byte offset\",\"next_stdout_byte\":0,\"next_stderr_byte\":0,\"launch_supported\":%s,\"diagnostics\":%s}",status,id,id,job.state,job.exit_code,job.error,q,job.state==JOB_SUCCEEDED ? "true" : "false",qd);
+    snprintf(out,cap,"{\"status\":\"%s\",%s\"build_id\":\"%s\",\"snapshot\":\"" QUEUE ":%s\",\"adapter\":\"" ADAPTER "\",\"state\":%d,\"exit\":%d,\"os_error\":%d,\"artifact\":%s,\"logs\":\"read_build_log with stream stdout or stderr and byte offset\",\"next_stdout_byte\":0,\"next_stderr_byte\":0,\"launch_supported\":%s,\"diagnostics\":%s}",status,reason,id,id,job.state,job.exit_code,job.error,q,job.state==JOB_SUCCEEDED ? "true" : "false",qd);
     if(phase!=4 && journal_fn(journal_context,"build_result",out))return error(out,cap,"JOURNAL_AFTER_BUILD",1);
     if(job.state==JOB_SUCCEEDED && phase==2) {
         if(application_authorize_begin(id,descriptor.output,journal_fn,journal_context,now)<0)
@@ -309,7 +327,7 @@ static int finish(char *out,size_t cap,uint32_t now)
         phase=3; return 2;
     }
     active=0;
-    return job.state==JOB_UNKNOWN || job.state==JOB_ABANDONED ? 1 : 0;
+    return job.state==JOB_UNKNOWN || job.state==JOB_ABANDONED || job.state==JOB_REJECTED ? 1 : 0;
 }
 /* The fixed queue is app-owned state and may be absent on a fresh workspace.
  * Create it one level at a time from the workspace root with the create_folder
@@ -383,6 +401,10 @@ int build_project_step(char *out,size_t cap,uint32_t now,int stop)
             if(tools_resolve(QUEUE,&queue)) {
                 if(ensure_queue() || tools_resolve(QUEUE,&queue))return error(out,cap,"QUEUE_MISSING",0);
             }
+            /* Refuse before reserving anything when the native executor cannot
+             * take the build; begin below still decides any later race. */
+            { int why=selfbuild_check(&queue);
+              if(why)return error_message(out,cap,start_code(why),start_message(why),1); }
             if(add(manifest,sizeof(manifest),&at,"{\"build_id\":\"%s\",\"adapter\":\"" ADAPTER "\",\"recipe_hash\":\"%08lx\",\"inputs\":[",id,(unsigned long)hash(recipe,strlen(recipe))))return error(out,cap,"MANIFEST_LIMIT",0);
             for(i=0;i<=descriptor.count;i++) {
                 char q[1024],path[768];
@@ -405,10 +427,16 @@ int build_project_step(char *out,size_t cap,uint32_t now,int stop)
         phase=4; return finish(out,cap,now);
     }
     if(job.state==JOB_WAITING && !native_attempted && !stop) {
+        SelfBuildStart started;
         native_attempted=1;
-        int claimed=selfbuild_begin(&job,&build_queue,&descriptor);
-        native_claimed=claimed==1;
-        if(claimed<0)job.state=JOB_UNKNOWN;
+        started=selfbuild_begin(&job,&build_queue,&descriptor);
+        native_claimed=started==SELFBUILD_STARTED;
+        if(started==SELFBUILD_UNCERTAIN)job.state=JOB_UNKNOWN;
+        else if(!native_claimed) {
+            /* Nothing was claimed and no other executor exists: the published
+             * snapshot stays inert evidence and a fresh build starts over. */
+            job.state=JOB_ABANDONED; not_started=(int)started;
+        }
     }
     if(native_claimed)selfbuild_step(now,stop);
     if(native_claimed && selfbuild_unknown())job.state=JOB_UNKNOWN;

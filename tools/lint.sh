@@ -10,7 +10,7 @@ status=0
 
 if command -v shellcheck >/dev/null 2>&1; then
     echo "shellcheck: shell tools"
-    shellcheck build.sh tools/*.sh worker/*.sh templates/ppc-toolbox/*.sh || status=1
+    shellcheck build.sh tools/*.sh || status=1
 else
     echo "skip: shellcheck not installed" >&2
 fi

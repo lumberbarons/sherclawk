@@ -10,13 +10,12 @@ against the stub headers in `tests/toolbox/`.
 ```bash
 tools/check.sh                # ASan/UBSan protocol, loop and File Manager fault suites
 tools/check-transport.sh      # TLS I/O against patched Certainly sources
-python3 tests/test_worker.py  # MacRelix worker protocol (host perl)
 tools/lint.sh                 # shellcheck, cppcheck and ruff (the CI lint gate)
 ```
 
-- `.github/workflows/ci.yml` runs `tools/check.sh`, `tools/check-transport.sh`,
-  `tests/test_worker.py` and `tools/lint.sh` on `ubuntu-24.04` for pushes to
-  main and every pull request; `tools/check.sh` therefore has to stay clean
+- `.github/workflows/ci.yml` runs `tools/check.sh`, `tools/check-transport.sh`
+  and `tools/lint.sh` on `ubuntu-24.04` for pushes to main and every pull
+  request; `tools/check.sh` therefore has to stay clean
   under GCC as well as clang.
 
 - `tools/check.sh` is the main loop while editing; run it before claiming a
@@ -73,12 +72,12 @@ cp config.example.h config.local.h  # optional local config; gitignored
   `inspect.c` tool executors (shared with host tests via `TOOLS_SRC` in
   CMakeLists.txt); `chat.c`/`json.c`/`text.c`/`network.c`/`vendor/http.c` core.
 - Native build/run machinery: `build_project.c`, `selfbuild.c`, `toolserver.c`,
-  `run_application.c`, `jobs.c`; `worker/` is the Perl fallback executor for
-  jobs in the guest.
+  `run_application.c`, `jobs.c`. MPW ToolServer is the only build backend; the
+  queue's `worker-lock` and `STOP` names are kept for existing queues.
 - `tests/` uses `tests/toolbox/` stubs to compile app sources with host `cc`;
   most `tools/*-check.c` are Mac GUI diagnostics built by CMake, not host
   programs. `tools/native-process-check.c` is the exception: a guest source
-  fixture built as `main.c` in a ppc-toolbox copy (see
+  fixture built as `main.c` of a starter project (see
   `templates/ppc-toolbox/README.md`).
 - `patches/` are fixes applied to staged copies of Certainly by build.sh and
   check-transport.sh. `vendor/` is imported code (HelloChat HTTP plus the host

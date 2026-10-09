@@ -14,9 +14,8 @@ inspection set `get_file_info`, `resolve_alias`, `list_processes`,
 `list_fonts`, `measure_text`, `list_resources` and `read_resource`
 (see "Inspecting resources and identity").
 
-Builds self-execute through asynchronous ToolServer commands when the build
-queue is unowned; the [MacRelix job worker](worker/README.md) is the
-exclusive-owner fallback. Authorized artifacts launch through the native
+Builds execute through asynchronous MPW ToolServer commands, the only
+supported build backend. Authorized artifacts launch through the native
 Process Manager. The [native PowerPC template](templates/ppc-toolbox/README.md)
 records the guest-verified MrC/PPCLink/Rez recipe and installed versions. The
 [contract](PLAN.md#buildrun-contract) uses editable project descriptors,
@@ -54,7 +53,6 @@ Certainly clone above:
 ```bash
 tools/check.sh
 tools/check-transport.sh
-python3 tests/test_worker.py
 ```
 
 `config.local.h` is ignored, and credentials are embedded only in local
@@ -245,29 +243,20 @@ fresh build working directory. Standard SDK includes are supplied by the adapter
 Sherclawk creates the queue itself before its first publication: it resolves
 the workspace root as a non-alias folder, creates `Worker01` then `buildjobs`
 one level at a time (journaled intent and verification, refusing a file or
-alias in either name) and only then publishes. Sherclawk acquires the existing
-`worker-lock` and executes its current snapshot itself when unowned. ToolServer
-and its installed SDK are still required; MacRelix is unnecessary for this
-path. General queue service belongs to increment 4. The host step below is only
-needed when an external worker should serve the queue before the app has
-created it:
+alias in either name) and only then publishes. Sherclawk acquires `worker-lock`
+(the name is kept for existing queues) and executes the snapshot itself through
+MPW ToolServer and its installed SDK; nothing else needs to run in the guest.
+Queue paths, record formats and lock names are unchanged, so earlier queues,
+claimed jobs and artifacts stay readable and are never deleted or replayed.
 
-```bash
-ssh "$SHARE_HOST" 'sudo -n install -d -o macos9 -g macos9 -m 775 /srv/retro68/Worker01/buildjobs'
-```
-
-For the existing fallback, start the worker before publishing builds. Publish
-`worker/worker.pl` under a fresh filename first (see
-[worker/README.md](worker/README.md)):
-
-```sh
-perl -w /Volumes/Retro68/Worker01/<published-worker-name>.pl /Volumes/Retro68/Worker01/buildjobs
-```
-
-An external lock makes Sherclawk poll without claiming or executing. Locks are
-not liveness evidence and are never stolen automatically. Quit the external
-worker normally before switching executors; inspect orphaned claims and locks
-before manual recovery. An idle background MacRelix worker may require activation.
+A build that cannot start says why instead of waiting, and never leaves an
+uncertain job: `NATIVE_EXECUTOR_UNAVAILABLE` (the ToolServer channel could not be set up
+at launch, or ToolServer could not be found or launched, so nothing ran), `NATIVE_EXECUTOR_BUSY` (an earlier ToolServer command is still
+draining) or `NATIVE_QUEUE_BLOCKED` (a `worker-lock` or `STOP` marker is
+present or the queue is unusable). Locks and markers are not liveness
+evidence and are never removed or stolen automatically; inspect orphaned
+claims and locks before manual recovery. Only a failure after the lock is
+taken is `uncertain`, and an uncertain build is never replayed.
 
 `build_project` reads/compares closed input pages before reserving a fresh build
 ID. Its snapshot retains the descriptor, generated trusted recipe and manifest
@@ -278,7 +267,7 @@ uncertain result stops the agent run. Keep the queue/journals for inspection.
 Revision hashes are observational FNV tokens, not cryptographic attestations;
 external server writes are outside File Manager locking guarantees.
 
-Success requires a matching worker success, the exact artifact marker and a
+Success requires a matching native success record, the exact artifact marker and a
 non-alias `APPL` with data and resource forks. Failed/uncertain builds return no
 artifact. Later source edits do not change older snapshots. Initial compiler
 diagnostics are bounded; `read_build_log(build_id, stream, start_byte)` reads
@@ -288,21 +277,20 @@ raw logs remain on disk. Successful builds persist a private Finder `ShAR`/`ShCk
 snapshot folder after recording the successful build. This versioned native
 binary record seals the output name, file identity, modification date, creator,
 sizes and FNV hashes of both forks. Old builds without this record require a
-fresh build; IDs or artifact paths alone cannot authorize execution. The worker
+fresh build; IDs or artifact paths alone cannot authorize execution. The build
 queue and its snapshots are read-only to model-facing source mutation tools.
 
 ### ToolServer diagnostic (idea 005, increment 1)
 
 `SherclawkToolServerCheck` is a standalone asynchronous Apple-event spike.
-When the build queue is unowned, the main app's `build_project` self-executes
-through this same queued ToolServer channel; the MacRelix worker remains the
-exclusive-owner fallback. Publish the diagnostic with:
+The main app's `build_project` executes through this same queued ToolServer
+channel. Publish the diagnostic with:
 
 ```bash
 APP=SherclawkToolServerCheck tools/deploy-to-share.sh
 ```
 
-Run only with ToolServer idle and no worker build in progress. It finds a running
+Run only with ToolServer idle and no build in progress. It finds a running
 `MPSX` process or discovers and launches ToolServer through mounted volumes'
 desktop databases. It creates a fresh `Retro68:ToolServerCheck<ticks>:` fixture
 with native `TEXT`/CR Rez sources and writes
@@ -357,7 +345,7 @@ existing persisted artifact authorization. `read_build_log` and `run_application
 retain their envelopes and authority checks.
 
 The executor outlives the observing chat run. An abandoned in-flight request
-holds the worker lock until its late reply drains or ToolServer disappears.
+holds the `worker-lock` until its late reply drains or ToolServer disappears.
 `native-unknown` and the claim stay as evidence without a terminal result;
 `native-drained` records an abandoned late reply. Quitting
 Sherclawk with an outstanding command leaves the lock for manual inspection.
@@ -371,14 +359,14 @@ APP=SherclawkSelfBuildCheck tools/deploy-to-share.sh
 APP=SherclawkSelfBuildStopCheck tools/deploy-to-share.sh
 ```
 
-Run with MacRelix quit and the queue unowned. It checks independent and starter
+Run with the queue unowned and ToolServer idle. It checks independent and starter
 projects with multiple sources, explicit native ownership, resource structure,
 compiler failures, revision-bound edits and fresh build IDs. Evidence is recorded
 in `Retro68:SherclawkSelfBuildCheck.log`; acceptance is recorded in [VERIFIED.md](VERIFIED.md).
 
 ### Fixed native build diagnostic (idea 005, increment 2)
 
-With MacRelix quit and ToolServer idle, publish and launch:
+With ToolServer idle, publish and launch:
 
 ```bash
 APP=SherclawkNativeBuildCheck tools/deploy-to-share.sh
@@ -400,8 +388,8 @@ application, success record or launch. Each attempt retains its own inputs.
 reply is drained without advancing. A 120-second command deadline or observed
 ToolServer disappearance likewise records an unknown outcome. Command-Q leaves
 the diagnostic. Never launch a partial artifact from a stopped attempt.
-Process scans refuse this fixture while the known MacRelix app is running;
-this is not queue locking or universal executor detection.
+The fixture logs every running process as evidence of the executor
+environment; this is not queue locking.
 
 Both success runs, compiler failure and Stop/late-reply behavior passed in OS 9.
 The repeated artifact payloads matched except for a PEF timestamp; full resource
@@ -707,8 +695,7 @@ diagnostic built as its own CMake target; launch it in the guest and read
 | `SherclawkProbe` (`tools/probe.c`) | Real model, tool and follow-up conversation; host variant via `tools/build-host-probe.sh` |
 | `SherclawkWriteCheck`, `SherclawkEditCheck`, `SherclawkSearchCheck`, `SherclawkInspectCheck` | The matching tool executors against the File Manager |
 | `SherclawkProjectCheck` | `create_project` publication, bytes and metadata |
-| `SherclawkBuildCheck`, `SherclawkRunCheck`, `SherclawkSelfBuildCheck`, `SherclawkSelfBuildStopCheck` | `build_project` / `run_application` through the worker or native executor (`tools/build-check.c`) |
-| `SherclawkJobCheck` | Native job publication and polling against the MacRelix worker |
+| `SherclawkBuildCheck`, `SherclawkRunCheck`, `SherclawkSelfBuildCheck`, `SherclawkSelfBuildStopCheck` | `build_project` / `run_application` through the native executor (`tools/build-check.c`) |
 | `SherclawkToolServerCheck`, `SherclawkNativeBuildCheck`, `SherclawkNativeBuildErrorCheck` | ToolServer channel and fixed native build, described above |
 | `SherclawkHandoffCheck` | Save Handoff persistence and seeding |
 | `SherclawkScrollCheck` | Toolbox scrollbar behavior |
@@ -718,8 +705,7 @@ by `tools/check.sh`; `tools/lint.sh` adds shellcheck, cppcheck and ruff for the
 same sources, and `.github/workflows/ci.yml` runs those checks on `ubuntu-24.04`
 for pushes to main and pull requests. Python helpers: `tools/make-art.py`
 (icon and window art), `tools/netatalk_meta.py` (fork-aware publication),
-`tools/embed-project-template.py` and `tools/materialize-native-template.py`
-(starter template), `tools/publish-worker-job.py` (diagnostic job producer),
+`tools/embed-project-template.py` (starter template),
 and `tools/guest-input.py`, `tools/qmpdrive.py` and `tools/utm_qmp.py`
 (drive the UTM guest over QMP).
 
@@ -730,11 +716,8 @@ APP=SherclawkHandoffCheck tools/deploy-to-share.sh
 # Launch in OS 9; inspect Retro68:SherclawkHandoffCheck.log.
 APP=SherclawkProjectCheck tools/deploy-to-share.sh
 # Launch in OS 9; inspect Retro68:SherclawkProjectCheck.log.
-python3 tests/test_worker.py
 APP=SherclawkRunCheck tools/deploy-to-share.sh
 # Launch in OS 9; inspect Retro68:SherclawkRunCheck.log.
-APP=SherclawkJobCheck tools/deploy-to-share.sh
-# See worker/README.md for the guest native producer/poller diagnostic.
 tools/build-host-probe.sh
 build/host-probe
 ./build.sh SherclawkProbe_APPL
