@@ -47,6 +47,33 @@ toggle on, every call stays on its own line and the result and the call's
 journal event names follow it. The session JSONL is byte-identical either way, and the
 API key never appears in status text, logs, prompts or results.
 
+## Project instructions (AGENTS.md)
+
+Put standing guidance for the agent in a plain `AGENTS.md` file, written like any
+workspace text file: MacRoman with CR line endings (a UTF-8 or LF file copied in
+from another machine reads correctly only for ASCII), type `TEXT`, no alias.
+Free-form Markdown, no required headings.
+
+- `Retro68:AGENTS.md` (the workspace root, wherever Preferences puts it) is read
+  when the first message of a chat is sent and rides in the system message of
+  every request in that chat. New Chat re-reads it; a handoff keeps the copy
+  already loaded. Edits take effect at the next new chat.
+- `Retro68:<Project>:AGENTS.md` is read the first time a tool call names that
+  project (its `path` or `root` begins with the folder), after that round's
+  tool results. It is recorded in the conversation as a message that names the
+  file, so it is journaled, counts against history and is summarized by a
+  handoff; after a handoff it is read again when the project is next touched.
+- Each file is cut at 4096 bytes of UTF-8 on a line boundary, with a
+  `[AGENTS.md truncated at 4096 bytes]` marker. The Conversation shows a line
+  for every file loaded or skipped (binary, alias, folder, resource fork, or
+  changed while read). An absent or empty file is silent.
+- Instructions guide style and process. They cannot widen what a tool may do,
+  override the built-in rules, or outrank what you type. When a file exists the
+  agent is told to keep it current with `edit_text` as its work adds, removes or
+  changes what the file describes, and not to create one unless asked.
+- The journal records the root file as a `workspace_instructions` event (size,
+  truncation, revision hash) and a project file as `project_instructions`.
+
 ## Controls, limits and sessions
 
 The compact mascot header leaves the conversation pane the full window width.

@@ -290,6 +290,78 @@ static void read(const char *s, const JsonToken *tokens, char *out, size_t cap)
     if (append(out, cap, &at, header)) fail(out, cap, "LIMIT", "Text result exceeds output capacity.", 0);
 
 }
+/* AGENTS.md: one bounded whole-file read of <folder>:AGENTS.md with the same
+ * plain-text rules as read_text. Absence is ordinary and silent; anything
+ * present but unusable is reported so the app can say it was skipped. */
+int tools_read_instructions(const char *folder, char *out, size_t cap, unsigned long *hash)
+{
+    static char bytes[AGENT_INSTRUCTIONS_CAP + 1], utf8[AGENT_INSTRUCTIONS_CAP * 3 + 1];
+    char path[256], marker[64];
+    FSSpec spec;
+    CInfoPBRec pb, after;
+    short ref;
+    OSErr err, closed;
+    long size, wanted;
+    size_t i, limit;
+    int n, markerlen, cut = 0;
+    unsigned long sum;
+    if (cap) out[0] = 0;
+    if (hash) *hash = 0;
+    if (cap < AGENT_INSTRUCTIONS_CAP + 1) return TOOLS_INSTRUCTIONS_UNUSABLE;
+    if (snprintf(path, sizeof(path), "%s%sAGENTS.md", folder, *folder ? ":" : "") >= (int)sizeof(path)) return TOOLS_INSTRUCTIONS_ABSENT;
+    if (spec_for(path, 0, &spec)) return TOOLS_INSTRUCTIONS_ABSENT;
+    if (catalog(&spec, &pb)) return TOOLS_INSTRUCTIONS_ABSENT;
+    if (!plain_file(&spec, &pb)) return TOOLS_INSTRUCTIONS_UNUSABLE;
+    if (!pb.hFileInfo.ioFlLgLen) return TOOLS_INSTRUCTIONS_ABSENT;
+    size = pb.hFileInfo.ioFlLgLen;
+    if (size > AGENT_INSTRUCTIONS_CAP) { size = AGENT_INSTRUCTIONS_CAP; cut = 1; }
+    wanted = size;
+    if (FSpOpenDF(&spec, fsRdPerm, &ref)) return TOOLS_INSTRUCTIONS_UNUSABLE;
+    err = FSRead(ref, &size, bytes); closed = FSClose(ref);
+    if (err || closed || size != wanted) return TOOLS_INSTRUCTIONS_UNUSABLE;
+    sum = hash_bytes(bytes, size);
+    for (i = 0; i < (size_t)size; i++) {
+        unsigned char c = (unsigned char)bytes[i];
+        if (!c || c == 127 || (c < 32 && c != 9 && c != 10 && c != 13)) return TOOLS_INSTRUCTIONS_UNUSABLE;
+    }
+    if (catalog(&spec, &after) || !same_file(&pb, &after)) return TOOLS_INSTRUCTIONS_UNUSABLE;
+    n = text_to_utf8(bytes, (size_t)size, utf8, sizeof(utf8));
+    if (n < 0) return TOOLS_INSTRUCTIONS_UNUSABLE;
+    if (hash) *hash = sum;
+    if (n > AGENT_INSTRUCTIONS_CAP) cut = 1;
+    if (!cut) { memcpy(out, utf8, (size_t)n + 1); return TOOLS_INSTRUCTIONS_LOADED; }
+    /* Keep whole lines and whole characters, and say what was left out. */
+    markerlen = snprintf(marker, sizeof(marker), "\n[AGENTS.md truncated at %d bytes]", AGENT_INSTRUCTIONS_CAP);
+    limit = AGENT_INSTRUCTIONS_CAP - (size_t)markerlen;
+    if (limit > (size_t)n) limit = (size_t)n;
+    while (limit && ((unsigned char)utf8[limit] & 0xC0) == 0x80) limit--;
+    if (limit < (size_t)n ? utf8[limit] != '\n' : utf8[n - 1] != '\n') {
+        size_t line = limit;
+        while (line && utf8[line - 1] != '\n') line--;
+        if (line) limit = line;
+    }
+    while (limit && utf8[limit - 1] == '\n') limit--;
+    memcpy(out, utf8, limit); memcpy(out + limit, marker, (size_t)markerlen + 1);
+    return TOOLS_INSTRUCTIONS_TRUNCATED;
+}
+int tools_call_project(const AgentCall *call, char *name, size_t cap)
+{
+    JsonToken tokens[128];
+    char value[512];
+    size_t n;
+    int key;
+    if (cap) name[0] = 0;
+    if (json_parse(call->arguments, strlen(call->arguments), tokens, 128) < 1 || tokens[0].type != JSON_OBJECT) return 0;
+    key = json_member(call->arguments, tokens, 0, "path");
+    if (key < 0) key = json_member(call->arguments, tokens, 0, "root");
+    if (key < 0 || json_string(call->arguments, tokens, key, value, sizeof(value)) < 0) return 0;
+    for (n = 0; value[n] && value[n] != ':'; n++) {
+        unsigned char c = (unsigned char)value[n];
+        if (c < 32 || c == 127 || c == '/' || c == '\\') return 0;
+    }
+    if (!n || n >= cap) return 0;
+    memcpy(name, value, n); name[n] = 0; return 1;
+}
 /* The configured workspace root as a non-alias folder. App-internal bootstrap
  * operations that create fixed children (the build queue) start here. */
 OSErr tools_workspace_root(FSSpec *spec)

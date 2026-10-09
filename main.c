@@ -1727,6 +1727,51 @@ static long ShowMessage(const char *label, const char *text)
     return (long)at;
 }
 
+/* ── AGENTS.md ───────────────────────────────────────────────────── */
+/* The workspace-root file rides in the system message for the whole chat and is
+ * read when the chat's first message is sent. A project's file is read once,
+ * after the first tool round that touches the project, and recorded as history.
+ * Either way the user is told what was loaded or skipped. */
+static char gInstructions[AGENT_INSTRUCTIONS_CAP + 1];
+static int ReadInstructions(const char *folder, unsigned long *hash)
+{
+    char label[200], note[400];
+    int status = tools_read_instructions(folder, gInstructions, sizeof(gInstructions), hash);
+    if (status == TOOLS_INSTRUCTIONS_ABSENT) return status;
+    snprintf(label, sizeof(label), "%s%sAGENTS.md", folder, *folder ? ":" : "");
+    if (status < 0) snprintf(note, sizeof(note), "Skipped %s: it must be a plain TEXT file that is not an alias or a folder and does not change while it is read.", label);
+    else snprintf(note, sizeof(note), "Loaded %s (%lu bytes%s).", label, (unsigned long)strlen(gInstructions),
+                  status == TOOLS_INSTRUCTIONS_TRUNCATED ? ", cut to fit" : "");
+    ShowMessage("Instructions", note);
+    return status;
+}
+static void LoadWorkspaceInstructions(void)
+{
+    char json[160];
+    unsigned long hash = 0;
+    int status = ReadInstructions("", &hash);
+    agent_set_instructions(status > 0 ? gInstructions : NULL);
+    if (status <= 0) return;
+    snprintf(json, sizeof(json), "{\"path\":\"AGENTS.md\",\"bytes\":%lu,\"truncated\":%s,\"hash\":\"%08lx\"}",
+             (unsigned long)strlen(gInstructions), status == TOOLS_INSTRUCTIONS_TRUNCATED ? "true" : "false", hash);
+    session_journal(&gSession, "workspace_instructions", json);
+}
+/* Called once every tool result of the round is in. Returns -1 when a note
+ * could not be recorded, which stops the run. */
+static int NoteProjectInstructions(void)
+{
+    int i;
+    for (i = 0; i < gAgent.count; i++) {
+        char project[AGENT_PROJECT_NAME_CAP];
+        unsigned long hash;
+        int status;
+        if (!tools_call_project(&gAgent.calls[i], project, sizeof(project)) || agent_project_seen(&gAgent, project)) continue;
+        status = ReadInstructions(project, &hash);
+        if (agent_project_note(&gAgent, project, status > 0 ? gInstructions : NULL)) return -1;
+    }
+    return 0;
+}
+
 /* ── Tool debug view (display only; the session file is unaffected) ─ */
 /* Journal event names emitted for the tool call being executed. */
 static char gToolEvents[192];
@@ -1829,6 +1874,7 @@ static void NewChat(void)
 {
     if (RunBusy()) return;
     session_close(&gSession); agent_reset(&gAgent, session_journal, &gSession); chat_reset(&gChat);
+    agent_set_instructions(NULL);
     view_image_reset();
     ResponseSetText("", 0); TESetText("", 0, gPromptTE); InvalRect(&gPromptRect);
     FocusSet(gPromptTE); SetStatus("Ready. What shall we investigate?");
@@ -2022,6 +2068,7 @@ static void SendBegin(void)
     if (!gSession.open && (gAgent.messages || session_open(&gSession, tools_workspace()))) {
         SetStatus("Session file unavailable. Check %s or start a new session.", tools_workspace()); return;
     }
+    if (!gAgent.messages) LoadWorkspaceInstructions();
     if (agent_begin(&gAgent, gPending, error, sizeof(error))) { SetStatus("%s", error); return; }
     view_image_reset();
     ShowMessage("You", gPending);
@@ -2134,6 +2181,7 @@ static void StepTools(void)
     if (gAgent.next == gAgent.count) {
         /* Tool messages cannot carry pixels: an image from this round follows
          * the last tool result, as a user message for the next request. */
+        if (NoteProjectInstructions()) { AbortChat("Could not record project instructions. Stop and inspect the session."); return; }
         const AgentImage *shot = view_image_take();
         if (shot && agent_attach_image(&gAgent, shot)) { AbortChat("Could not record the attached image. Stop and inspect the session."); return; }
         gRun = RUN_NEXT_REQUEST; return;

@@ -18,5 +18,19 @@ int tools_validate_path(const char *path, int folder);
 /* Runtime workspace root (MacRoman, ends in ':'), compiled default unless the
  * app applies the saved preferences. Shared by tools, inspection and builds. */
 const char *tools_workspace(void);
+/* AGENTS.md loading. The file is <folder>:AGENTS.md below the workspace, or
+ * AGENTS.md at its root when folder is "". It is plain MacRoman/CR TEXT like
+ * every workspace text file, read once, whole, and delivered as UTF-8 with LF. */
+#define TOOLS_INSTRUCTIONS_ABSENT 0     /* no such file, or an empty one */
+#define TOOLS_INSTRUCTIONS_LOADED 1
+#define TOOLS_INSTRUCTIONS_TRUNCATED 2  /* cut on a line to fit AGENT_INSTRUCTIONS_CAP, marker appended */
+#define TOOLS_INSTRUCTIONS_UNUSABLE (-1) /* binary, alias, folder, fork, changed while read, or cap too small */
+/* out needs AGENT_INSTRUCTIONS_CAP + 1 bytes; it is empty unless a file was
+ * loaded. hash names the raw bytes read, for the journal. */
+int tools_read_instructions(const char *folder, char *out, size_t cap, unsigned long *hash);
+/* The project folder a tool call works in: the first component of its path or
+ * root argument. Returns 1 and copies it, or 0 (name emptied) when the call
+ * names none or it does not fit cap. */
+int tools_call_project(const AgentCall *call, char *name, size_t cap);
 void tools_set_workspace(const char *path);
 #endif

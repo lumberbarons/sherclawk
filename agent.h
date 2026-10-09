@@ -28,6 +28,13 @@
 #define AGENT_IMAGE_PATH_CAP 384
 /* History bytes reserved for the note that accompanies an attached image. */
 #define AGENT_IMAGE_NOTE_CAP 2048
+/* Largest AGENTS.md text, in UTF-8 bytes, that rides in the system message or
+ * a project note. A longer file is cut on a line boundary with a marker. */
+#define AGENT_INSTRUCTIONS_CAP 4096
+/* Projects whose AGENTS.md is tracked per chat, and the longest tracked name
+ * (UTF-8 bytes, terminator included); past either, a project counts as seen. */
+#define AGENT_PROJECT_MAX 8
+#define AGENT_PROJECT_NAME_CAP 96
 /* Display-grade cost accumulator clamp, in millionths of a US dollar. */
 #define AGENT_COST_MICROS_MAX 9000000000000000LL
 
@@ -76,6 +83,9 @@ typedef struct {
     /* The newest view_image note in history, spliced into the next request. */
     size_t image_at, image_length;
     int image_pending;
+    /* Projects whose AGENTS.md was read this chat; cleared with the history. */
+    char projects[AGENT_PROJECT_MAX][AGENT_PROJECT_NAME_CAP];
+    int project_count;
     AgentJournal journal;
     void *journal_context;
 } Agent;
@@ -94,6 +104,21 @@ int agent_request_image(const Agent *a, const char *model, const AgentImage *ima
  * or a recording failure. An image the request cannot hold is not attached
  * and a note says so (returns 0 with image_pending clear). */
 int agent_attach_image(Agent *a, const AgentImage *image);
+/* Workspace-root AGENTS.md text (UTF-8, LF), sent in the system message of
+ * every request. It outlives agent_reset and handoffs, which is why it is held
+ * here and not in history; the app reloads it for each new chat. NULL or ""
+ * clears it. Returns -1, leaving the old text, when it exceeds
+ * AGENT_INSTRUCTIONS_CAP. It is never journaled or summarized. */
+int agent_set_instructions(const char *text);
+/* Whether the project's AGENTS.md is settled for this chat: already read, or
+ * not trackable (table full, empty or over-long name). 0 means look for it. */
+int agent_project_seen(const Agent *a, const char *project);
+/* Settle a project's AGENTS.md once every tool result of the round is in. A
+ * non-empty text is recorded as one user message (journaled as
+ * project_instructions); NULL or "" settles a folder that has none. Settled
+ * projects are a no-op returning 0. Returns -1, leaving the project unsettled,
+ * for a round still in progress or a recording failure. */
+int agent_project_note(Agent *a, const char *project, const char *text);
 /* Independent, tool-free summary request works even when history is full.
  * Seed a fresh candidate only; caller publishes it after durable persistence. */
 int agent_handoff_request(const Agent *a, const char *model, char *out, size_t cap);

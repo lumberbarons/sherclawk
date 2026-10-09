@@ -19,6 +19,7 @@ in the headers today; the headers win if this drifts.
 | `AGENT_CALL_MAX` | 4 | Tool calls accepted from one response. |
 | `AGENT_HISTORY_CAP` | 384 KiB | Recorded conversation JSON (`Agent.history`). |
 | `CHAT_REQUEST_CAP` | 416 KiB | The whole request JSON (`gJSON`): history plus system prompt and tool schemas. |
+| `AGENT_INSTRUCTIONS_CAP` | 4096 | UTF-8 bytes of one `AGENTS.md` (marker included). The root file rides in the system message, so it is request overhead; a project file is a history message. Up to `AGENT_PROJECT_MAX` projects are tracked per chat. |
 | `AGENT_TEXT_CAP` | 16 KiB | User prompt and handoff message buffers. Not reply text. |
 | `AGENT_RESULT_CAP` | 1536 | One tool result recorded into history. |
 | `AGENT_IMAGE_CAP` | 128 KiB | Largest PNG `view_image` reads (`view_image.c` holds one in a static buffer). Its base64 form, a third larger, rides in one request. |
@@ -86,7 +87,9 @@ in bss and 8,224 bytes of text and data, mostly the embedded starter.
    rejected as malformed. The old 16 KiB value was already at its edge at 3072
    tokens.
 3. **`CHAT_REQUEST_CAP` = `AGENT_HISTORY_CAP` + overhead.** The overhead is the
-   system prompt and tool schemas (about 13 KB today, with room to 32 KiB).
+   system prompt, tool schemas and the workspace `AGENTS.md` (about 13 KB plus
+   up to `AGENT_INSTRUCTIONS_CAP` today, with room to 32 KiB; the compile-time
+   guard demands 16 KiB plus the instruction cap).
    Raising history means raising the request cap and the HTTP request buffer in
    `network.h`, which is `CHAT_REQUEST_CAP` plus header room.
 4. **A cut-off reply is a model round.** At the token limit the reply is
@@ -146,7 +149,10 @@ docker run --rm -v "$PWD/build:/b" ghcr.io/autc04/retro68 \
     powerpc-apple-macos-size /b/Sherclawk.xcoff
 ```
 
-Text plus data plus bss was 2,454,552 bytes (2.34 MiB) at 3072 tokens with a
+Text plus data plus bss was 3,339,896 bytes (3.19 MiB) once `AGENTS.md`
+loading was linked; it adds static buffers for the loader scratch, the
+instruction text and its joined system message, and the project-note message.
+Earlier: 2,454,552 bytes (2.34 MiB) at 3072 tokens with a
 16 KiB reply buffer and 256 KiB history, 2,512,456 bytes (2.40 MiB) at 6000
 tokens with the 40 KiB `AGENT_REPLY_CAP`, and 3,036,744 bytes (2.90 MiB) with
 384 KiB history, and 3,220,816 bytes (3.07 MiB) once the 128 KiB `view_image`

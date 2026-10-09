@@ -22,7 +22,7 @@
 static struct File { int used, dir; long parent, id; char name[32], bytes[20000]; long size, resource; FInfo info;
     unsigned long crdat, mddat; } files[64];
 static long positions[64];
-static int dir_error, dir_leftover, dir_race;
+static int dir_error, dir_leftover, dir_race, touch_on_read;
 static int short_write, bad_read, bad_close, rename_race, rename_error, published, flush_error;
 static int journals, fail_journal, creates;
 static int editing, renames, fault_rename, change_after_stage, stage_bad_read, stage_short_read, busy, swapped_publish;
@@ -52,7 +52,21 @@ OSErr FSMakeFSSpec(short vol, long parent, const unsigned char *name, FSSpec *sp
     if (!parent) {
         assert(name[0]>=8 && !memcmp(name+1,"Retro68:",8));
         if (name[0]==8) { parent=1;name=(const unsigned char *)"\007Retro68"; }
-        else { parent=10;leafname[0]=name[0]-8;memcpy(leafname+1,name+9,leafname[0]);name=leafname; }
+        else {
+            /* Walk colon-separated folders below the workspace; a missing or
+             * non-folder component fails like the real File Manager. */
+            const unsigned char *rest=name+9,*end=name+1+name[0],*colon;
+            parent=10;
+            while((colon=memchr(rest,':',(size_t)(end-rest)))) {
+                unsigned char part[32]; int k;
+                part[0]=(unsigned char)(colon-rest); memcpy(part+1,rest,part[0]);
+                k=find(parent,part);
+                if(k<0) return dirNFErr;
+                if(!files[k].dir) return dirNFErr;
+                parent=files[k].id; rest=colon+1;
+            }
+            leafname[0]=(unsigned char)(end-rest);memcpy(leafname+1,rest,leafname[0]);name=leafname;
+        }
     }
     spec->parID=parent; memcpy(spec->name,name,(size_t)name[0]+1);
     return find(parent,name)<0 ? fnfErr : 0;
@@ -103,6 +117,7 @@ OSErr FSRead(short ref, long *n, void *out)
     if(*n>files[ref].size-positions[ref]) *n=files[ref].size-positions[ref];
     if(stage_short_read && *n && !strncmp(files[ref].name,"Sherclawk tmp",13)) --*n;
     memcpy(out,files[ref].bytes+positions[ref],(size_t)*n); positions[ref]+=*n;
+    if(touch_on_read) files[ref].mddat++;
     if((bad_read || (stage_bad_read && !strncmp(files[ref].name,"Sherclawk tmp",13))) && *n) ((char *)out)[0]^=1;
     return 0;
 }
@@ -371,7 +386,7 @@ static void reset(void)
 {
     memset(files,0,sizeof(files)); add(1,"Retro68",1);
     memset(resources,0,sizeof(resources)); res_ref=0; res_error=0;
-    dir_error=dir_leftover=dir_race=0;
+    dir_error=dir_leftover=dir_race=touch_on_read=0;
     short_write=bad_read=bad_close=rename_race=rename_error=published=flush_error=0;
     journals=fail_journal=creates=0;longest_temporary=0;
     editing=renames=fault_rename=change_after_stage=stage_bad_read=stage_short_read=busy=swapped_publish=0;
@@ -903,6 +918,126 @@ static void view_checks(void)
     assert(view_image_step(result,sizeof(result),102,0)==0 && strstr(result,"NOT_PNG") && strstr(result,"IEND") && !view_image_take());
     puts("PASS view_image: vision gating, argument and file checks, bounded stepped reads, Stop, deadline, change detection and single hand-off");
 }
+
+/* ---------- AGENTS.md loading: the file named <folder>:AGENTS.md, MacRoman/CR
+ * TEXT like every workspace text file, capped and truncated visibly. ------- */
+static char instructions[AGENT_INSTRUCTIONS_CAP+1];
+static int put_file(long parent, const char *name, const char *bytes, long size)
+{
+    int i=add(parent,name,0);
+    memcpy(files[i].bytes,bytes,(size_t)size); files[i].size=size; files[i].info.fdType='TEXT';
+    return i;
+}
+static int load(const char *folder, unsigned long *hash)
+{
+    memset(instructions,'#',sizeof(instructions)); instructions[sizeof(instructions)-1]=0;
+    return tools_read_instructions(folder,instructions,sizeof(instructions),hash);
+}
+static void project_name_checks(void)
+{
+    static const struct { const char *tool, *arguments, *expected; } cases[] = {
+        {"read_text","{\"path\":\"Putt:main.c\"}","Putt"},
+        {"write_text","{\"path\":\"Putt:src:util.c\",\"text\":\"x\"}","Putt"},
+        {"edit_text","{\"path\":\"Putt:main.c\",\"expected_revision\":\"r\",\"old_text\":\"a\",\"new_text\":\"b\"}","Putt"},
+        {"list_files","{\"root\":\"Putt:src\"}","Putt"},
+        {"search_text","{\"root\":\"Putt\",\"query\":\"x\"}","Putt"},
+        {"create_folder","{\"path\":\"Putt:assets\"}","Putt"},
+        {"create_project","{\"path\":\"Putt\"}","Putt"},
+        {"build_project","{\"path\":\"Putt\"}","Putt"},
+        {"view_image","{\"path\":\"caf\\u00e9:shot.png\"}","caf\xc3\xa9"},
+        {"read_text","{\"path\":\"notes.txt\"}","notes.txt"},
+        /* No project: the workspace root, no path argument, a leading colon or a bad document. */
+        {"list_files","{\"root\":\"\"}",NULL},
+        {"list_files","{}",NULL},
+        {"get_environment","{}",NULL},
+        {"run_application","{\"build_id\":\"b1\"}",NULL},
+        {"read_text","{\"path\":\":Putt:main.c\"}",NULL},
+        {"read_text","{\"path\":7}",NULL},
+        {"read_text","{\"path\":\"Putt:main.c\"",NULL},
+        {"read_text","{\"path\":\"a/b:c\"}",NULL},
+    };
+    char name[32];
+    size_t i;
+    memset(&call,0,sizeof(call));
+    for(i=0;i<sizeof(cases)/sizeof(*cases);i++) {
+        strcpy(call.name,cases[i].tool); strcpy(call.arguments,cases[i].arguments);
+        memset(name,'?',sizeof(name));
+        if(cases[i].expected) assert(tools_call_project(&call,name,sizeof(name))==1 && !strcmp(name,cases[i].expected));
+        else assert(tools_call_project(&call,name,sizeof(name))==0 && !name[0]);
+    }
+    /* A name that does not fit the caller's buffer is no project, never a cut one. */
+    strcpy(call.arguments,"{\"path\":\"Putt:main.c\"}");
+    assert(tools_call_project(&call,name,4)==0 && !name[0]);
+    puts("PASS AGENTS.md project names: first path component of path or root, nothing else");
+}
+static void instruction_checks(void)
+{
+    unsigned long hash,other;
+    static char big[20000];
+    char marker[80];
+    int i,n;
+    snprintf(marker,sizeof(marker),"[AGENTS.md truncated at %d bytes]",AGENT_INSTRUCTIONS_CAP);
+    /* Absent is the ordinary case: no file, no folder, a file where a folder
+     * would be, or an empty file all report nothing and leave out empty. */
+    reset();
+    assert(load("",&hash)==TOOLS_INSTRUCTIONS_ABSENT && !instructions[0]);
+    assert(load("Putt",&hash)==TOOLS_INSTRUCTIONS_ABSENT && !instructions[0]);
+    put_file(10,"hello.c","x",1);
+    assert(load("hello.c",&hash)==TOOLS_INSTRUCTIONS_ABSENT && !instructions[0]);
+    put_file(10,"AGENTS.md","",0);
+    assert(load("",&hash)==TOOLS_INSTRUCTIONS_ABSENT && !instructions[0]);
+    /* The root file: MacRoman and CR become UTF-8 and LF; the hash names the bytes. */
+    reset();
+    put_file(10,"AGENTS.md","Use caf\x8e\rTwo spaces.\r",21);
+    assert(load("",&hash)==TOOLS_INSTRUCTIONS_LOADED && !strcmp(instructions,"Use caf\xc3\xa9\nTwo spaces.\n") && hash);
+    files[1].bytes[0]='X';
+    assert(load("",&other)==TOOLS_INSTRUCTIONS_LOADED && other!=hash && instructions[0]=='X');
+    /* A project file lives one folder down and is a different file. */
+    reset();
+    put_file(10,"AGENTS.md","root\r",5);
+    i=add(10,"Putt",1); put_file(files[i].id,"AGENTS.md","project\r",8);
+    assert(load("Putt",&hash)==TOOLS_INSTRUCTIONS_LOADED && !strcmp(instructions,"project\n"));
+    assert(load("",&hash)==TOOLS_INSTRUCTIONS_LOADED && !strcmp(instructions,"root\n"));
+    /* Plain TEXT only: binary bytes, aliases, folders and resource forks are
+     * refused, reported as unusable rather than silently absent. */
+    reset(); put_file(10,"AGENTS.md","ab\0cd",5);
+    assert(load("",&hash)==TOOLS_INSTRUCTIONS_UNUSABLE && !instructions[0]);
+    reset(); put_file(10,"AGENTS.md","ab\x01" "cd",5);
+    assert(load("",&hash)==TOOLS_INSTRUCTIONS_UNUSABLE && !instructions[0]);
+    reset(); i=put_file(10,"AGENTS.md","rules\r",6); files[i].info.fdFlags=0x8000;
+    assert(load("",&hash)==TOOLS_INSTRUCTIONS_UNUSABLE && !instructions[0]);
+    reset(); i=put_file(10,"AGENTS.md","rules\r",6); files[i].resource=10;
+    assert(load("",&hash)==TOOLS_INSTRUCTIONS_UNUSABLE && !instructions[0]);
+    reset(); add(10,"AGENTS.md",1);
+    assert(load("",&hash)==TOOLS_INSTRUCTIONS_UNUSABLE && !instructions[0]);
+    /* A file that changes while it is read is not trusted. */
+    reset(); put_file(10,"AGENTS.md","rules\r",6); touch_on_read=1;
+    assert(load("",&hash)==TOOLS_INSTRUCTIONS_UNUSABLE && !instructions[0]);
+    touch_on_read=0;
+    /* An output buffer that cannot hold a full file plus its terminator is refused. */
+    reset(); put_file(10,"AGENTS.md","rules\r",6);
+    assert(tools_read_instructions("",instructions,AGENT_INSTRUCTIONS_CAP,&hash)==TOOLS_INSTRUCTIONS_UNUSABLE);
+    /* The cap itself fits whole; one byte more is cut with a visible marker. */
+    reset(); memset(big,'x',AGENT_INSTRUCTIONS_CAP); put_file(10,"AGENTS.md",big,AGENT_INSTRUCTIONS_CAP);
+    assert(load("",&hash)==TOOLS_INSTRUCTIONS_LOADED && strlen(instructions)==AGENT_INSTRUCTIONS_CAP && !strstr(instructions,"truncated"));
+    reset(); memset(big,'x',AGENT_INSTRUCTIONS_CAP+1); put_file(10,"AGENTS.md",big,AGENT_INSTRUCTIONS_CAP+1);
+    assert(load("",&hash)==TOOLS_INSTRUCTIONS_TRUNCATED && strlen(instructions)<=AGENT_INSTRUCTIONS_CAP);
+    n=(int)strlen(instructions); assert(n>(int)strlen(marker) && !strcmp(instructions+n-(int)strlen(marker),marker));
+    /* A long file is cut on a line boundary, so no rule is left half-written. */
+    reset(); n=0; for(i=0;i<1000;i++) n+=snprintf(big+n,sizeof(big)-(size_t)n,"Rule number %03d.\r",i);
+    put_file(10,"AGENTS.md",big,n);
+    assert(load("",&hash)==TOOLS_INSTRUCTIONS_TRUNCATED && strlen(instructions)<=AGENT_INSTRUCTIONS_CAP);
+    { char *end=strstr(instructions,"\n[AGENTS.md truncated"); assert(end && end[-1]=='.' && !strncmp(instructions,"Rule number 000.\n",17)); }
+    /* Three-byte characters expand past the cap before it is read in full: the
+     * cut never lands inside a character and the text stays valid UTF-8. */
+    reset(); memset(big,0xdb,AGENT_INSTRUCTIONS_CAP); put_file(10,"AGENTS.md",big,AGENT_INSTRUCTIONS_CAP);
+    assert(load("",&hash)==TOOLS_INSTRUCTIONS_TRUNCATED && strlen(instructions)<=AGENT_INSTRUCTIONS_CAP);
+    { const unsigned char *u=(const unsigned char *)instructions; size_t k=0;
+      while(u[k] && !strncmp((const char *)u+k,"\xe2\x82\xac",3)) k+=3;
+      assert(k>=3000 && !strncmp((const char *)u+k,"\n[AGENTS.md truncated",21)); }
+    puts("PASS AGENTS.md loader: absent, MacRoman/CR, project folders, refusals, change detection, cap and visible truncation");
+    project_name_checks();
+}
 int main(void)
 {
     project_checks();
@@ -958,5 +1093,6 @@ int main(void)
     edit_checks();
     inspect_checks();
     view_checks();
+    instruction_checks();
     return 0;
 }

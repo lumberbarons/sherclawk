@@ -67,6 +67,14 @@ and aliases, and preserve classic MacRoman/CR `TEXT` files. Model requests,
 responses and journals use UTF-8. Argument JSON must not pass through lossy UI
 conversion. Detailed mutation recovery rules belong in [tools](tools.md).
 
+Workspace and project `AGENTS.md` text is owner guidance, not tool authority:
+the system rules say it cannot override them or widen a tool, and it never
+changes which tools may run. The workspace-root text lives outside history (a
+static in `agent.c`, in the system message of each request) so it survives New
+Chat and handoff without being summarized; a project's text is a history
+message, so it follows the conversation. See
+[ADR-0004](adr/0004-load-agents-md-as-bounded-owner-guidance.md).
+
 ## Deliberate costs
 
 Some apparently wasteful work is a guarantee. Changing any of the following
