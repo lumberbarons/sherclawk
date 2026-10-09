@@ -1,5 +1,10 @@
 # 007 — Sherclawk screenshots: native capture, and seeing what it built
 
+> Historical design note. Proposals, status statements and source-line references
+> describe development at the time of writing and may be superseded. Use the
+> [current guides](../../README.md#documentation) for supported behavior and the
+> [issue tracker](https://github.com/lumberbarons/sherclawk/issues) for active work.
+
 **Status:** idea, not built. API availability was checked against the workspace's
 locally installed, user-supplied Universal Interfaces (`InterfacesAndLibraries/Interfaces/CIncludes/`);
 nothing here has been compiled or run in the guest. OS 9's built-in screenshot

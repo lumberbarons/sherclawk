@@ -1,10 +1,10 @@
 # Single-server MCP implementation
 
-The protocol diagnostic is implemented on `feat/single-server-mcp` for #76.
+The protocol core and native diagnostic for #76 are implemented.
 MCP is not yet exposed in the Sherclawk application. The next gate is a real
 OS 9 Tavily diagnostic run, followed by the configuration editor, agent
-integration and release acceptance. Do not merge the feature PR as complete
-until those gates pass.
+integration and release acceptance. The implemented diagnostic does not
+establish that those application-integration gates have passed.
 
 ## Protocol diagnostic
 

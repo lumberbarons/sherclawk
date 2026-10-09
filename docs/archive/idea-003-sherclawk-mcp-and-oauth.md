@@ -1,5 +1,10 @@
 # 003 — Sherclawk MCP client and an OS 9 OAuth library
 
+> Historical design note. Proposals, status statements and source-line references
+> describe development at the time of writing and may be superseded. Use the
+> [current guides](../../README.md#documentation) for supported behavior and the
+> [issue tracker](https://github.com/lumberbarons/sherclawk/issues) for active work.
+
 **Status:** researched, not built. Nothing here has been compiled or run in the
 guest. Findings come from reading Sherclawk's source, cloning the repositories
 named below, and web searches (October 2026). Items marked *unverified* come
@@ -48,7 +53,7 @@ parser is needed eventually.
 - `tools/list` mapped into the schema array, with description trimming.
 - `tools/call` dispatch with result truncation.
 - Server configuration (URL, optional token), either in `config.local.h` or the
-  planned Preferences dialog ([002](idea-002-sherclawk-preferences.md)).
+  planned Preferences dialog ([002](preferences-notes.md)).
 - Trust-anchor additions for each server's root CA.
 
 **Safety.** MCP results are untrusted data, which the existing policy already

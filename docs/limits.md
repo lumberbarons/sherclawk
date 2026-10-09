@@ -107,14 +107,24 @@ tokens with the 40 KiB `AGENT_REPLY_CAP`, and 3,036,744 bytes (2.90 MiB) with
 384 KiB history. This excludes dynamic TLS and UI allocations and the
 stack, so keep the minimum partition comfortably above it.
 
+With the same layout, increasing history from 384 KiB to 512 KiB would raise
+that baseline to roughly 3.4 MiB before dynamic allocations; 1 MiB history
+would need roughly 5.4 MiB, and 2 MiB would exceed the current 8 MiB preferred
+partition. Re-measure and raise `SIZE` before such increases. History capacity
+also increases per-round upload and input-token costs and is not a guarantee
+of provider context capacity. The TextEdit transcript remains independently
+bounded.
+
 ## Changing a limit
 
-- **`max_tokens`:** check invariant 1 and 6, update the README limits
-  paragraph, and update the `max_tokens` assertion in `tests/test_agent.c`.
+- **`max_tokens`:** check invariants 1 and 6, update this reference and the
+  [usage limits](usage.md#run-limits), and update the `max_tokens` assertion
+  in `tests/test_agent.c`.
 - **`CHAT_RESPONSE_CAP`:** also update the "exceeds 64 KiB" error in
-  `network.c` and the README, and re-measure size.
-- **History:** raise `CHAT_REQUEST_CAP` with it, update the README memory
-  paragraph, re-measure size, and check the `SIZE` resource.
+  `network.c` and the [usage limits](usage.md#run-limits), and re-measure size.
+- **History:** raise `CHAT_REQUEST_CAP` with it, update the memory measurements
+  here and the [usage limits](usage.md#run-limits), re-measure size, and check
+  the `SIZE` resource.
 - **Anything:** run `tools/check.sh`, then a Docker `./build.sh`, then launch on
   the guest. Compile-time guards in `agent.c` enforce invariants 1 and 2 and
   the 16 KiB minimum overhead of invariant 3, but only the guest shows the partition is big enough.

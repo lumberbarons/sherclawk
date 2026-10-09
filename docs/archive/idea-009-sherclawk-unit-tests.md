@@ -1,5 +1,10 @@
 # 009 — Unit testing with a runner built into Sherclawk
 
+> Historical design note. Proposals, status statements and source-line references
+> describe development at the time of writing and may be superseded. Use the
+> [current guides](../../README.md#documentation) for supported behavior and the
+> [issue tracker](https://github.com/lumberbarons/sherclawk/issues) for active work.
+
 **Status:** idea, not implemented. Recorded October 7, 2026. Native builds,
 artifact launch and guest-written diagnostic files already exist; the test
 target, result protocol and model-facing test tool proposed here still need
@@ -181,8 +186,8 @@ testing of shared C logic, orchestrated by Sherclawk itself.
 
 ## Local references
 
-- [Build/run contract](../PLAN.md#buildrun-contract)
-- [Current project descriptor](../README.md#native-project-builds)
+- [Build/run contract](../architecture.md#buildrun-contract)
+- [Current project descriptor](../native-builds.md#native-project-builds)
 - [Native build executor](idea-005-sherclawk-queue-mode.md)
 - `build_project.c`, `selfbuild.c`, `jobs.c`, `run_application.c`
 - `tools/native-process-check.c`, `tools/build-check.c`
