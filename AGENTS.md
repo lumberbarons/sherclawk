@@ -45,7 +45,8 @@ cp config.example.h config.local.h  # optional local config; gitignored
   (the upstream clone stays pristine), then builds with CMake.
 - The SDK is user-supplied, never downloaded or redistributed by this repo.
   `INTERFACES_DIR` points to the complete `Interfaces&Libraries` folder;
-  the default is `../InterfacesAndLibraries`. See README.md for its layout.
+  the default is `../InterfacesAndLibraries`. See
+  [SDK setup](docs/development.md#sdk-setup) for its layout.
 - The first argument / `BUILD_TARGET` selects a CMake diagnostic target, e.g.
   `SherclawkProbe_APPL` or `SherclawkWriteCheck_APPL` (see `CMakeLists.txt`).
 - Do not configure CMake by hand in a fresh tree: build.sh and check.sh
@@ -68,7 +69,7 @@ cp config.example.h config.local.h  # optional local config; gitignored
   leave netatalk and the live mount alone.
 - Verification beyond host tests means the OS 9 guest: launch the diagnostic
   and read `Retro68:<Name>.log`. Per-diagnostic launch/read commands are in
-  README.md under "Files and verification".
+  [Files and verification](docs/development.md#files-and-verification).
 
 ## Layout
 
@@ -100,8 +101,10 @@ cp config.example.h config.local.h  # optional local config; gitignored
 - Buffer, token and deadline limits depend on each other; read
   `docs/limits.md` before changing any of them (`agent.h`, `chat.h`, `network.h`,
   the `SIZE` resource) and keep it current.
-- Model-facing contracts (8 KiB JSON argument/result bounds, MacRoman/CR text
+- Model-facing contracts (fixed JSON argument/result bounds, MacRoman/CR text
   and colon paths relative to the `Retro68:` workspace, create-only writes,
-  revision-guarded edits) are documented in README.md; update the matching
-  section when tool behavior changes.
+  revision-guarded edits) are documented in [docs/tools.md](docs/tools.md) and
+  [docs/native-builds.md](docs/native-builds.md); update the matching section
+  when tool behavior changes. Runtime usage is in [docs/usage.md](docs/usage.md),
+  and lasting design principles are in [docs/architecture.md](docs/architecture.md).
 - The Python tools are stdlib-only; keep them that way.

@@ -7,7 +7,7 @@ with an event-driven Toolbox diagnostic. The main app's `build_project` now
 validates editable protocol-2 descriptors, binds source revisions, generates a
 trusted MPW recipe, publishes an immutable snapshot and returns bounded compiler
 diagnostics with `read_build_log` continuation. See the
-[descriptor contract](../README.md#native-project-builds). Artifact launch now verifies persisted authority and both forks through
+[descriptor contract](../docs/native-builds.md#native-project-builds). Artifact launch now verifies persisted authority and both forks through
 `run_application(build_id)`, then records a native process observation. `build-template.sh` remains a fixed verification fixture; model-facing
 builds use the generated `mpw-ppc-v2` recipe, accepting independently assembled
 projects and starter-created projects through the same contract.

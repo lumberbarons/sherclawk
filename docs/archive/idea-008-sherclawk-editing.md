@@ -1,5 +1,10 @@
 # 008 — Sherclawk editing: larger files, several hunks, one transaction
 
+> Historical design note. Proposals, status statements and source-line references
+> describe development at the time of writing and may be superseded. Use the
+> [current guides](../../README.md#documentation) for supported behavior and the
+> [issue tracker](https://github.com/lumberbarons/sherclawk/issues) for active work.
+
 **Status:** idea, not built. Findings come from reading the current source
 tree (October 6, 2026); no guest timings were taken and nothing here has been
 compiled or run. The behavior described under "What Sherclawk does today" is

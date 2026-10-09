@@ -52,7 +52,7 @@ if [ ! -f "$INTERFACES_DIR/Interfaces/CIncludes/OpenTransport.h" ]; then
     echo "supply your own lawfully obtained Universal Interfaces 3.4 SDK:" >&2
     echo "  place Interfaces&Libraries at ../InterfacesAndLibraries, or set" >&2
     echo '  INTERFACES_DIR="/path/to/Interfaces&Libraries" ./build.sh' >&2
-    echo "see README.md for the required directory layout." >&2
+    echo "see docs/development.md#sdk-setup for the required directory layout." >&2
     exit 1
 fi
 INTERFACES_DIR="$(cd "$INTERFACES_DIR" && pwd)"
