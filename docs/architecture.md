@@ -41,7 +41,12 @@ that successful snapshot, verifies both forks and native identity, and reserves
 a separate run ID before launch. Failed, partial and uncertain builds cannot
 authorize launch. Editing source files never changes the identity of an older
 build. A `process_present` observation is distinct from a functional smoke test
-or visual acceptance.
+or visual acceptance. New, artifact-matched processes launched by Sherclawk gain
+volatile quit authority only after `run_observed` is journaled. New Chat preserves
+it; app exit loses it. `quit_application(run_id)` rechecks identity, journals
+intent and submits a queued noninteractive Quit through the shared answer
+dispatcher. Only observed process disappearance proves success; Stop ends
+observation without cancellation. Applications are never cleaned up automatically.
 
 New descriptors use protocol 2; protocol 1 requires explicit migration and is
 rejected before queue publication. Hash revisions are observational FNV tokens,

@@ -292,3 +292,19 @@ guest soaks: `SHERCLAWK_OT_YIELD_TICKS` (default 10; it was 60) sets the yield o
 of `CloseOpenTransport`, and `SHERCLAWK_OT_KEEP_OPEN_AFTER_CLEAN=1` leaves OT
 open after a cleanly completed round (errors, aborts and quit still cycle it).
 Set either in `config.local.h`; the defaults keep the long-standing policy.
+
+### Owned application Quit diagnostic
+
+Build `./build.sh SherclawkQuitCheck_APPL`, publish with
+`SHARE_HOST=<afp-host> APP=SherclawkQuitCheck tools/deploy-to-share.sh`, and launch
+`Retro68:SherclawkQuitCheck` in OS 9.2.2. Read `Retro68:SherclawkQuitCheck.log`
+and `Retro68:SherclawkQuitIgnore.log` on the share. Expected: one Quit received
+by the responsive independent app (which accepts but ignores it),
+`uncertain/QUIT_TIMEOUT`, a subsequent launch with `PROCESS_PREEXISTED` and its
+original close handle, `error/RUN_NOT_OWNED` for the new handle, then
+`ok/QUIT_OBSERVED` for the generated starter and `RESULT failures=0`.
+The diagnostic window should remain responsive while it observes. The ignoring
+app remains running; close it manually with Command-Q after reviewing evidence.
+Run in a clean diagnostic session or account for prior ignore-log lines. Record
+actual guest evidence in `docs/history/verification.md` before advertising the
+tool in both model schemas and environment discovery.

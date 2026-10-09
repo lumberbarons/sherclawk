@@ -257,3 +257,26 @@ for the not-yet-existing preferences file (first run and first save), and
 tracks the toggle itself (`SetControlValue` followed by `Draw1Control`). The
 saved key was present in the file and used by the runs, but not yet
 distinguished from the identical compiled key in a no-compiled-key build.
+
+Owned application Quit verification, October 9, 2026: `SherclawkQuitCheck`
+reported `RESULT failures=0 project=BuildCheck000d104ds` in the running OS 9.2.2
+UTM guest. The independent, responsive app accepted one noninteractive Quit
+but kept running: `run-000d16c3-0001` (PSN `0:47185922`, build
+`build-000d12df-0002`) returned `uncertain/QUIT_TIMEOUT`. A subsequent launch
+returned `quit_supported:false`, `PROCESS_PREEXISTED`, new run
+`run-000d1fbd-0002` and the original handle; Quit with the new run returned
+`error/RUN_NOT_OWNED`. `SherclawkQuitIgnore.log` contained exactly one
+`Quit received` line, confirming the pre-existing launch caused no additional
+event. The generated starter from `build-000d2205-0004`, run
+`run-000d25f8-0003`, returned `ok/QUIT_OBSERVED` through its ordinary cleanup
+handler. The diagnostic pumped high-level events and updates while observing;
+the guest continued processing input and advancing the diagnostic.
+
+The first guest attempt safely withheld authority because the initial protected
+process check rejected the default `ShCk` creator used by generated artifacts.
+It sent no Quit. The correction protects Sherclawk by its exact current PSN,
+while preserving artifact, launch-date, launcher, Finder and system exclusions.
+Main app, template and Quit diagnostic Docker builds passed; clang ASan/UBSan
+host suites and Linux GCC 13 ASan/UBSan suites passed. The successful guest
+logs are retained locally under ignored `build/quit-check-verified.log` and
+`build/quit-ignore-verified.log`. The schema/discovery gate is now open.

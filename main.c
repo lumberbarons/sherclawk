@@ -114,6 +114,7 @@ typedef enum {
     RUN_TOOLS,           /* executing the model's tool calls in order */
     RUN_NEXT_REQUEST,    /* tools done; the next model request starts */
     RUN_BUILD,           /* build_project pending */
+    RUN_QUIT,           /* quit_application pending */
     RUN_LAUNCH,          /* run_application pending */
     RUN_HANDOFF,         /* handoff summary HTTPS exchange in flight */
     RUN_CONTEXT_LOOKUP   /* model context-window lookup in flight */
@@ -1847,7 +1848,10 @@ static const PendingTool kPendingTools[] = {
       "Build observation stopped. Inspect retained snapshot and logs before another build." },
     { RUN_LAUNCH, "run_application", run_application_begin, run_application_step,
       "Verifying built application before launch...",
-      "Launch outcome uncertain. Inspect the run journal; do not retry automatically." }
+      "Launch outcome uncertain. Inspect the run journal; do not retry automatically." },
+    { RUN_QUIT, "quit_application", quit_application_begin, quit_application_step,
+      "Requesting graceful quit; observing owned process...",
+      "Quit outcome uncertain. The request may still take effect; do not retry." }
 };
 static const PendingTool *PendingToolForCall(const char *name)
 {
@@ -2220,6 +2224,7 @@ static void DriveChatStep(void)
     case RUN_CONTEXT_LOOKUP: StepContextLookup(); break;
     case RUN_NEXT_REQUEST: StartModelRequest(); break;
     case RUN_BUILD:
+    case RUN_QUIT:
     case RUN_LAUNCH: StepPendingTool(); break;
     case RUN_TOOLS: StepTools(); break;
     case RUN_MODEL_REQUEST:
