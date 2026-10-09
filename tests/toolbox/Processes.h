@@ -4,9 +4,9 @@
 #include "Files.h"
 typedef struct { unsigned long highLongOfPSN, lowLongOfPSN; } ProcessSerialNumber;
 typedef struct { unsigned long launchBlockID,launchEPBLength,launchFileFlags,launchControlFlags; FSSpec *launchAppSpec; ProcessSerialNumber launchProcessSN; } LaunchParamBlockRec;
-typedef struct { unsigned long processInfoLength; unsigned char *processName; FSSpec *processAppSpec; } ProcessInfoRec;
+typedef struct { unsigned long processInfoLength; unsigned char *processName; FSSpec *processAppSpec; unsigned long processType,processSignature,processLaunchDate; ProcessSerialNumber processLauncher; } ProcessInfoRec;
 enum { extendedBlock=1,extendedBlockLen=1,launchContinue=1,launchDontSwitch=2,launchNoFileFlags=4,
-       procNotFound=-600 };
+       kNoProcess=0,kSystemProcess=1,procNotFound=-600 };
 OSErr LaunchApplication(LaunchParamBlockRec *);
 OSErr GetProcessInformation(const ProcessSerialNumber *,ProcessInfoRec *);
 OSErr GetNextProcess(ProcessSerialNumber *);

@@ -214,3 +214,20 @@ intent and session records first. Fork fingerprints are observational, not
 cryptographic; AFP-server writes and a change between final verification and
 launch remain outside File Manager guarantees. Native records are local to this
 version/architecture; AFP FlushVol is not a power-loss durability guarantee.
+
+## Owned process lifetime
+
+A successful launch now reports whether graceful Quit is supported. Only a new
+process absent from the complete prelaunch snapshot, matched to the verified
+artifact and launched by Sherclawk, can be owned. Authority is granted after
+`run_observed` is journaled and lives in memory across New Chat. An already
+running app gets no new handle; `original_run_id` identifies an existing owned
+handle when available. Tracking errors or capacity exhaustion do not block
+launches but return `quit_supported:false`. Journals and launch authorization
+records do not restore process ownership after restarting Sherclawk.
+
+`quit_application(run_id)` requests noninteractive normal Quit and
+observes process exit asynchronously for 30 seconds. It never force quits,
+discards changes, retries a send, or cleans up apps automatically. Stop after
+submission cannot cancel Quit. See the [implementation spec](quit-application.md)
+and [tool contract](tools.md#quit-an-owned-application).

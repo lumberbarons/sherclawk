@@ -15,7 +15,10 @@
 #include "toolserver.h"
 #include "selfbuild.h"
 #include <Processes.h>
+#include "ae_dispatch.h"
+#include "ae_model.c"
 /* Queued transport model: replies arrive only when explicitly released. */
+#ifndef TEST_REAL_TOOLSERVER
 static int ts_busy,ts_ready,ts_sends,ts_abandoned,ts_failure,ts_malformed,ts_send_error;
 static char ts_directory[256],ts_command[2048];
 OSErr toolserver_init(ToolServerLog log) { (void)log;return 0; }
@@ -34,11 +37,14 @@ int toolserver_poll(uint32_t now,int stop,ToolServerReply *reply)
     }
     return 0;
 }
+#endif
 OSErr FSpDelete(const FSSpec *s) {int i=find(s->parID,s->name);if(i<0)return fnfErr;files[i].used=0;return 0;}
 OSErr FSpGetFInfo(const FSSpec *s,FInfo *p) {int i=find(s->parID,s->name);if(i<0)return fnfErr;*p=files[i].info;return 0;}
 OSErr FSpSetFInfo(const FSSpec *s,const FInfo *p) {int i=find(s->parID,s->name);if(i<0)return fnfErr;files[i].info=*p;return 0;}
 static int launches,launch_error,process_error,run_journal_error;
 static FSSpec launched;
+static int process_absent, identity_changed;
+static unsigned long launch_psn=42, process_signature='SHTP', launcher_override;
 static unsigned char resource_bytes[64][4096];
 OSErr FSRead(short ref,long *n,void *out)
 {
@@ -54,9 +60,15 @@ OSErr SetFPos(short ref,short mode,long at) {return model_SetFPos(ref>=64 ? ref-
 OSErr FSpOpenRF(const FSSpec *s,short mode,short *ref)
 { OSErr e=FSpOpenDF(s,mode,ref); if(!e)*ref+=64; return e; }
 OSErr LaunchApplication(LaunchParamBlockRec *p)
-{ launches++;launched=*p->launchAppSpec;p->launchProcessSN.highLongOfPSN=0;p->launchProcessSN.lowLongOfPSN=42;return launch_error ? ioErr : 0; }
+{ launches++;launched=*p->launchAppSpec;p->launchProcessSN.highLongOfPSN=0;p->launchProcessSN.lowLongOfPSN=launch_psn;return launch_error ? ioErr : 0; }
 OSErr GetProcessInformation(const ProcessSerialNumber *p,ProcessInfoRec *i)
-{ (void)p;*i->processAppSpec=launched;return process_error ? ioErr : 0; }
+{ (void)p;
+  if(process_absent)return procNotFound;
+  if(i->processAppSpec)*i->processAppSpec=launched;
+  i->processType='APPL';i->processSignature=p->lowLongOfPSN==43 ? 'MPSX' : process_signature;i->processLaunchDate=identity_changed ? 11 : 10;
+  GetCurrentProcess(&i->processLauncher);
+  if(launcher_override)i->processLauncher.lowLongOfPSN=launcher_override;
+  return process_error ? ioErr : 0; }
 static int build_journals, build_result_failure;
 static char build_events[12][20];
 static int build_event_count;

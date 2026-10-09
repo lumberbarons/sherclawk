@@ -118,3 +118,14 @@ ADRs live in `docs/adr/`. Read the relevant ADRs before proposing architectural 
 | `docs/adr/0001-execute-builds-natively-through-toolserver.md` | Any change to how builds execute: `selfbuild.c`, `toolserver.c`, the build queue, `worker-lock` ownership, retry/replay of builds, or reintroducing MacRelix or a shell worker |
 | `docs/adr/0002-run-tests-in-separate-native-app.md` | Designing `test_project`, a test target in the project descriptor, or any place project-authored code would run |
 | `docs/adr/0003-admit-tools-read-only-first.md` | Adding or changing a model-facing tool, especially one that mutates files, Finder metadata, resources or other processes |
+
+## Owned application Quit
+
+- `application_process.c` owns only processes newly launched and journaled by
+  this Sherclawk process. Do not reset ownership on New Chat, restore it from
+  journals, force quit, or automatically clean up applications.
+- `ae_dispatch.c` owns the shared answer handler and lifetime-unique return IDs
+  for ToolServer and Quit. Match both ID and sender PSN; never reuse IDs.
+- `quit_application` is advertised after the OS 9.2.2 `SherclawkQuitCheck` pass
+  recorded in `docs/history/verification.md`. Preserve that guest gate for new
+  process tools. See `docs/quit-application.md`.

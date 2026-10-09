@@ -153,6 +153,47 @@ static int build(WindowPtr window,int success)
         }
         fprintf(logfile,"RUN %s\n",result);fflush(logfile);
         if(success ? launched || !strstr(result,"LAUNCHED") : launched || !strstr(result,"BUILD_NOT_AUTHORIZED"))failures++;
+#ifdef QUIT_CHECK
+        if(success && !launched) {
+            char handle[32];JsonToken reply_tokens[128];int q;
+            if(json_parse(result,strlen(result),reply_tokens,128)<1 ||
+               json_string(result,reply_tokens,json_member(result,reply_tokens,0,"run_id"),handle,sizeof(handle))<0 ||
+               !strstr(result,"\"quit_supported\":true")) {failures++;return 1;}
+            snprintf(call.arguments,sizeof(call.arguments),"{\"run_id\":\"%s\"}",handle);
+            q=quit_application_begin(&call,result,sizeof(result),journal,NULL,(uint32_t)TickCount());
+            while(q==2) {
+                WaitNextEvent(everyEvent,&event,1,NULL);
+                if(event.what==kHighLevelEvent)AEProcessAppleEvent(&event);
+                if(event.what==updateEvt && window) {
+                    BeginUpdate(window);SetPort(window);MoveTo(15,30);
+                    DrawString((const unsigned char *)"\036Quit observation is responsive");EndUpdate(window);
+                }
+                q=quit_application_step(result,sizeof(result),(uint32_t)TickCount(),0);
+            }
+            fprintf(logfile,"QUIT %s\n",result);fflush(logfile);
+            if(strstr(folder,"s")) {
+                if(q || !strstr(result,"QUIT_OBSERVED"))failures++;
+            } else {
+                if(q!=1 || !strstr(result,"QUIT_TIMEOUT"))failures++;
+                /* Same artifact is now pre-existing; its new run ID is powerless. */
+                snprintf(call.arguments,sizeof(call.arguments),"{\"build_id\":\"%s\"}",id);
+                q=run_application_begin(&call,result,sizeof(result),journal,NULL,(uint32_t)TickCount());
+                while(q==2) {
+                    WaitNextEvent(everyEvent,&event,1,NULL);
+                    if(event.what==kHighLevelEvent)AEProcessAppleEvent(&event);
+                    q=run_application_step(result,sizeof(result),(uint32_t)TickCount(),0);
+                }
+                fprintf(logfile,"PREEXISTING %s\n",result);fflush(logfile);
+                if(q || !strstr(result,"PROCESS_PREEXISTED") || !strstr(result,handle))failures++;
+                if(json_parse(result,strlen(result),reply_tokens,128)<1 ||
+                   json_string(result,reply_tokens,json_member(result,reply_tokens,0,"run_id"),handle,sizeof(handle))<0) {failures++;return 1;}
+                snprintf(call.arguments,sizeof(call.arguments),"{\"run_id\":\"%s\"}",handle);
+                q=quit_application_begin(&call,result,sizeof(result),journal,NULL,(uint32_t)TickCount());
+                fprintf(logfile,"PREEXISTING_QUIT %s\n",result);fflush(logfile);
+                if(q || !strstr(result,"RUN_NOT_OWNED"))failures++;
+            }
+        }
+#endif
     }
 #endif
 #ifdef SELF_BUILD_STOP_CHECK
@@ -165,7 +206,9 @@ int main(void)
 {
     char args[512],revision[80]; JsonToken t[64]; WindowPtr window; Rect bounds;
     InitGraf(&qd.thePort); InitFonts(); InitWindows(); InitMenus(); TEInit(); InitDialogs(NULL); InitCursor();
-    #ifdef SELF_BUILD_STOP_CHECK
+    #ifdef QUIT_CHECK
+    logfile=fopen(SHERCLAWK_WORKSPACE "SherclawkQuitCheck.log","w");
+#elif defined(SELF_BUILD_STOP_CHECK)
     logfile=fopen(SHERCLAWK_WORKSPACE "SherclawkSelfBuildStopCheck.log","w");
 #elif defined(SELF_BUILD_CHECK)
     logfile=fopen(SHERCLAWK_WORKSPACE "SherclawkSelfBuildCheck.log","w");
@@ -180,6 +223,12 @@ int main(void)
     snprintf(args,sizeof(args),"{\"path\":\"%s\"}",folder); invoke("create_folder",args);
     write_file("project.json","{\"protocol\":2,\"toolchain\":\"mpw-ppc-v2\",\"sources\":[\"main.c\",\"extra.c\"],\"resources\":[\"app.r\"],\"headers\":[\"shared.h\"],\"include_paths\":[\".\"],\"output\":\"independent\"}\n");
     write_file("main.c","#include <Quickdraw.h>\n#include <Fonts.h>\n#include <Windows.h>\n#include <Menus.h>\n#include <TextEdit.h>\n#include <Dialogs.h>\n#include <Events.h>\n#include \"shared.h\"\nQDGlobals qd;\nint main(void) { EventRecord event; WindowPtr w; Rect r; InitGraf(&qd.thePort); InitFonts(); InitWindows(); InitMenus(); TEInit(); InitDialogs(0); InitCursor(); SetRect(&r,60,70,460,180); w=NewWindow(0,&r,\"\\pIndependent build\",1,documentProc,(WindowPtr)-1,1,0); SetPort(w); while(1) { if(WaitNextEvent(everyEvent,&event,10,0)) { if(event.what==keyDown && (event.modifiers & cmdKey) && (event.message & charCodeMask)=='q')break; if(event.what==updateEvt) { BeginUpdate(w); MoveTo(15,30); DrawString(message()); EndUpdate(w); } } } DisposeWindow(w); return 0; }\n");
+#ifdef QUIT_CHECK
+    replace("main.c","#include <Events.h>","#include <Events.h>\n#include <AppleEvents.h>\n#include <AERegistry.h>\n#include <stdio.h>");
+    replace("main.c","QDGlobals qd;","QDGlobals qd;\nstatic pascal OSErr ignore(const AppleEvent *e,AppleEvent *r,long c) { FILE *f; (void)e;(void)r;(void)c; f=fopen(\"Retro68:SherclawkQuitIgnore.log\",\"a\");if(f){fputs(\"Quit received\\n\",f);fclose(f);}return noErr; }");
+    replace("main.c","InitCursor();","InitCursor(); AEInstallEventHandler(kCoreEventClass,kAEQuitApplication,NewAEEventHandlerUPP(ignore),0,0);");
+    replace("main.c","if(event.what==keyDown","if(event.what==kHighLevelEvent)AEProcessAppleEvent(&event); if(event.what==keyDown");
+#endif
     write_file("shared.h","const unsigned char *message(void);\n");
     write_file("extra.c","#error deliberate build_project compiler error\n#include \"shared.h\"\nconst unsigned char *message(void) { return \"\\pTwo source files compiled natively\"; }\n");
     write_file("app.r","#include \"Types.r\"\nresource 'SIZE' (-1) { reserved, acceptSuspendResumeEvents, reserved, canBackground, doesActivateOnFGSwitch, backgroundAndForeground, dontGetFrontClicks, ignoreAppDiedEvents, is32BitCompatible, isHighLevelEventAware, onlyLocalHLEvents, notStationeryAware, dontUseTextEditServices, reserved, reserved, reserved, 524288, 524288 };\n");

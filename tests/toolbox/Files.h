@@ -22,6 +22,11 @@ typedef union {
 } CInfoPBRec;
 enum { noErr=0, fnfErr=-43, dupFNErr=-48, paramErr=-50, dirNFErr=-120, ioErr=-36, eofErr=-39,
        fsRdPerm=1, fsWrPerm=2, fsRdWrPerm=3, fsFromStart=1, smSystemScript=0 };
+typedef union { struct { unsigned char *ioNamePtr;short ioVolIndex,ioVRefNum; } volumeParam; } HParamBlockRec;
+typedef struct { unsigned char *ioNamePtr;short ioVRefNum,ioIndex;unsigned long ioFileCreator;long ioAPPLParID; } DTPBRec;
+OSErr PBHGetVInfoSync(HParamBlockRec *);
+OSErr PBDTGetPath(DTPBRec *);
+OSErr PBDTGetAPPLSync(DTPBRec *);
 OSErr FSMakeFSSpec(short, long, const unsigned char *, FSSpec *);
 OSErr PBGetCatInfoSync(CInfoPBRec *);
 OSErr FSpCreate(const FSSpec *, unsigned long, unsigned long, short);
