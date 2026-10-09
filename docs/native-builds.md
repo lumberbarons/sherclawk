@@ -161,6 +161,33 @@ Sherclawk with an outstanding command leaves the lock for manual inspection.
 The app never scans or replays old jobs. Automatic queue creation is implemented. Queue preferences, status UI and a
 Serve Build Queue toggle remain future work.
 
+### ToolServer protocol
+
+The client in `toolserver.c` reimplements the protocol of the upstream `tlsrvr`
+tool without using its code (see
+[third-party notices](../THIRD-PARTY-NOTICES.md#reference-only-software)).
+
+- **Discovery.** Find a running process with signature `'MPSX'`; otherwise find
+  the ToolServer `APPL` through the mounted volumes' desktop databases and call
+  `LaunchApplication`.
+- **Request.** One `kAEMiscStandards`/`kAEDoScript` event per MPW command,
+  with the script as a `typeChar` direct object in MacRoman/CR text:
+  `Set Exit 0`, `Directory "<cwd>"`, `<command> < Dev:Null`,
+  `Set CommandStatus {Status}`, `Directory "{MPW}"`, `Exit {CommandStatus}`.
+- **Send.** Asynchronously with `kAEQueueReply | kAENeverInteract`. `tlsrvr`
+  itself blocks with `kAEWaitReply`, which would freeze the UI for the length of
+  every compile. `kAENeverInteract` is the API flag; foreground switching is a
+  separate concern and was verified in the guest, not assumed.
+- **Reply.** `'stat'` (`typeSInt32`) is the MPW status, the direct object holds
+  stdout and `'diag'` holds diagnostics, each as bounded `typeChar` text.
+  Replies are matched on return ID and sender PSN; anything unverifiable,
+  malformed or oversized is uncertain.
+- **Status mapping.** `-1` becomes 127 and `2` becomes 1; other values in
+  0–255 pass through; everything else is uncertain. Upstream also maps a
+  user-cancel reply (Command-period) to 128 and quits and retries once on an
+  out-of-memory error. Sherclawk does neither: cancellation is not claimed, and
+  an uncertain outcome is never replayed.
+
 ## Running applications
 
 `run_application(build_id)` takes only the exact successful build ID, never a
