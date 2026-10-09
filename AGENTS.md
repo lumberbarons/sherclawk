@@ -116,6 +116,7 @@ ADRs live in `docs/adr/`. Read the relevant ADRs before proposing architectural 
 |---|---|
 | `docs/adr/0001-execute-builds-natively-through-toolserver.md` | Any change to how builds execute: `selfbuild.c`, `toolserver.c`, the build queue, `worker-lock` ownership, retry/replay of builds, or reintroducing MacRelix or a shell worker |
 | `docs/adr/0002-run-tests-in-separate-native-app.md` | Designing `test_project`, a test target in the project descriptor, or any place project-authored code would run |
+| `docs/adr/0004-load-agents-md-as-bounded-owner-guidance.md` | Changing what `AGENTS.md` text reaches the model, where it is injected, its size cap or its trust framing |
 | `docs/adr/0003-admit-tools-read-only-first.md` | Adding or changing a model-facing tool, especially one that mutates files, Finder metadata, resources or other processes |
 
 ## Owned application Quit

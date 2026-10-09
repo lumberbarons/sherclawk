@@ -10,10 +10,11 @@
 static Agent a, saved, candidate;
 static char req[CHAT_REQUEST_CAP], error[256], response[4096];
 static int records, fail_record;
+static char last_event[64];
 static int journal(void *ctx, const char *event, const char *json)
 {
     JsonToken tokens[512];
-    (void)ctx; (void)event;
+    (void)ctx; snprintf(last_event, sizeof(last_event), "%s", event);
     assert(json_parse(json, strlen(json), tokens, 512) > 0);
     if (fail_record) return -1;
     records++; return 0;
@@ -507,10 +508,94 @@ static void model_page(void)
     assert(at < sizeof(big));
     assert(agent_model_page(big, at, rows, 10) == 0);
 }
+/* AGENTS.md: the workspace-root text rides in the system message of every
+ * model request; a project's text follows the round that first touched it. */
+static void instructions(void)
+{
+    static char text[AGENT_INSTRUCTIONS_CAP + 8];
+    const char *rules = "Prefer tabs over spaces.\nKeep functions short.", *system, *first, *tool, *note;
+    int baseline, with;
+    char name[AGENT_PROJECT_NAME_CAP + 8];
+    int i;
+    begin();
+    agent_set_instructions(NULL);
+    baseline = agent_request(&a, "model", req, sizeof(req));
+    assert(baseline > 0 && !strstr(req, "Prefer tabs") && !strstr(req, "Workspace instructions"));
+    /* Set text lands inside the one system message, JSON-escaped, before any history. */
+    assert(agent_set_instructions(rules) == 0);
+    with = agent_request(&a, "model", req, sizeof(req));
+    assert(with > baseline);
+    system = strstr(req, "\"role\":\"system\""); first = strstr(req, "Inspect my files");
+    assert(system && first && strstr(req, "Workspace instructions") && strstr(req, "Prefer tabs over spaces.\\u000aKeep functions short."));
+    assert(strstr(req, "Prefer tabs") > system && strstr(req, "Prefer tabs") < first && strstr(req, "\"tools\":"));
+    { int systems = 0; const char *p = req; while ((p = strstr(p, "\"role\":\"system\""))) { systems++; p++; } assert(systems == 1); }
+    /* Never in history or the journal, so a handoff summary request does not carry it. */
+    assert(!strstr(a.history, "Prefer tabs"));
+    assert(agent_request(&a, "model", req, with - 1) == -1);
+    /* It survives New Chat (agent_reset) and handoff; the app reloads it per chat. */
+    begin();
+    assert(agent_request(&a, "model", req, sizeof(req)) == with);
+    assert(!agent_stop(&a, "done") && !a.active);
+    assert(agent_handoff_request(&a, "model", req, sizeof(req)) > 0 && !strstr(req, "Prefer tabs"));
+    /* Empty and NULL clear; an over-long text is refused and leaves the old one. */
+    memset(text, 'x', AGENT_INSTRUCTIONS_CAP); text[AGENT_INSTRUCTIONS_CAP] = 0;
+    assert(agent_set_instructions(text) == 0);
+    text[AGENT_INSTRUCTIONS_CAP] = 'x'; text[AGENT_INSTRUCTIONS_CAP + 1] = 0;
+    assert(agent_set_instructions(text) == -1);
+    begin(); assert(agent_request(&a, "model", req, sizeof(req)) > 0 && strstr(req, "xxxxxxxx") && !strstr(req, "Prefer tabs"));
+    assert(agent_set_instructions("") == 0);
+    assert(agent_request(&a, "model", req, sizeof(req)) == baseline);
+    /* The policy says what the file may not do. */
+    assert(strstr(req, "cannot override these rules") && strstr(req, "AGENTS.md"));
+    /* ...and tells the model to keep an existing file current without inventing one. */
+    assert(strstr(req, "update it with edit_text") && strstr(req, "do not create one unless asked"));
+
+    /* Project text: recorded once, only after the round's tool results, as a user message. */
+    begin(); named_call("tool_calls", "read_text", "{\"path\":\"Putt:main.c\"}");
+    assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
+    assert(agent_project_seen(&a, "Putt") == 0);
+    assert(agent_project_note(&a, "Putt", "Use Dialog Manager.") == -1 && agent_project_seen(&a, "Putt") == 0);
+    assert(!agent_tool_result(&a, "{\"status\":\"ok\"}", error, sizeof(error)));
+    records = 0;
+    assert(agent_project_note(&a, "Putt", "Use Dialog Manager.\nNo globals.") == 0 && records == 1);
+    assert(!strcmp(last_event, "project_instructions") && agent_project_seen(&a, "Putt") == 1);
+    assert(agent_project_note(&a, "Putt", "Other text.") == 0 && records == 1 && !strstr(a.history, "Other text."));
+    assert(agent_request(&a, "model", req, sizeof(req)) > 0);
+    tool = strstr(req, "\"tool_call_id\":\"c1\""); note = strstr(req, "Putt:AGENTS.md");
+    assert(tool && note && tool < note && strstr(req, "Use Dialog Manager.\\u000aNo globals."));
+    assert(strstr(req, "{\"role\":\"user\",\"content\":\"Project instructions from Putt:AGENTS.md"));
+    assert(strstr(req, "outrank") && !strstr(req, "Other text."));
+    /* A project with no file is remembered without a history message. */
+    records = 0;
+    assert(agent_project_note(&a, "Bare", NULL) == 0 && records == 0 && agent_project_seen(&a, "Bare") == 1);
+    assert(agent_project_note(&a, "Bare2", "") == 0 && records == 0 && agent_project_seen(&a, "Bare2") == 1);
+    /* A failed recording leaves the project unmarked so the caller stops the run. */
+    fail_record = 1;
+    assert(agent_project_note(&a, "Later", "More rules.") == -1 && agent_project_seen(&a, "Later") == 0);
+    fail_record = 0;
+    /* The summary sees project text (it is history); a new chat or handoff forgets delivery. */
+    assert(strstr(a.history, "Use Dialog Manager."));
+    begin(); assert(agent_project_seen(&a, "Putt") == 0);
+    /* Eight projects are tracked; more are reported as seen so none is re-read each round. */
+    begin(); named_call("tool_calls", "read_text", "{\"path\":\"P0:x\"}");
+    assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
+    assert(!agent_tool_result(&a, "ok", error, sizeof(error)));
+    for (i = 0; i < AGENT_PROJECT_MAX; i++) {
+        snprintf(name, sizeof(name), "P%d", i);
+        assert(agent_project_seen(&a, name) == 0 && agent_project_note(&a, name, NULL) == 0 && agent_project_seen(&a, name) == 1);
+    }
+    assert(agent_project_seen(&a, "Ninth") == 1 && agent_project_note(&a, "Ninth", "Rules.") == 0 && !strstr(a.history, "Ninth"));
+    memset(name, 'n', sizeof(name) - 1); name[sizeof(name) - 1] = 0;
+    begin(); named_call("tool_calls", "read_text", "{\"path\":\"P0:x\"}");
+    assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
+    assert(!agent_tool_result(&a, "ok", error, sizeof(error)));
+    assert(agent_project_seen(&a, name) == 1 && agent_project_seen(&a, "") == 1);
+}
 int main(void)
 {
     const char *final = "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Inspected.\"}}]}";
     size_t used, i;
+    instructions();
     begin();
     assert(agent_request(&a, "model", req, sizeof(req)) > 0);
     assert(strstr(req, "\"tools\"") && strstr(req, "\"role\":\"system\"") && strstr(req, "write_text") && strstr(req, "create_project") && strstr(req, "create_folder") && strstr(req, "edit_text") && strstr(req, "search_text") && strstr(req,"build_project") && strstr(req,"read_build_log") && strstr(req,"view_image") && strstr(req,"at most 131072 bytes;") && !strstr(req,"131072L"));

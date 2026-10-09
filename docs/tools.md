@@ -23,6 +23,10 @@ resource forks and aliases; the separate inspection tools can report metadata
 and resource contents as specified below. Tool arguments never pass through
 lossy UI conversion.
 
+`AGENTS.md` files are not read through a tool: the app loads them under the
+same plain-text rules (see [project instructions](usage.md#project-instructions-agentsmd)).
+The model may update an existing one with `edit_text` like any other text file.
+
 Tool results fit a fixed JSON envelope below 1,536 bytes. Folder listings have
 cursors; text reads supply `next_byte` when a line is partial and scan at most
 8 KiB per invocation. Continue from the returned cursor or byte offset rather
