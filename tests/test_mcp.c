@@ -95,6 +95,9 @@ static void protocol(void)
     assert(mcp_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":true,\"message\":\"bad\"}}", 1, reply, sizeof(reply)) < 0);
     assert(mcp_rpc("{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32601,\"message\":\"bad\"}}", 1, reply, sizeof(reply)) == 1);
     assert(mcp_post(&config, "injected\r\n", MCP_VERSION, "{}", request, sizeof(request)) < 0);
+    /* An empty version is the same as none: accepted, with no header. */
+    assert(mcp_post(&config, NULL, "", "{}", request, sizeof(request)) > 0);
+    assert(!strstr(request, "MCP-Protocol-Version"));
 }
 static void discover(void)
 {

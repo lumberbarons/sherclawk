@@ -172,6 +172,7 @@ int mcp_post(const McpConfig *c, const char *session, const char *version,
     size_t at;
     int n, h;
     if (!c->enabled || strlen(body) > MCP_MESSAGE_CAP) return -1;
+    if (version && !*version) version = NULL; /* empty means no header */
     if (session) for (at = 0; session[at]; at++)
         if ((unsigned char)session[at] < 0x21 || (unsigned char)session[at] > 0x7e) return -1;
     if (version && strcmp(version, "2025-11-25") && strcmp(version, "2025-06-18") && strcmp(version, "2025-03-26")) return -1;
