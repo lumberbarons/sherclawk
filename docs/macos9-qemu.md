@@ -6,6 +6,10 @@ the setup and the details worth knowing. It was originally written in the
 imac workspace, where the VM lives; the VM folder, disk image and launcher
 described below are not part of this repository.
 
+Supply your own lawfully obtained Mac OS installation media, ROMs where required,
+and development tools under their applicable licenses. This repository does not
+provide those components or guest disk images.
+
 ## The VM folder
 
 Outside this repository, the workspace keeps the VM laid out as:
@@ -15,7 +19,7 @@ macos922/
 ├── run-macos9.sh          # launcher — boots the installed system
 ├── macos9.img             # 8 GB (sparse) QEMU hard disk: macOS 9.2.2 installed
 ├── macos-922-uni/
-│   ├── macos-922-uni.iso  # the installer CD (from your zip), for reinstalls
+│   ├── macos-922-uni.iso  # user-supplied installation media, for reinstalls
 │   └── macos-922-md5.txt  # MD5 verified: 2cfb856b1678336493301bec0a0ecdfa
 ├── tools/                 # install automation used from the host (optional)
 └── qemu-install.log       # log of the initial (automated) install run
@@ -192,10 +196,9 @@ verified afterwards. The automation came from the VM folder's `tools/`; the
 QMP driver remains here for reference — day-to-day you only need
 `run-macos9.sh`.
 
-## Appendix B — alternative: pre-installed disk images
+## Appendix B — reusing your own installation
 
-The Mac OS 9 community (Mac OS 9 Lives forum, E-Maculation wiki, mikeboss)
-publishes ready-made QEMU disk images with OS 9.2.2 pre-installed. If you ever
-want to skip the install entirely, download one of those and point the
-`-drive file=…` at it — the QEMU flags above stay the same. Usual caution
-applies to third-party disk images.
+If you already have a Mac OS 9.2.2 installation that you are entitled to use
+in this guest, point `-drive file=…` at its QEMU disk image; the other QEMU
+flags above stay the same. Keep your installation media and guest disk images
+outside this repository and comply with the applicable software license.

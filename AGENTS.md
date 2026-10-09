@@ -32,7 +32,8 @@ tools/lint.sh                 # shellcheck, cppcheck and ruff (the CI lint gate)
 ## Full app build (Docker)
 
 ```bash
-tools/get-universal-interfaces.sh   # one-time: fetch Apple's Universal Interfaces
+# Supply your own lawfully obtained Apple Universal Interfaces 3.4 SDK.
+export INTERFACES_DIR="/path/to/Interfaces&Libraries"
 cp config.example.h config.local.h  # optional local config; gitignored
 ./build.sh [SherclawkFoo_APPL]      # default target Sherclawk_APPL; output in build/
 ```
@@ -42,6 +43,9 @@ cp config.example.h config.local.h  # optional local config; gitignored
 - `build.sh` runs the `ghcr.io/autc04/retro68` image, swaps in the Universal
   Interfaces, stages Certainly and applies `patches/*.patch` to the staged copy
   (the upstream clone stays pristine), then builds with CMake.
+- The SDK is user-supplied, never downloaded or redistributed by this repo.
+  `INTERFACES_DIR` points to the complete `Interfaces&Libraries` folder;
+  the default is `../InterfacesAndLibraries`. See README.md for its layout.
 - The first argument / `BUILD_TARGET` selects a CMake diagnostic target, e.g.
   `SherclawkProbe_APPL` or `SherclawkWriteCheck_APPL` (see `CMakeLists.txt`).
 - Do not configure CMake by hand in a fresh tree: build.sh and check.sh

@@ -8,10 +8,11 @@
 #       git clone --recursive --depth 1 https://github.com/minorbug/certainly.git Certainly
 #     Default location: ../Certainly next to this repo; override CERTAINLY_DIR.
 #
-#   * Apple's Universal Interfaces (also fetch-only). The container image
+#   * Your own lawfully obtained Apple Universal Interfaces 3.4. The container image
 #     only ships the open-source Multiversal Interfaces, which have no
-#     Open Transport headers — Certainly needs the Universal ones:
-#       tools/get-universal-interfaces.sh
+#     Open Transport headers — Certainly needs the Universal ones. Place the
+#     Interfaces&Libraries folder at ../InterfacesAndLibraries, or set
+#     INTERFACES_DIR to its location. This repository does not obtain the SDK.
 #
 # The interfaces are swapped into the container's toolchain for the build
 # (interfaces-and-libraries.sh, the mechanism Retro68 provides for this),
@@ -48,8 +49,10 @@ CERTAINLY_DIR="$(cd "$CERTAINLY_DIR" && pwd)"
 INTERFACES_DIR="${INTERFACES_DIR:-$HERE/../InterfacesAndLibraries}"
 if [ ! -f "$INTERFACES_DIR/Interfaces/CIncludes/OpenTransport.h" ]; then
     echo "error: Apple's Universal Interfaces not found at $INTERFACES_DIR" >&2
-    echo "fetch them first (one-time):" >&2
-    echo "  tools/get-universal-interfaces.sh" >&2
+    echo "supply your own lawfully obtained Universal Interfaces 3.4 SDK:" >&2
+    echo "  place Interfaces&Libraries at ../InterfacesAndLibraries, or set" >&2
+    echo '  INTERFACES_DIR="/path/to/Interfaces&Libraries" ./build.sh' >&2
+    echo "see README.md for the required directory layout." >&2
     exit 1
 fi
 INTERFACES_DIR="$(cd "$INTERFACES_DIR" && pwd)"
