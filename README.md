@@ -87,11 +87,14 @@ outside that range, or with a value missing or malformed in the file, the
 compiled default is used. The Model field is also the catalog search box: the
 dialog lists the ten most popular models when it opens (once per launch),
 typing filters that list locally, **Find** searches the whole public catalog
-for the typed text, and clicking a row confirms the model and fills the Effort
-choices. OK saves only a model that resolved to a catalog row — an unconfirmed
-typed ID is checked with `GET /api/v1/models?q=<id>&limit=10` first, and a
-typo leaves the dialog open with the closest candidates — while a failed fetch
-or Cancel leaves the typed text in place and changes nothing. Each executed
+for the typed text, and clicking a row confirms the model and lists its Effort
+choices (the effort is shown only; it is not saved or sent yet). OK saves only
+a model that resolved to a catalog row — a changed, unconfirmed ID is checked
+with `GET /api/v1/models?q=<id>&limit=10` first, and a typo leaves the dialog
+open with the closest candidates. The model already saved is not re-checked,
+so the other fields can be changed while the catalog is unreachable. A failed
+fetch or Cancel leaves the typed text in place and changes nothing. Return and
+Enter press OK; Escape and Command-. press Cancel. Each executed
 call shows a compact call line — the tool name and rendered arguments — in the
 Conversation; with the debug toggle on, the result and the call's journal
 event names follow it. The session JSONL is byte-identical either way, and the
