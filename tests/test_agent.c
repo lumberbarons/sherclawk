@@ -513,7 +513,7 @@ int main(void)
     size_t used, i;
     begin();
     assert(agent_request(&a, "model", req, sizeof(req)) > 0);
-    assert(strstr(req, "\"tools\"") && strstr(req, "\"role\":\"system\"") && strstr(req, "write_text") && strstr(req, "create_project") && strstr(req, "create_folder") && strstr(req, "edit_text") && strstr(req, "search_text") && strstr(req,"build_project") && strstr(req,"read_build_log") && strstr(req,"view_image"));
+    assert(strstr(req, "\"tools\"") && strstr(req, "\"role\":\"system\"") && strstr(req, "write_text") && strstr(req, "create_project") && strstr(req, "create_folder") && strstr(req, "edit_text") && strstr(req, "search_text") && strstr(req,"build_project") && strstr(req,"read_build_log") && strstr(req,"view_image") && strstr(req,"at most 131072 bytes;") && !strstr(req,"131072L"));
     call("tool_calls");
     assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
     assert(a.count == 1 && !a.next && a.active && records == 2);

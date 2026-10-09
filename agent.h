@@ -24,7 +24,7 @@
 #define AGENT_HANDOFF_MAX_TOKENS 1536
 /* Largest PNG, in bytes, that view_image attaches: its base64 form must fit
  * the one flat request beside a history that is re-sent every round. */
-#define AGENT_IMAGE_CAP 131072L
+#define AGENT_IMAGE_CAP 131072
 #define AGENT_IMAGE_PATH_CAP 384
 /* History bytes reserved for the note that accompanies an attached image. */
 #define AGENT_IMAGE_NOTE_CAP 2048

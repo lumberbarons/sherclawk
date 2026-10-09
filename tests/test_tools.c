@@ -882,7 +882,7 @@ static void view_checks(void)
     /* Size: one byte over the cap is refused before any read; the cap itself is
      * accepted, and Stop abandons it without attaching. */
     i=add(10,"big.png",0); png_file(i,100,4,4); files[i].size=AGENT_IMAGE_CAP+1;
-    assert(!view_begin("{\"path\":\"big.png\"}") && strstr(result,"TOO_LARGE") && strstr(result,"131072") && !view_image_held());
+    assert(!view_begin("{\"path\":\"big.png\"}") && strstr(result,"TOO_LARGE") && strstr(result,"exceeds 131072 bytes") && !view_image_held());
     files[i].size=AGENT_IMAGE_CAP;
     assert(view_begin("{\"path\":\"big.png\"}")==2 && view_image_held() && view_image_held()->length==(size_t)AGENT_IMAGE_CAP);
     assert(view_image_step(result,sizeof(result),101,1)==0 && strstr(result,"STOPPED") && !view_image_held() && !view_image_take());

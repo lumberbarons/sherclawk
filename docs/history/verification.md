@@ -4,6 +4,21 @@ Dated acceptance evidence for the OS 9 guest, host checks and live model runs,
 retained from earlier development. Entries describe the state on their recorded
 dates. Use the [current guides](../../README.md#documentation) for present behavior.
 
+Recorded October 9, 2026: `view_image` was exercised in OS 9.2.2. The
+`SherclawkViewImageCheck` diagnostic reported zero failures against the real
+File Manager: a PNG at the 128 KiB cap read in eight bounded steps and handed
+over byte for byte, an over-cap file, a non-PNG and a missing file refused with
+distinct codes, and a "no" or unknown vision flag refused without reading the
+file. (Its first run caught `131072L` leaking into the error text and the model
+schema from a stringified macro; fixed and covered by host assertions.) In the
+main app, `openai/gpt-6-luna` was asked to look at a generated 240x160 PNG
+of a red rectangle and a blue circle. It listed the folder, called
+`view_image`, and described a red shape on the left and a blue circle on the
+right against a light background. The session journal held the text note and
+the tool result only, with no `base64` or `image_url`, and the following round
+uploaded about 25 KB. Not exercised: a text-only model, a PNG near the cap sent
+to a provider, and Stop during a read in the main app.
+
 Recorded October 5, 2026: 256 KiB history / 288 KiB request PowerPC build and
 ASan/UBSan checks passed, including a near-full history handoff request and
 refusal of truncated/tool-call summaries and failed seed persistence. The

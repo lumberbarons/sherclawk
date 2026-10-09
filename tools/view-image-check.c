@@ -76,7 +76,7 @@ static int view(const char *path, int vision, int *steps)
 int main(void)
 {
     static unsigned char big[AGENT_IMAGE_CAP + 1];
-    char folder[80], path[160];
+    char folder[80], path[160], expected[32];
     const AgentImage *image;
     int steps, i;
     InitGraf(&qd.thePort); InitFonts(); InitWindows(); InitMenus(); TEInit(); InitDialogs(NULL); InitCursor();
@@ -103,8 +103,9 @@ int main(void)
     check(!write_file(path, 'TEXT', (const unsigned char *)"this is not a png, but long enough to pass the length check", 59), "text fixture written");
 
     snprintf(path, sizeof(path), "%s:tiny.png", folder);
+    snprintf(expected, sizeof(expected), "\"bytes\":%lu,", (unsigned long)sizeof(tiny));
     check(!view(path, AGENT_VISION_YES, &steps) && steps == 1 && strstr(result, "\"width\":1") &&
-        strstr(result, "\"height\":1") && strstr(result, "\"bytes\":67"), "tiny png viewed in one step");
+        strstr(result, "\"height\":1") && strstr(result, expected), "tiny png viewed in one step");
     image = view_image_take();
     check(image && image->length == sizeof(tiny) && !memcmp(image->data, tiny, sizeof(tiny)) && !view_image_take(), "tiny png bytes handed over once");
     check(!view(path, AGENT_VISION_NO, &steps) && strstr(result, "VISION_UNSUPPORTED") && !view_image_take(), "model without images refused");
@@ -114,7 +115,7 @@ int main(void)
     image = view_image_take();
     check(image && image->length == AGENT_IMAGE_CAP && !memcmp(image->data, big, AGENT_IMAGE_CAP), "png at the cap read back exactly");
     snprintf(path, sizeof(path), "%s:over.png", folder);
-    check(!view(path, AGENT_VISION_YES, &steps) && strstr(result, "TOO_LARGE") && !view_image_take(), "png over the cap refused");
+    check(!view(path, AGENT_VISION_YES, &steps) && strstr(result, "TOO_LARGE") && strstr(result, "exceeds 131072 bytes") && !view_image_take(), "png over the cap refused");
     snprintf(path, sizeof(path), "%s:note.png", folder);
     check(!view(path, AGENT_VISION_YES, &steps) && strstr(result, "NOT_PNG"), "non-png refused");
     check(!view("definitely:missing.png", AGENT_VISION_YES, &steps) && strstr(result, "\"code\":\"FILE\""), "missing file refused");
