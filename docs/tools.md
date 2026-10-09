@@ -10,6 +10,7 @@ buffer and deadline relationships are in [limits](limits.md).
 | Search and source changes | `search_text`, `write_text`, `create_folder`, `edit_text` |
 | Native project work | `create_project`, `build_project`, `read_build_log`, `run_application` |
 | Read-only platform inspection | `get_file_info`, `resolve_alias`, `list_processes`, `list_fonts`, `measure_text`, `list_resources`, `read_resource` |
+| Read-only image viewing | `view_image` |
 
 ## Workspace paths and text
 
@@ -147,6 +148,50 @@ folders, files without resource forks and types that are not four printable
 characters are refused. A file that changes during a listing or read is
 reported as `CHANGED` instead of returning mixed evidence; cursors are
 observational catalog positions.
+
+## Viewing images
+
+`view_image(path)` lets a vision-capable model look at one PNG in the
+workspace, for example a screenshot a generated application wrote. Like the
+other inspection tools it changes nothing and writes no journal record of its
+own.
+
+The pixels are not in the tool result, which stays small. Chat-completions
+tool messages cannot carry images, so after the last tool result of the round
+the agent records one user message, a short text note naming the path,
+dimensions and byte size, and the next model request replaces that note with
+the same text plus the image as a base64 `data:image/png` URL. Only that one
+request carries the pixels: the history, the session journal and any handoff
+request keep the note alone, so the model must call `view_image` again to look
+a second time. The file stays in the workspace untouched.
+
+The bytes are sent as they are on disk. Sherclawk checks the PNG signature,
+the `IHDR` chunk (each dimension 1 to 8192 pixels) and the `IEND` trailer but
+never decodes, converts or downscales, so a generated application must render
+a screenshot small enough to fit. The file must be a plain data-fork file of at
+most `AGENT_IMAGE_CAP` bytes (see [limits](limits.md)). It is read in slices of
+16 KiB per event-loop turn; the file is re-checked each slice and a change
+mid-read is reported as `CHANGED`. Stop ends the read and attaches nothing.
+
+The tool is always advertised, but it fails closed. The selected model's
+OpenRouter catalog row lists its `architecture.input_modalities`; only a row
+that lists `image` allows the tool to read anything. A row that does not is
+`VISION_UNSUPPORTED`, and a model whose row could not be fetched or has no such
+list is `VISION_UNKNOWN`. Both results tell the model it has not seen the
+picture, so it must not describe one.
+
+| Code | Meaning |
+|---|---|
+| `ARGUMENTS` | Not exactly one `path` string. |
+| `VISION_UNSUPPORTED` / `VISION_UNKNOWN` | The model does not, or is not known to, accept images. |
+| `FILE` | The workspace path does not resolve. |
+| `NOT_PNG` | A folder, alias, too-short file, missing signature or `IHDR`, dimensions out of range, or no `IEND` trailer (truncated or still being written). |
+| `TOO_LARGE` | Over `AGENT_IMAGE_CAP` bytes. |
+| `ONE_IMAGE_PER_ROUND` | A second `view_image` in the same round. |
+| `READ`, `CHANGED`, `TIMEOUT`, `STOPPED` | The read failed, the file changed, took over a minute, or was stopped. |
+
+If the conversation is already so full that the encoded image could not fit in
+one request, the image is not attached and the note says so explicitly.
 
 ## Editing text
 

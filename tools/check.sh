@@ -66,6 +66,11 @@ fi
 
 "${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" \
     -fsanitize=address,undefined -fno-omit-frame-pointer -I"$HERE" \
+    "$HERE/tests/test_base64.c" -o "$HERE/build/tests/test-base64"
+"$HERE/build/tests/test-base64"
+
+"${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" \
+    -fsanitize=address,undefined -fno-omit-frame-pointer -I"$HERE" \
     "$HERE/tests/test_agent.c" "$HERE/agent.c" "$HERE/json.c" "$HERE/text.c" \
     -o "$HERE/build/tests/test-agent"
 "$HERE/build/tests/test-agent"
@@ -73,7 +78,7 @@ fi
 "${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" -Wno-multichar \
     -fsanitize=address,undefined -fno-omit-frame-pointer \
     -I"$HERE/tests/toolbox" -I"$HERE" \
-    "$HERE/tests/test_tools.c" "$HERE/tools.c" "$HERE/inspect.c" "$HERE/json.c" "$HERE/text.c" \
+    "$HERE/tests/test_tools.c" "$HERE/tools.c" "$HERE/inspect.c" "$HERE/view_image.c" "$HERE/json.c" "$HERE/text.c" \
     -o "$HERE/build/tests/test-tools"
 "$HERE/build/tests/test-tools"
 
@@ -87,14 +92,14 @@ fi
     -fsanitize=address,undefined -fno-omit-frame-pointer \
     -I"$HERE/tests/toolbox" -I"$HERE" \
     "$HERE/tests/test_build_project.c" "$HERE/selfbuild.c" "$HERE/build_project.c" "$HERE/run_application.c" "$HERE/jobs.c" \
-    "$HERE/tools.c" "$HERE/inspect.c" "$HERE/json.c" "$HERE/text.c" -o "$HERE/build/tests/test-build-project"
+    "$HERE/tools.c" "$HERE/inspect.c" "$HERE/view_image.c" "$HERE/json.c" "$HERE/text.c" -o "$HERE/build/tests/test-build-project"
 "$HERE/build/tests/test-build-project"
 
 "${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" -Wno-multichar \
     -fsanitize=address,undefined -fno-omit-frame-pointer \
     -I"$HERE/tests/toolbox" -I"$HERE" \
     "$HERE/tests/test_selfbuild.c" "$HERE/selfbuild.c" "$HERE/build_project.c" \
-    "$HERE/run_application.c" "$HERE/jobs.c" "$HERE/tools.c" "$HERE/inspect.c" "$HERE/json.c" "$HERE/text.c" \
+    "$HERE/run_application.c" "$HERE/jobs.c" "$HERE/tools.c" "$HERE/inspect.c" "$HERE/view_image.c" "$HERE/json.c" "$HERE/text.c" \
     -o "$HERE/build/tests/test-selfbuild"
 "$HERE/build/tests/test-selfbuild"
 

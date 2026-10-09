@@ -116,8 +116,17 @@ process lifecycle) that let the agent check what it actually produced.
     advertise one until a real guest run.
 - Resource reading is a deliberate read-only exception to the file tools'
   resource-fork refusal. It does not extend to resource writes.
-- Revisit if the result cap changes (see the limits guide) or if the product
-  gains multimodal results, which change what "bounded" means.
+- Images are a multimodal result and change what "bounded" means. `view_image`
+  is admitted as read-only under these rules: the tool result itself stays
+  within `AGENT_RESULT_CAP` and carries no pixels; the PNG has its own hard
+  cap (`AGENT_IMAGE_CAP`) sized against the one flat request; the pixels travel
+  in the single request that follows, while history and the journal keep a text
+  note; the read is stepped and honors Stop; and the tool fails closed unless
+  the selected model's catalog row lists image input. Further image sources
+  (screen capture, clipboard) should go through the same hand-off rather than
+  growing history.
+- Revisit if the result cap changes (see the limits guide) or if a result kind
+  other than a single bounded PNG needs to reach the model.
 
 ## References
 

@@ -29,9 +29,9 @@ if command -v cppcheck >/dev/null 2>&1; then
         --suppress=assertWithSideEffect:tests/test_build_project.c \
         -I tests/toolbox -I . -I vendor \
         mcp_config.c mcp_protocol.c mcp_stream.c mcp_client.c tests/test_mcp.c tests/test_mcp_client.c \
-        tools.c inspect.c json.c text.c chat.c agent.c network.c jobs.c \
+        tools.c inspect.c view_image.c json.c text.c chat.c agent.c network.c jobs.c \
         selfbuild.c build_project.c run_application.c session.c vendor/http.c \
-        tests/test_core.c tests/test_tools.c tests/test_agent.c \
+        tests/test_core.c tests/test_tools.c tests/test_agent.c tests/test_base64.c \
         tests/test_jobs.c tests/test_build_project.c tests/test_selfbuild.c \
         tests/test_session.c \
         || status=1
