@@ -11,8 +11,10 @@ static MacTLS_State state;
 static size_t wire_len, response_at;
 static char wire[128];
 static const char *response;
+static const char *destination = "openrouter.ai";
+static uint16_t destination_port = 443;
 MacTLS_Context *MacTLS_Create(const char *host, uint16_t port)
-{ assert(!strcmp(host, "openrouter.ai") && port == 443); return create_fail ? NULL : &context; }
+{ assert(!strcmp(host, destination) && port == destination_port); return create_fail ? NULL : &context; }
 MacTLS_State MacTLS_Pump(MacTLS_Context *c)
 { assert(c == &context); pumps++; read_once = 0; return state; }
 int MacTLS_Write(MacTLS_Context *c, const void *data, size_t len)
@@ -67,6 +69,9 @@ int main(void)
     reset(); create_fail = 1; assert(network_start(&net, "x", 1) == -1);
     reset(); assert(network_start(&net, "x", 1) == 0);
     state = kMacTLS_Closed; assert(network_step(&net) == -1); network_close(&net);
+    reset(); destination = "mcp.example"; destination_port = 8443;
+    assert(network_start_at(&net, destination, destination_port, "x", 1) == 0);
+    network_close(&net); assert(closes == 1);
     puts("PASS network request offsets, backpressure, response assembly and recovery");
     return 0;
 }

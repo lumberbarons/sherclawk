@@ -128,3 +128,49 @@ and `down=<bytes>`. Divide `down` by `out` for the real bytes per token, and see
 `end=discarded` for replies dropped for an oversized or excess tool call. Re-check the
 bytes-per-token figures in invariant 1 against fresh logs whenever the model or
 provider changes.
+
+## MCP diagnostic limits (`mcp.h`, `mcp_client.h`)
+
+These buffers currently belong to `SherclawkMCPCheck`, not the main app.
+
+| Limit | Value | Bounds |
+|---|---|---|
+| Configuration | 8 KiB UTF-8 | One zero/one-server JSON document; 2048 parser tokens. |
+| HTTP headers | 8 KiB | Each request/response header section; no compression/redirects. |
+| JSON-RPC message | 64 KiB | One JSON body or SSE data event; 8192 parser tokens. |
+| Exchange traffic | 256 KiB | All received framing, keepalives, notifications and data. |
+| Discovery | 8 pages / 64 entries | Entire discovery; duplicates or budget exhaustion invalidate it. |
+| Exposed tools | 8 / 16 KiB schemas | Frozen registry; original and mapped names bounded to 63 bytes. |
+| Selection | 8 names | Explicit configuration selection; empty selects none. |
+| JSON object keys | 8 KiB / 4096 per object | Duplicates are found by sorting decoded keys, not by pairwise comparison. |
+| Server replies | 4 × 2 KiB | Pending ping/error replies; overflow fails rather than dropping. |
+| Session / cursor | 1023 bytes | Session visible ASCII; cursor encoded as JSON. |
+| Discovery deadline | 30 s total | Initialize, acknowledgment and all pages. |
+| Call deadline | 120 s | One sequential call, no retry. |
+| Cancellation grace | 5 s | Best-effort notification; never claims server work stopped. |
+| Network work | 4 × 2 KiB reads / step | Only one exchange is read per step. |
+
+Stop/deadline cleanup drains an outstanding OT connect before freeing its
+context, to avoid the known #34 early-abort crash. This cleanup may outlast the
+request deadline; Certainly owns its connect timeout. It launches no new call.
+
+Scratch larger than a few hundred bytes (tool descriptions, key comparison,
+configuration parsing) is static, because the application stack is small and
+unmeasured; static scratch is counted in the bss figure below and wiped after
+configuration parsing.
+
+The streaming decoder retains a bounded current line/message rather than the
+whole HTTP exchange, and finishes as soon as the matching response arrives.
+The protocol diagnostic still parses a completed JSON message synchronously;
+resumable parsing and result processing within 8 KiB per step are required
+before application integration. The separate acknowledgment connection adds
+TLS allocations, so its footprint must also be measured on the guest.
+The future retained-result cap is 128 KiB, while the existing 1536-byte tool
+result and 8 KiB argument caps will remain unchanged. Result artifacts and
+pagination are not implemented yet.
+
+On 2026-10-08 the Docker-linked MCP diagnostic measured 339,968 bytes text,
+6,624 data and 1,190,632 bss (1,537,224 total). The main app remains 3,036,744
+bytes because it does not yet link MCP. These measurements exclude dynamic
+TLS/UI allocations and stack; they do not prove the integrated 4 MiB minimum
+partition is sufficient.

@@ -16,16 +16,21 @@ static int fail(ChatNetwork *n, const char *message)
     snprintf(n->error, sizeof(n->error), "%s", message);
     n->result = -1; return -1;
 }
-int network_start(ChatNetwork *n, const char *request, size_t len)
+int network_start_at(ChatNetwork *n, const char *host, unsigned short port,
+                     const char *request, size_t len)
 {
     if (n->ctx || len >= sizeof(n->request)) return -1;
     /* request may already be n->request; don't zero it until it is copied. */
     memmove(n->request, request, len);
     n->request_len = len; n->sent = n->received = n->body_len = 0;
     n->status = n->result = 0; n->error[0] = 0; n->version = kMacTLS_VersionUnknown;
-    n->ctx = MacTLS_Create("openrouter.ai", 443);
+    n->ctx = MacTLS_Create(host, port);
     if (!n->ctx) return fail(n, "TLS context allocation failed.");
     return 0;
+}
+int network_start(ChatNetwork *n, const char *request, size_t len)
+{
+    return network_start_at(n, "openrouter.ai", 443, request, len);
 }
 int network_step(ChatNetwork *n)
 {
