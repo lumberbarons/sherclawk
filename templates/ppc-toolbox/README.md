@@ -61,7 +61,7 @@ below remains the verified fixed-template diagnostic workflow.
 
 The fixed native diagnostic also builds the embedded starter sources without
 MacRelix. Its two successful builds, deliberately failing compile and Stop
-during linking are recorded in [idea 005, increment 2](../../docs/archive/idea-005-sherclawk-queue-mode.md#increment-2-guest-evidence--october-6-2026).
+during linking are recorded in [native executor evidence, increment 2](../../docs/history/native-executor-evidence.md#increment-2-guest-evidence--october-6-2026).
 Those historical results predate the native-widget/runtime-log starter; see
 `VERIFIED.md` for the scope of recorded guest evidence.
 The main app executes the same queued ToolServer commands directly when the

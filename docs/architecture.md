@@ -76,8 +76,14 @@ On the initial implementation, `FSMakeFSSpec` returning `fnfErr` for a missing
 preferences file had to be treated as an ordinary first-run case. `ModalDialog`
 reported checkbox clicks without toggling them, so the application updated the
 control value and redrew it explicitly. Those guest findings remain useful when
-changing the dialog. The retired proposal's remaining considerations are
-[historical preferences notes](archive/preferences-notes.md).
+changing the dialog.
+
+The storage choice was an app-owned `pref` file rather than `TEXT` or
+resources. Per-key compiled fallbacks, immediate workspace changes for new work
+and a display-only debug toggle were intentional. Classic conventions place
+Preferences last in the Edit menu, separated from editing commands; Return
+accepts and Escape or Command-. cancels. The model chooser uses Preferences as
+the sole source. Remaining follow-ups are tracked as issues.
 
 ## Model catalog and context display
 
