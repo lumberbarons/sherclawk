@@ -19,6 +19,9 @@ add_application(SherclawkWriteCheck tools/write-check.c ${TOOLS_SRC} json.c text
 add_application(SherclawkSearchCheck tools/search-check.c ${TOOLS_SRC} json.c text.c hello.r)
 add_application(SherclawkEditCheck tools/edit-check.c ${TOOLS_SRC} json.c text.c hello.r)
 add_application(SherclawkProjectCheck tools/project-check.c ${TOOLS_SRC} json.c text.c hello.r)
+# Compile the exact model-facing starter as well as the app that embeds it.
+add_application(SherclawkTemplate templates/ppc-toolbox/main.c templates/ppc-toolbox/app.r CREATOR SHTP)
+target_compile_options(SherclawkTemplate PRIVATE -Wall -Wextra)
 add_application(SherclawkBuildCheck tools/build-check.c build_project.c selfbuild.c toolserver.c run_application.c ${TOOLS_SRC} jobs.c json.c text.c hello.r)
 add_application(SherclawkRunCheck tools/build-check.c build_project.c selfbuild.c toolserver.c run_application.c ${TOOLS_SRC} jobs.c json.c text.c hello.r)
 target_compile_definitions(SherclawkRunCheck PRIVATE RUN_CHECK=1)
