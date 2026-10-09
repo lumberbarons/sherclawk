@@ -64,12 +64,12 @@ and `Template` output are defaults, not requirements for every future project.
 `create_project` embeds its editable C/Rez sources; `build_project` also
 accepts independently assembled protocol-2 projects with multiple
 sources/resources, a chosen output name and supported toolchain settings. See
-the [build/run plan](../../PLAN.md#buildrun-contract). The shell recipe
+the [build/run contract](../../docs/architecture.md#buildrun-contract). The shell recipe
 below remains the verified fixed-template diagnostic workflow.
 
 The fixed native diagnostic also builds the embedded starter sources without
 MacRelix. Its two successful builds, deliberately failing compile and Stop
-during linking are recorded in [idea 005, increment 2](../../docs/idea-005-sherclawk-queue-mode.md#increment-2-guest-evidence--october-6-2026).
+during linking are recorded in [idea 005, increment 2](../../docs/archive/idea-005-sherclawk-queue-mode.md#increment-2-guest-evidence--october-6-2026).
 Those historical results predate the native-widget/runtime-log starter; see
 `VERIFIED.md` for the scope of recorded guest evidence.
 The main app executes the same queued ToolServer commands directly when the

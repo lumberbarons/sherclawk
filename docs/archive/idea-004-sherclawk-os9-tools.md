@@ -1,5 +1,10 @@
 # 004 — Sherclawk tools for uniquely OS 9 subsystems
 
+> Historical design note. Proposals, status statements and source-line references
+> describe development at the time of writing and may be superseded. Use the
+> [current guides](../../README.md#documentation) for supported behavior and the
+> [issue tracker](https://github.com/lumberbarons/sherclawk/issues) for active work.
+
 **Status:** step 1 built and guest-verified (October 2026): `get_file_info`,
 `resolve_alias`, `list_processes`, `list_fonts`, `measure_text`,
 `list_resources` and `read_resource` are implemented in
@@ -280,7 +285,7 @@ Inclusion rule, matching the existing harness:
 
 ## Evidence
 
-- Vendored Universal Interfaces, `InterfacesAndLibraries/Interfaces/CIncludes/`:
+- Locally installed, user-supplied Universal Interfaces, `InterfacesAndLibraries/Interfaces/CIncludes/`:
   - `Resources.h` — `CountResources` :344, `GetIndResource` :368,
     `Get1Resource` :410, `GetResInfo` :527, `GetResourceSizeOnDisk` :574.
   - `Finder.h` — `kHasCustomIcon` :186, `kHasBundle` :189, `kIsAlias` :191,

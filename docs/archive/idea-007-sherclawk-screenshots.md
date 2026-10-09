@@ -1,7 +1,12 @@
 # 007 — Sherclawk screenshots: native capture, and seeing what it built
 
+> Historical design note. Proposals, status statements and source-line references
+> describe development at the time of writing and may be superseded. Use the
+> [current guides](../../README.md#documentation) for supported behavior and the
+> [issue tracker](https://github.com/lumberbarons/sherclawk/issues) for active work.
+
 **Status:** idea, not built. API availability was checked against the workspace's
-vendored Universal Interfaces (`InterfacesAndLibraries/Interfaces/CIncludes/`);
+locally installed, user-supplied Universal Interfaces (`InterfacesAndLibraries/Interfaces/CIncludes/`);
 nothing here has been compiled or run in the guest. OS 9's built-in screenshot
 behavior is documented from vintage sources, not from this workspace's 9.2.2
 install, and whether the target's QuickTime provides a JPEG graphics exporter
@@ -198,7 +203,7 @@ Per `AGENTS.md`, host success is not guest evidence. Plan a
 
 ## Evidence
 
-- Vendored Universal Interfaces, `InterfacesAndLibraries/Interfaces/CIncludes/`:
+- Locally installed, user-supplied Universal Interfaces, `InterfacesAndLibraries/Interfaces/CIncludes/`:
   - `Quickdraw.h` — `CopyBits` :3674, `OpenPicture` :3748, `ClosePicture`
     :3775, `GetDeviceList` :4902, `GetMainDevice` :4914.
   - `QDOffscreen.h` — `NewGWorld` :104 (returns `QDErr`), `LockPixels` :204,

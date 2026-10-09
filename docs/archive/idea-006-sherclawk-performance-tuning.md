@@ -1,11 +1,16 @@
 # 006 — Sherclawk performance tuning
 
+> Historical design note. Proposals, status statements and source-line references
+> describe development at the time of writing and may be superseded. Use the
+> [current guides](../../README.md#documentation) for supported behavior and the
+> [issue tracker](https://github.com/lumberbarons/sherclawk/issues) for active work.
+
 **Status:** analyzed, not measured. Findings come from reading the current
 source tree (October 6, 2026); no guest timings were taken for this
 page. Per-item costs below are code-derived estimates, not measurements. The
 shared TLS transport already had a measured performance pass
 (`patches/certainly-*-perf-*.patch`, guest results in
-`docs/certainly-perf-checks.md`); this page is about what remains.
+the original imac workspace's Certainly performance notes); this page is about what remains.
 Per AGENTS.md, host success is not guest evidence — every change here needs a
 guest fixture and a before/after time.
 
@@ -64,7 +69,7 @@ Rules for anything here:
   `certainly-tls13-perf-records-aes-gcm.patch`,
   `certainly-perf-transport-pump.patch`); guest workloads measured 1.43–1.9x
   on key setup and small-record AES, with large records within noise
-  (`docs/certainly-perf-checks.md`, "Verified results, 2026-10-01").
+  (the original imac workspace's Certainly performance notes, "Verified results, 2026-10-01").
 
 ## 1. Cooperative stepper granularity — the same pattern in three places
 
@@ -169,7 +174,7 @@ guarantee. Changing one changes the documented contract, not just the timing.
 ## Measurement plan
 
 - Guest timing in the established pattern (the `guest.c` workload described
-  in `docs/certainly-perf-checks.md`): fixed workloads, tick counts
+  in the original imac workspace's Certainly performance notes): fixed workloads, tick counts
   written to a share log, `DONE failures=0`. Add counters around (1) a full
   snapshot publication, (2) the `run_application` fork scan, (3) one worker
   idle scan with N retained jobs.
@@ -232,5 +237,5 @@ guarantee. Changing one changes the documented contract, not just the timing.
   `patches/certainly-tls13-perf-keysched-hmac.patch`,
   `certainly-tls13-perf-records-aes-gcm.patch`,
   `certainly-perf-transport-pump.patch`;
-  `docs/certainly-perf-checks.md` (host checks and verified results).
+  the original imac workspace's Certainly performance notes (host checks and verified results).
 - `docs/macos9-qemu.md` (emulated G3); `AGENTS.md` (guest verification rule).

@@ -4,6 +4,10 @@ build/
 # Machine-local credentials (never committed)
 config.local.h
 
+# User-supplied proprietary SDK (normally kept next to this repository)
+/InterfacesAndLibraries/
+/Interfaces&Libraries/
+
 # Python bytecode
 __pycache__/
 *.py[cod]

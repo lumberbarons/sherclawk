@@ -1,5 +1,10 @@
 # 001 — Sherclawk 1999 mode
 
+> Historical design note. Proposals, status statements and source-line references
+> describe development at the time of writing and may be superseded. Use the
+> [current guides](../../README.md#documentation) for supported behavior and the
+> [issue tracker](https://github.com/lumberbarons/sherclawk/issues) for active work.
+
 **Status:** idea, not built. Feasibility consideration only.
 
 ## The idea
@@ -30,7 +35,7 @@ the world is controlled by its prompt and tool output.
 3. **Change the guest clock.** Possible via the Date & Time control panel or
    QEMU `-rtc base=...`, but not recommended:
    - `-rtc base=localtime` in the QEMU launcher (see
-     [macos9-qemu.md](macos9-qemu.md)) is load-bearing.
+     [macos9-qemu.md](../macos9-qemu.md)) is load-bearing.
    - TLS would see every certificate as not yet valid, so the TLS path to the
      model API would fail.
 4. **Fake the clock inside Sherclawk only.** Leave the guest clock alone and
