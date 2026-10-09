@@ -3,6 +3,7 @@
 #include "json.h"
 #include "text.h"
 #include "chat.h"
+#include "base64.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -254,6 +255,130 @@ static void rejections(void)
         assert(a.used == used && strstr(error, "reply text"));
     }
 }
+/* OpenRouter rows list input modalities under architecture. A row without the
+ * block (or with a malformed one) is unknown, never a guessed "no". */
+static void vision_flag(void)
+{
+    static const char *page =
+        "{\"data\":["
+        "{\"id\":\"v/see\",\"name\":\"See\",\"context_length\":1000,"
+        "\"architecture\":{\"modality\":\"text+image->text\",\"input_modalities\":[\"text\",\"image\",\"file\"],\"output_modalities\":[\"text\"]}},"
+        "{\"id\":\"v/blind\",\"name\":\"Blind\",\"architecture\":{\"input_modalities\":[\"text\"]}},"
+        "{\"id\":\"v/lookalike\",\"name\":\"Lookalike\",\"architecture\":{\"input_modalities\":[\"images\",\"text\"]}},"
+        "{\"id\":\"v/none\",\"name\":\"None\"},"
+        "{\"id\":\"v/odd\",\"name\":\"Odd\",\"architecture\":{\"input_modalities\":\"image\"}},"
+        "{\"id\":\"v/empty\",\"name\":\"Empty\",\"architecture\":{\"input_modalities\":[]}}]}";
+    static AgentModelRow rows[8];
+    AgentModelInfo info;
+    assert(agent_model_page(page, strlen(page), rows, 8) == 6);
+    assert(rows[0].info.vision == AGENT_VISION_YES);
+    assert(rows[1].info.vision == AGENT_VISION_NO);
+    assert(rows[2].info.vision == AGENT_VISION_NO);
+    assert(rows[3].info.vision == AGENT_VISION_UNKNOWN);
+    assert(rows[4].info.vision == AGENT_VISION_UNKNOWN);
+    assert(rows[5].info.vision == AGENT_VISION_NO);
+    assert(!agent_model_info(page, strlen(page), "v/see", &info) && info.vision == AGENT_VISION_YES);
+    assert(!agent_model_info(page, strlen(page), "v/none", &info) && info.vision == AGENT_VISION_UNKNOWN);
+}
+static unsigned char png_bytes[AGENT_IMAGE_CAP];
+static void image_fixture(AgentImage *image, size_t length)
+{
+    size_t i;
+    for (i = 0; i < length; i++) png_bytes[i] = (unsigned char)(i * 7 + 3);
+    memset(image, 0, sizeof(*image));
+    image->data = png_bytes; image->length = length;
+    image->width = 390; image->height = 150;
+    strcpy(image->path, "Apps:Putt:frame1.png");
+}
+/* Tool messages cannot carry pixels. The image rides in one user message that
+ * follows the round's tool results, reaches the wire only for the request
+ * right after it, and is journalled and summarized as a short note. */
+static void images(void)
+{
+    static JsonToken wire[8192];
+    static char encoded[AGENT_IMAGE_CAP * 2], expected[256];
+    AgentImage image;
+    const char *tool, *picture, *note;
+    size_t used, before, i, free_image = 0, free_plain = 0;
+    int parsed;
+    image_fixture(&image, 100);
+    begin(); named_call("tool_calls", "view_image", "{\"path\":\"Apps:Putt:frame1.png\"}");
+    assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
+    /* Not before the round's results are in, and never an unusable image. */
+    assert(agent_attach_image(&a, &image) == -1 && !a.image_pending);
+    assert(!agent_tool_result(&a, "{\"status\":\"ok\"}", error, sizeof(error)));
+    before = a.used;
+    image.length = 0; assert(agent_attach_image(&a, &image) == -1);
+    image.length = AGENT_IMAGE_CAP + 1; assert(agent_attach_image(&a, &image) == -1);
+    assert(a.used == before && !a.image_pending);
+    image_fixture(&image, 100); records = 0;
+    assert(!agent_attach_image(&a, &image) && a.image_pending && records == 1);
+    /* History and journal carry only the note: no pixels, no base64. */
+    assert(strstr(a.history + before, "view_image: Apps:Putt:frame1.png (390x150 PNG, 100 bytes)"));
+    assert(!strstr(a.history, "image_url") && !strstr(a.history, "base64"));
+    assert(a.image_length == a.used - before - 1);
+    /* The request after the attach splices the real image in place of the note. */
+    parsed = agent_request_image(&a, "model", &image, req, sizeof(req));
+    assert(parsed > 0);
+    assert(json_parse(req, (size_t)parsed, wire, 8192) > 0);
+    assert(base64_encode(png_bytes, 100, encoded, sizeof(encoded)) == BASE64_LENGTH(100));
+    snprintf(expected, sizeof(expected), "\"url\":\"data:image/png;base64,%.8s", encoded);
+    picture = strstr(req, "\"type\":\"image_url\"");
+    assert(picture && strstr(req, expected) && strstr(picture, encoded));
+    tool = strstr(req, "\"tool_call_id\":\"c1\"");
+    note = strstr(req, "\"type\":\"text\",\"text\":\"view_image: Apps:Putt:frame1.png");
+    assert(tool && note && tool < note && note < picture);
+    assert(strstr(req, "\"role\":\"user\",\"content\":[{\"type\":\"text\""));
+    /* Only one image per request and it is the last message. */
+    assert(!strstr(picture + 10, "\"type\":\"image_url\"") && strstr(picture, "\"}}]}],\"tools\":"));
+    /* Without the pixels at hand the note is sent as plain text. */
+    assert(agent_request_image(&a, "model", NULL, req, sizeof(req)) > 0 && !strstr(req, "image_url"));
+    assert(agent_request(&a, "model", req, sizeof(req)) > 0 && !strstr(req, "image_url") && strstr(req, "frame1.png"));
+    /* A request too small for the encoded image fails rather than truncating. */
+    parsed = agent_request(&a, "model", req, sizeof(req));
+    assert(parsed > 0 && agent_request_image(&a, "model", &image, req, (size_t)parsed + 10) == -1);
+    /* Once the model has answered, later requests keep the note only. */
+    assert(!agent_response(&a, "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"A green.\"}}]}",
+                           strlen("{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"A green.\"}}]}"),
+                           200, error, sizeof(error)));
+    assert(!a.image_pending);
+    assert(agent_handoff_request(&a, "model", req, sizeof(req)) > 0);
+    assert(!strstr(req, "image_url") && !strstr(req, "base64") && strstr(req, "frame1.png"));
+    assert(!agent_begin(&a, "And now?", error, sizeof(error)));
+    assert(agent_request_image(&a, "model", &image, req, sizeof(req)) > 0 && !strstr(req, "image_url") && strstr(req, "frame1.png"));
+    /* Stop and a fresh user turn both drop a pending image. */
+    begin(); named_call("tool_calls", "view_image", "{\"path\":\"x\"}");
+    assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
+    assert(!agent_tool_result(&a, "{\"status\":\"ok\"}", error, sizeof(error)));
+    assert(!agent_attach_image(&a, &image) && a.image_pending);
+    assert(!agent_stop(&a, "user stop") && !a.image_pending);
+    /* An image the request cannot hold is dropped with an explicit note. */
+    begin(); named_call("tool_calls", "view_image", "{\"path\":\"x\"}");
+    assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
+    assert(!agent_tool_result(&a, "{\"status\":\"ok\"}", error, sizeof(error)));
+    image_fixture(&image, AGENT_IMAGE_CAP);
+    a.used = CHAT_REQUEST_CAP - (size_t)BASE64_LENGTH(AGENT_IMAGE_CAP) - 8192;
+    assert(a.used + 1024 < sizeof(a.history));
+    used = a.used;
+    assert(!agent_attach_image(&a, &image) && !a.image_pending);
+    assert(a.used > used && strstr(a.history + used, "NOT attached") && strstr(a.history + used, "frame1.png"));
+    /* A call to view_image reserves room for its note before anything runs:
+     * find the fullest history each kind of call still fits in. */
+    for (i = 0; i < 2; i++) {
+        size_t step = 16, at = sizeof(a.history) - 4 * AGENT_RESULT_WIRE_CAP;
+        begin();
+        if (i) named_call("tool_calls", "view_image", "{\"path\":\"Apps:Putt:frame1.png\"}"); else call("tool_calls");
+        saved = a;
+        for (;; at += step) {
+            a = saved; a.used = at;
+            if (agent_response(&a, response, strlen(response), 200, error, sizeof(error))) break;
+            assert(at < sizeof(a.history));
+        }
+        if (i) free_image = at; else free_plain = at;
+    }
+    assert(free_plain > free_image && free_plain - free_image >= AGENT_IMAGE_NOTE_CAP);
+    a = saved;
+}
 static void model_metadata(void)
 {
     static const char *page =
@@ -388,7 +513,7 @@ int main(void)
     size_t used, i;
     begin();
     assert(agent_request(&a, "model", req, sizeof(req)) > 0);
-    assert(strstr(req, "\"tools\"") && strstr(req, "\"role\":\"system\"") && strstr(req, "write_text") && strstr(req, "create_project") && strstr(req, "create_folder") && strstr(req, "edit_text") && strstr(req, "search_text") && strstr(req,"build_project") && strstr(req,"read_build_log"));
+    assert(strstr(req, "\"tools\"") && strstr(req, "\"role\":\"system\"") && strstr(req, "write_text") && strstr(req, "create_project") && strstr(req, "create_folder") && strstr(req, "edit_text") && strstr(req, "search_text") && strstr(req,"build_project") && strstr(req,"read_build_log") && strstr(req,"view_image") && strstr(req,"at most 131072 bytes;") && !strstr(req,"131072L"));
     call("tool_calls");
     assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
     assert(a.count == 1 && !a.next && a.active && records == 2);
@@ -513,6 +638,8 @@ int main(void)
     assert(agent_request(&a, "model", req, sizeof(req)) > 0 && strstr(req, "\"max_tokens\":6000,"));
     rejections();
     model_metadata();
+    vision_flag();
+    images();
     model_page();
     puts("PASS agent tools, usage accounting, history, truncation, Stop, persistence barriers, bounds and model metadata");
     return 0;

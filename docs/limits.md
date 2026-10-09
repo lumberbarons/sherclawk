@@ -21,6 +21,8 @@ in the headers today; the headers win if this drifts.
 | `CHAT_REQUEST_CAP` | 416 KiB | The whole request JSON (`gJSON`): history plus system prompt and tool schemas. |
 | `AGENT_TEXT_CAP` | 16 KiB | User prompt and handoff message buffers. Not reply text. |
 | `AGENT_RESULT_CAP` | 1536 | One tool result recorded into history. |
+| `AGENT_IMAGE_CAP` | 128 KiB | Largest PNG `view_image` reads (`view_image.c` holds one in a static buffer). Its base64 form, a third larger, rides in one request. |
+| `AGENT_IMAGE_NOTE_CAP` | 2048 | History reserved for the note that accompanies an image, whenever a response calls `view_image`. |
 | JSON token scratch | 4096 tokens | Tokens (not bytes) in any parsed response; `tokens[]` in `agent.c`. A catalog page over the cap parses to zero rows. |
 
 ### Display and time
@@ -111,7 +113,17 @@ in bss and 8,224 bytes of text and data, mostly the embedded starter.
    catalog's "no match". The 30-second deadline is shared with the
    context lookup, and a timed-out fetch drains before it closes, in the dialog
    or (after Cancel) in the main loop.
-8. **Every round re-uploads the full history.** History size is therefore also
+8. **An image rides in one request on top of the history.** The encoded image
+   (`AGENT_IMAGE_CAP` bytes become 4/3 as many characters) is spliced into the
+   request that follows `view_image` only, so the request must hold history,
+   system prompt and schemas, and the image at once: with a 128 KiB PNG that
+   leaves about 230 KB of history, not the full 384 KiB. `agent_attach_image`
+   checks this when it records the note and, if the image would not fit, says
+   so in the note instead of sending it. Later rounds and handoff requests
+   carry the note alone, so images never occupy history. Raising
+   `AGENT_IMAGE_CAP` shrinks that room one for one and needs the request buffer
+   re-checked.
+9. **Every round re-uploads the full history.** History size is therefore also
    per-round upload time, and bigger history only helps up to the model's own
    context window (the Context line in the status area).
 
@@ -123,6 +135,7 @@ in bss and 8,224 bytes of text and data, mostly the embedded starter.
 | `AGENT_HISTORY_CAP` | live history, handoff candidate history, `gJSON`, HTTP request | 4 |
 | `AGENT_REPLY_CAP` | `Agent.text` in the live and candidate `Agent` | 2 |
 | `AGENT_TEXT_CAP` | prompt buffer; handoff content (once) and message (six times) | 8 |
+| `AGENT_IMAGE_CAP` | the `view_image` PNG buffer | 1 |
 | `AGENT_MAX_TOKENS` | none | 0 |
 
 Linked static size is measured, not estimated, with `powerpc-apple-macos-size`
@@ -136,8 +149,9 @@ docker run --rm -v "$PWD/build:/b" ghcr.io/autc04/retro68 \
 Text plus data plus bss was 2,454,552 bytes (2.34 MiB) at 3072 tokens with a
 16 KiB reply buffer and 256 KiB history, 2,512,456 bytes (2.40 MiB) at 6000
 tokens with the 40 KiB `AGENT_REPLY_CAP`, and 3,036,744 bytes (2.90 MiB) with
-384 KiB history. This excludes dynamic TLS and UI allocations and the
-stack, so keep the minimum partition comfortably above it.
+384 KiB history, and 3,220,816 bytes (3.07 MiB) once the 128 KiB `view_image`
+buffer and later changes were linked. This excludes dynamic TLS and UI
+allocations and the stack, so keep the minimum partition comfortably above it.
 
 With the same layout, increasing history from 384 KiB to 512 KiB would raise
 that baseline to roughly 3.4 MiB before dynamic allocations; 1 MiB history
@@ -157,6 +171,9 @@ bounded.
 - **History:** raise `CHAT_REQUEST_CAP` with it, update the memory measurements
   here and the [usage limits](usage.md#run-limits), re-measure size, and check
   the `SIZE` resource.
+- **`AGENT_IMAGE_CAP`:** check invariant 8 against `CHAT_REQUEST_CAP`, update the
+  `view_image` text in `docs/tools.md` and the schema description in `agent.c`
+  (it quotes the value), and re-measure size.
 - **Anything:** run `tools/check.sh`, then a Docker `./build.sh`, then launch on
   the guest. Compile-time guards in `agent.c` enforce invariants 1 and 2 and
   the 16 KiB minimum overhead of invariant 3, but only the guest shows the partition is big enough.

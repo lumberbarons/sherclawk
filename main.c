@@ -33,6 +33,7 @@
 #include "selfbuild.h"
 #include <AppleEvents.h>
 #include "run_application.h"
+#include "view_image.h"
 #include <QDOffscreen.h>
 #include <Resources.h>
 #include "text.h"
@@ -116,6 +117,7 @@ typedef enum {
     RUN_BUILD,           /* build_project pending */
     RUN_QUIT,           /* quit_application pending */
     RUN_LAUNCH,          /* run_application pending */
+    RUN_VIEW_IMAGE,      /* view_image reading a PNG */
     RUN_HANDOFF,         /* handoff summary HTTPS exchange in flight */
     RUN_CONTEXT_LOOKUP   /* model context-window lookup in flight */
 } RunState;
@@ -1827,6 +1829,7 @@ static void NewChat(void)
 {
     if (RunBusy()) return;
     session_close(&gSession); agent_reset(&gAgent, session_journal, &gSession); chat_reset(&gChat);
+    view_image_reset();
     ResponseSetText("", 0); TESetText("", 0, gPromptTE); InvalRect(&gPromptRect);
     FocusSet(gPromptTE); SetStatus("Ready. What shall we investigate?");
 }
@@ -1851,7 +1854,10 @@ static const PendingTool kPendingTools[] = {
       "Launch outcome uncertain. Inspect the run journal; do not retry automatically." },
     { RUN_QUIT, "quit_application", quit_application_begin, quit_application_step,
       "Requesting graceful quit; observing owned process...",
-      "Quit outcome uncertain. The request may still take effect; do not retry." }
+      "Quit outcome uncertain. The request may still take effect; do not retry." },
+    { RUN_VIEW_IMAGE, "view_image", view_image_begin, view_image_step,
+      "Reading image...",
+      "Image read stopped. Nothing was attached." }
 };
 static const PendingTool *PendingToolForCall(const char *name)
 {
@@ -1990,7 +1996,7 @@ static int StartModelRequest(void)
     if (gAgent.rounds >= gPrefs.max_rounds || gAgent.tool_count >= gPrefs.max_tools) {
         PauseRunAtLimit(); return -1;
     }
-    length = agent_request(&gAgent, gRunModel, gJSON, sizeof(gJSON));
+    length = agent_request_image(&gAgent, gRunModel, view_image_held(), gJSON, sizeof(gJSON));
     if (length < 0) { AbortChat("Request limit reached. Start a new session."); return -1; }
     if (sherclawk_attribution(SHERCLAWK_APP_URL, attribution, sizeof(attribution)) < 0) {
         AbortChat("Attribution URL is too long."); return -1;
@@ -2017,6 +2023,7 @@ static void SendBegin(void)
         SetStatus("Session file unavailable. Check %s or start a new session.", tools_workspace()); return;
     }
     if (agent_begin(&gAgent, gPending, error, sizeof(error))) { SetStatus("%s", error); return; }
+    view_image_reset();
     ShowMessage("You", gPending);
     TESetText("", 0, gPromptTE); InvalRect(&gPromptRect);
     SetSendEnabled(0); StartModelRequest();
@@ -2124,7 +2131,13 @@ static void StepTools(void)
     int result;
     AgentCall *call;
     const PendingTool *pending;
-    if (gAgent.next == gAgent.count) { gRun = RUN_NEXT_REQUEST; return; }
+    if (gAgent.next == gAgent.count) {
+        /* Tool messages cannot carry pixels: an image from this round follows
+         * the last tool result, as a user message for the next request. */
+        const AgentImage *shot = view_image_take();
+        if (shot && agent_attach_image(&gAgent, shot)) { AbortChat("Could not record the attached image. Stop and inspect the session."); return; }
+        gRun = RUN_NEXT_REQUEST; return;
+    }
     if (gAgent.tool_count >= gPrefs.max_tools) { PauseRunAtLimit(); return; }
     call = &gAgent.calls[gAgent.next];
     gToolStart = (uint32_t)TickCount();
@@ -2139,6 +2152,7 @@ static void StepTools(void)
         if (session_journal(&gSession, "tool_started", started)) { AbortChat("Could not record tool start; no tool executed."); return; }
         ToolEventsAppend("tool_started");
     }
+    view_image_set_vision(gModelInfoAttempted && !strcmp(gModelInfoModel, gRunModel) ? gModelInfo.vision : AGENT_VISION_UNKNOWN);
     pending = PendingToolForCall(call->name);
     if (pending) {
         result = pending->begin(call, gToolResult, sizeof(gToolResult), ToolEventJournal, &gSession, (uint32_t)TickCount());
@@ -2225,7 +2239,8 @@ static void DriveChatStep(void)
     case RUN_NEXT_REQUEST: StartModelRequest(); break;
     case RUN_BUILD:
     case RUN_QUIT:
-    case RUN_LAUNCH: StepPendingTool(); break;
+    case RUN_LAUNCH:
+    case RUN_VIEW_IMAGE: StepPendingTool(); break;
     case RUN_TOOLS: StepTools(); break;
     case RUN_MODEL_REQUEST:
     case RUN_HANDOFF: StepModelExchange(); break;

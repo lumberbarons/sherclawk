@@ -22,16 +22,35 @@
 /* Completion budget per agent request, reasoning included. */
 #define AGENT_MAX_TOKENS 6000
 #define AGENT_HANDOFF_MAX_TOKENS 1536
+/* Largest PNG, in bytes, that view_image attaches: its base64 form must fit
+ * the one flat request beside a history that is re-sent every round. */
+#define AGENT_IMAGE_CAP 131072
+#define AGENT_IMAGE_PATH_CAP 384
+/* History bytes reserved for the note that accompanies an attached image. */
+#define AGENT_IMAGE_NOTE_CAP 2048
 /* Display-grade cost accumulator clamp, in millionths of a US dollar. */
 #define AGENT_COST_MICROS_MAX 9000000000000000LL
 
 typedef struct { char id[128], name[64], arguments[AGENT_ARGUMENT_CAP]; } AgentCall;
+/* Whether a model accepts images, from architecture.input_modalities. A row
+ * without that list is unknown, which callers must not treat as a yes. */
+#define AGENT_VISION_UNKNOWN 0
+#define AGENT_VISION_NO 1
+#define AGENT_VISION_YES 2
+/* A PNG held in memory by its owner, with the workspace path the model named. */
+typedef struct {
+    const unsigned char *data;
+    size_t length;
+    long width, height;
+    char path[AGENT_IMAGE_PATH_CAP];
+} AgentImage;
 /* One /api/v1/models?q= row: the catalog display name, context_length (-1
- * when the row has none) and the optional reasoning block, whose effort names
- * keep the provider's order. */
+ * when the row has none), the vision flag and the optional reasoning block,
+ * whose effort names keep the provider's order. */
 typedef struct {
     char name[AGENT_MODEL_NAME_CAP];
     long context_length;
+    int vision;
     int reasoning, mandatory, default_enabled;
     char default_effort[AGENT_EFFORT_CAP];
     char supported_efforts[AGENT_EFFORT_MAX][AGENT_EFFORT_CAP];
@@ -54,12 +73,27 @@ typedef struct {
     long long cost_micros;
     long context_tokens;
     int cost_seen, context_seen;
+    /* The newest view_image note in history, spliced into the next request. */
+    size_t image_at, image_length;
+    int image_pending;
     AgentJournal journal;
     void *journal_context;
 } Agent;
 void agent_reset(Agent *a, AgentJournal journal, void *context);
 int agent_begin(Agent *a, const char *prompt, char *error, size_t cap);
 int agent_request(const Agent *a, const char *model, char *out, size_t cap);
+/* Like agent_request, but the request that follows agent_attach_image carries
+ * the image's pixels as a base64 data URL in place of its note. The pixels are
+ * never in history, the journal or a handoff request, so a later request sends
+ * the note alone. A NULL image sends the note as plain text. */
+int agent_request_image(const Agent *a, const char *model, const AgentImage *image,
+                        char *out, size_t cap);
+/* Record the note for an image once every tool result of the round is in:
+ * chat-completions tool messages cannot carry pixels, so the image follows as
+ * a user message. Returns -1 for an unusable image, a round still in progress
+ * or a recording failure. An image the request cannot hold is not attached
+ * and a note says so (returns 0 with image_pending clear). */
+int agent_attach_image(Agent *a, const AgentImage *image);
 /* Independent, tool-free summary request works even when history is full.
  * Seed a fresh candidate only; caller publishes it after durable persistence. */
 int agent_handoff_request(const Agent *a, const char *model, char *out, size_t cap);

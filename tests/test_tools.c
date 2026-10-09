@@ -2,6 +2,7 @@
  * that journal barriers, short writes, corrupt reads and rename races cannot
  * silently overwrite an existing file or claim an uncertain create succeeded. */
 #include "tools.h"
+#include "view_image.h"
 #include "json.h"
 #include "build/project-template.h"
 /* One folder plus every embedded project file. */
@@ -817,6 +818,91 @@ static void inspect_checks(void)
     tools_execute(&call,result,sizeof(result));assert(strstr(result,"RANGE"));
     puts("PASS read-only inspection: Finder identity, process paging, font metrics, alias targets, resource maps and bounded reads");
 }
+/* view_image: gating on the model's vision flag, argument and file
+ * validation, bounded stepped reads that honor Stop, a deadline and
+ * change detection, and the single-image hand-off to the agent. */
+static void png_file(int index, long size, unsigned long width, unsigned long height)
+{
+    static const unsigned char signature[8]={0x89,'P','N','G',0x0d,0x0a,0x1a,0x0a};
+    long i; unsigned char *b=(unsigned char *)files[index].bytes;
+    assert(size<=(long)sizeof(files[index].bytes));
+    for(i=0;i<size;i++) b[i]=(unsigned char)(i*31+7);
+    memcpy(b,signature,8); b[8]=b[9]=b[10]=0; b[11]=13; memcpy(b+12,"IHDR",4);
+    b[16]=(unsigned char)(width>>24);b[17]=(unsigned char)(width>>16);b[18]=(unsigned char)(width>>8);b[19]=(unsigned char)width;
+    b[20]=(unsigned char)(height>>24);b[21]=(unsigned char)(height>>16);b[22]=(unsigned char)(height>>8);b[23]=(unsigned char)height;
+    memcpy(b+size-12,"\0\0\0\0IEND\xAE\x42\x60\x82",12);
+    files[index].size=size; files[index].info.fdType='PNGf';
+}
+static int view_begin(const char *arguments)
+{
+    AgentCall view; memset(&view,0,sizeof(view)); strcpy(view.id,"v1"); strcpy(view.name,"view_image");
+    snprintf(view.arguments,sizeof(view.arguments),"%s",arguments);
+    return view_image_begin(&view,result,sizeof(result),NULL,NULL,100);
+}
+static void view_checks(void)
+{
+    int i, steps;
+    const AgentImage *image;
+    const char *bad[]={"{}","{\"path\":\"s.png\",\"path\":\"s.png\"}","{\"path\":\"s.png\",\"more\":1}","{\"path\":7}","{\"path\":\"\"}","not json"};
+    reset(); i=add(10,"shot.png",0); png_file(i,20000,390,150);
+    view_image_reset();
+    /* Fail closed: no flag and a "no" flag read nothing and attach nothing. */
+    view_image_set_vision(AGENT_VISION_UNKNOWN);
+    assert(!view_begin("{\"path\":\"shot.png\"}") && strstr(result,"VISION_UNKNOWN") && !view_image_take() && !view_image_held());
+    view_image_set_vision(AGENT_VISION_NO);
+    assert(!view_begin("{\"path\":\"shot.png\"}") && strstr(result,"VISION_UNSUPPORTED") && !view_image_take() && !opens[i]);
+    view_image_set_vision(AGENT_VISION_YES);
+    for(steps=0;steps<(int)(sizeof(bad)/sizeof(*bad));steps++) assert(!view_begin(bad[steps]) && strstr(result,"ARGUMENTS") && !view_image_held());
+    /* A good PNG is read in two bounded steps and handed over exactly once. */
+    assert(view_begin("{\"path\":\"shot.png\"}")==2 && !view_image_take());
+    assert(view_image_step(result,sizeof(result),101,0)==2 && !view_image_take() && !opens[i]);
+    assert(view_image_step(result,sizeof(result),102,0)==0 && strlen(result)<AGENT_RESULT_CAP);
+    assert(strstr(result,"\"status\":\"ok\"") && strstr(result,"\"path\":\"shot.png\"") && strstr(result,"\"width\":390") &&
+           strstr(result,"\"height\":150") && strstr(result,"\"bytes\":20000") && !strstr(result,"base64") && !opens[i]);
+    image=view_image_take();
+    assert(image && image->length==20000 && image->width==390 && image->height==150 && !strcmp(image->path,"shot.png"));
+    assert(!memcmp(image->data,files[i].bytes,20000) && !view_image_take() && view_image_held()==image);
+    /* A second look in the same round is refused rather than clobbering the first. */
+    assert(view_begin("{\"path\":\"shot.png\"}")==2);
+    assert(view_image_step(result,sizeof(result),101,0)==2 && view_image_step(result,sizeof(result),102,0)==0);
+    assert(view_begin("{\"path\":\"shot.png\"}")==0 && strstr(result,"ONE_IMAGE_PER_ROUND") && view_image_held());
+    assert(view_image_take());
+    /* Unreadable inputs: nothing is held after any of them. */
+    assert(!view_begin("{\"path\":\"missing.png\"}") && strstr(result,"\"code\":\"FILE\"") && !view_image_held());
+    assert(!view_begin("{\"path\":\":shot.png\"}") && strstr(result,"\"code\":\"FILE\""));
+    add(10,"Folder",1); assert(!view_begin("{\"path\":\"Folder\"}") && strstr(result,"NOT_PNG"));
+    i=add(10,"alias.png",0); png_file(i,200,4,4); files[i].info.fdFlags=0x8000;
+    assert(!view_begin("{\"path\":\"alias.png\"}") && strstr(result,"NOT_PNG"));
+    i=add(10,"tiny.png",0); png_file(i,40,4,4);
+    assert(!view_begin("{\"path\":\"tiny.png\"}") && strstr(result,"NOT_PNG") && strstr(result,"too short"));
+    i=add(10,"text.png",0); png_file(i,100,4,4); files[i].bytes[1]='X';
+    assert(!view_begin("{\"path\":\"text.png\"}") && strstr(result,"NOT_PNG") && strstr(result,"signature"));
+    i=add(10,"zero.png",0); png_file(i,100,0,4);
+    assert(!view_begin("{\"path\":\"zero.png\"}") && strstr(result,"NOT_PNG") && strstr(result,"dimensions"));
+    i=add(10,"huge.png",0); png_file(i,100,8193,4);
+    assert(!view_begin("{\"path\":\"huge.png\"}") && strstr(result,"NOT_PNG") && strstr(result,"dimensions"));
+    i=add(10,"wide.png",0); png_file(i,100,8192,8192);
+    assert(view_begin("{\"path\":\"wide.png\"}")==2 && view_image_step(result,sizeof(result),100,1)==0 && strstr(result,"STOPPED"));
+    /* Size: one byte over the cap is refused before any read; the cap itself is
+     * accepted, and Stop abandons it without attaching. */
+    i=add(10,"big.png",0); png_file(i,100,4,4); files[i].size=AGENT_IMAGE_CAP+1;
+    assert(!view_begin("{\"path\":\"big.png\"}") && strstr(result,"TOO_LARGE") && strstr(result,"exceeds 131072 bytes") && !view_image_held());
+    files[i].size=AGENT_IMAGE_CAP;
+    assert(view_begin("{\"path\":\"big.png\"}")==2 && view_image_held() && view_image_held()->length==(size_t)AGENT_IMAGE_CAP);
+    assert(view_image_step(result,sizeof(result),101,1)==0 && strstr(result,"STOPPED") && !view_image_held() && !view_image_take());
+    assert(view_image_step(result,sizeof(result),102,0)==0 && strstr(result,"NO_ACTIVE_VIEW"));
+    /* Deadline, mid-read change and an unfinished PNG all abandon the image. */
+    i=leaf("shot.png");
+    assert(view_begin("{\"path\":\"shot.png\"}")==2);
+    assert(view_image_step(result,sizeof(result),100+60*60,0)==0 && strstr(result,"TIMEOUT") && !view_image_held());
+    assert(view_begin("{\"path\":\"shot.png\"}")==2 && view_image_step(result,sizeof(result),101,0)==2);
+    files[i].mddat++;
+    assert(view_image_step(result,sizeof(result),102,0)==0 && strstr(result,"CHANGED") && !view_image_take() && !view_image_held());
+    files[i].mddat--; files[i].bytes[19999]^=1;
+    assert(view_begin("{\"path\":\"shot.png\"}")==2 && view_image_step(result,sizeof(result),101,0)==2);
+    assert(view_image_step(result,sizeof(result),102,0)==0 && strstr(result,"NOT_PNG") && strstr(result,"IEND") && !view_image_take());
+    puts("PASS view_image: vision gating, argument and file checks, bounded stepped reads, Stop, deadline, change detection and single hand-off");
+}
 int main(void)
 {
     project_checks();
@@ -871,5 +957,6 @@ int main(void)
     puts("PASS native executor: create/read/collision, encoding, bounds, journal barriers, I/O faults, rename races and uncertain outcomes");
     edit_checks();
     inspect_checks();
+    view_checks();
     return 0;
 }

@@ -120,7 +120,7 @@ static void environment(char *out, size_t cap)
     snprintf(out, cap, "{\"status\":\"ok\",\"os\":\"classic Mac OS\",\"system_version_hex\":\"%04lx\","
         "\"architecture\":\"PowerPC\",\"workspace\":%s,\"paths\":\"relative colon-separated\","
         "\"encoding\":\"MacRoman data fork to UTF-8\",\"read_only\":false,\"free_heap_bytes\":%ld,"
-        "\"tools\":[\"get_environment\",\"list_files\",\"read_text\",\"search_text\",\"write_text\",\"edit_text\",\"create_folder\",\"create_project\",\"build_project\",\"read_build_log\",\"run_application\",\"quit_application\",\"get_file_info\",\"resolve_alias\",\"list_processes\",\"list_fonts\",\"measure_text\",\"list_resources\",\"read_resource\"],"
+        "\"tools\":[\"get_environment\",\"list_files\",\"read_text\",\"search_text\",\"write_text\",\"edit_text\",\"create_folder\",\"create_project\",\"build_project\",\"read_build_log\",\"run_application\",\"quit_application\",\"get_file_info\",\"resolve_alias\",\"list_processes\",\"list_fonts\",\"measure_text\",\"list_resources\",\"read_resource\",\"view_image\"],"
         "\"write_policy\":\"create_only_existing_parent\",\"folder_policy\":\"create_only_existing_parent\",\"write_max_bytes\":4096,"
         "\"edit_policy\":\"unique_exact_whole_revision_CR_backup\",\"edit_max_bytes\":4096,"
         "\"build_supported\":true,\"launch_supported\":true}", system, q, (long)FreeMem());

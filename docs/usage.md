@@ -122,7 +122,8 @@ raw HTTP response, 40 KiB of reply text, and 6,000 output tokens per model reque
 in `agent.h`; the handoff request has its own `AGENT_HANDOFF_MAX_TOKENS`). Reasoning
 tokens count against that budget. The [limits reference](limits.md) explains how
 these bounds relate. Each HTTPS request has a 120-second
-deadline. Tool output is below 1,536 bytes; folder listings have cursors and
+deadline. A PNG attached with `view_image` is limited to 128 KiB and rides in one
+request on top of the history. Tool output is below 1,536 bytes; folder listings have cursors and
 text reads provide `next_byte` continuation when a line is partial. Reads scan
 at most 8 KiB per invocation. Whole-file revisions guard small-file edits;
 larger-file scan revisions are observational.
@@ -148,7 +149,10 @@ the run counters while retaining conversation history; handoff is not required.
 Before execution, complete assistant responses and tool-start records are
 saved to unique UTF-8 JSON-lines files in `Retro68:Sherclawk Sessions:`.
 Results and user messages are saved there too. These files contain conversation
-and file contents; lifecycle logs omit them and credentials. Rejected model
+and file contents; lifecycle logs omit them and credentials. When the model
+looks at a workspace PNG with `view_image`, the image is sent to the provider
+with that one request. The journal records only a note naming the file, never
+the pixels, and the file itself stays in the workspace. Rejected model
 responses never enter the conversation: a `model_error` journal record keeps
 their HTTP status, received body size and reason, and every stopped run appends
 its reason to the lifecycle log so failures stay diagnosable after relaunch.
