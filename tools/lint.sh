@@ -35,6 +35,13 @@ if command -v cppcheck >/dev/null 2>&1; then
         tests/test_jobs.c tests/test_build_project.c tests/test_selfbuild.c \
         tests/test_session.c \
         || status=1
+    # The starter compiles against its own Toolbox model, not tests/toolbox.
+    cppcheck --enable=warning,performance,portability --error-exitcode=1 \
+        --inline-suppr --std=c99 --suppress=missingIncludeSystem \
+        -I tests/template -I templates/ppc-toolbox \
+        templates/ppc-toolbox/io.c templates/ppc-toolbox/png.c \
+        templates/ppc-toolbox/selfrender.c tests/template/test_template.c \
+        || status=1
 else
     echo "skip: cppcheck not installed" >&2
 fi

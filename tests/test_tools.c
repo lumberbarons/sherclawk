@@ -4,6 +4,9 @@
 #include "tools.h"
 #include "json.h"
 #include "build/project-template.h"
+/* One folder plus every embedded project file. */
+#define PROJECT_FILES ((int)(sizeof(project_inputs)/sizeof(project_inputs[0])))
+#define PROJECT_CREATES (1+PROJECT_FILES)
 #include <Files.h>
 #include <Resources.h>
 #include <Aliases.h>
@@ -344,7 +347,7 @@ static int journal(void *ctx, const char *event, const char *json)
     journals++; assert(strstr(json,"\"call_id\":\"write1\""));
     if(!strcmp(call.name,"create_project")) {
         assert(journals==1 ? !strcmp(event,"mutation_intent") && !creates :
-               journals==2 ? !strcmp(event,"mutation_staged") && creates==4 && !published :
+               journals==2 ? !strcmp(event,"mutation_staged") && creates==PROJECT_CREATES && !published :
                journals==3 && !strcmp(event,"mutation_committed") && published);
         return fail_journal==journals ? -1 : 0;
     }
@@ -540,16 +543,16 @@ static void project_checks(void)
 {
     int i, j, parent;
     reset();strcpy(call.name,"create_project");strcpy(call.arguments,"{\"path\":\"Project\"}");
-    assert(!run() && strstr(result,"CREATED_PROJECT") && journals==3 && creates==4);
+    assert(!run() && strstr(result,"CREATED_PROJECT") && journals==3 && creates==PROJECT_CREATES);
     parent=leaf("Project");assert(parent>=0 && files[parent].dir);
-    for(i=0;i<3;i++) {
+    for(i=0;i<PROJECT_FILES;i++) {
         unsigned char name[32];name[0]=(unsigned char)strlen(project_inputs[i].name);
         memcpy(name+1,project_inputs[i].name,name[0]);j=find(files[parent].id,name);
         assert(j>=0 && files[j].info.fdType=='TEXT' && files[j].info.fdCreator=='ttxt' && !files[j].resource);
         assert(files[j].size==(long)strlen(project_inputs[i].bytes) && !memcmp(files[j].bytes,project_inputs[i].bytes,(size_t)files[j].size));
         assert(!memchr(files[j].bytes,10,(size_t)files[j].size));
     }
-    assert(!run() && strstr(result,"EXISTS") && creates==4 && journals==3);
+    assert(!run() && strstr(result,"EXISTS") && creates==PROJECT_CREATES && journals==3);
     { const char *bad[]={"{}","{\"path\":\"Project\",\"template\":\"other\"}","{\"path\":\"a\",\"path\":\"b\"}",
         "{\"path\":\"missing:Project\"}","{\"path\":\":escape\"}","{\"path\":\"Project:\"}","{\"path\":\"\"}"};
       for(i=0;i<7;i++){reset();strcpy(call.name,"create_project");strcpy(call.arguments,bad[i]);assert(!run() && strstr(result,"error") && !creates && !journals);} }
@@ -557,7 +560,7 @@ static void project_checks(void)
     for(i=1;i<=3;i++) {
         reset();strcpy(call.name,"create_project");strcpy(call.arguments,"{\"path\":\"Project\"}");fail_journal=i;
         assert(run());assert(i==3 ? leaf("Project")>=0 && strstr(result,"uncertain") : leaf("Project")<0);
-        assert(i==1 ? !creates : creates==4);
+        assert(i==1 ? !creates : creates==PROJECT_CREATES);
     }
     for(i=0;i<3;i++) {
         reset();strcpy(call.name,"create_project");strcpy(call.arguments,"{\"path\":\"Project\"}");

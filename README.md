@@ -187,8 +187,9 @@ trailing colon returned by `list_files`, and any valid `project.json`, including
 `create_project(path)` creates a new `ppc-toolbox-v1` project in an existing
 workspace parent. Only `path` is accepted, with relative colon syntax and no
 trailing colon. Existing destinations, missing parents and aliases are refused.
-It publishes `main.c`, `app.r` and a protocol-2 `project.json` as MacRoman/CR
-Finder `TEXT`/`ttxt` data forks. The default output is `template`; edit the
+It publishes the starter's C sources, `app.r`, the shared `tmpl.h` and a
+protocol-2 `project.json` as MacRoman/CR Finder `TEXT`/`ttxt` data forks. The
+default output is `template`; edit the
 descriptor to add sources or change the output. The folder name does not change
 the window title. Projects contain no shell recipes.
 
@@ -202,6 +203,19 @@ the artifact folder from the build result; it is separate from build stdout/
 stderr. Save it before relaunching, which resets it. See the
 [template guide](templates/ppc-toolbox/README.md#runtime-diagnosis) for limits
 and guest interaction checks. Existing projects retain their original sources.
+
+The starter also renders its own scene offscreen, so a generated app can show
+what it draws while it is fully covered by Sherclawk. After its first window
+update it writes `frame1.png` (8-bit PNG of the content region) and then a
+`frame.ready` marker beside the executable; creating a `frame.req` file there
+asks for another frame, optionally with `overlay` (hit regions), `selftest`
+(in-app hit-test and edit checks, result drawn into the image) and `frames=N`
+(a short sequence). `frame.ready` is deleted when a request starts and
+rewritten last, with `status=ok` and the dimensions, or `status=error` and a
+code, so its presence is a deterministic completion signal. Compile-gating,
+the protocol and its guest-verification status are in the
+[template guide](templates/ppc-toolbox/README.md#self-render). Attaching the
+image to a model request is the separate image-transport work in #80.
 
 ### Native project builds
 
@@ -233,7 +247,7 @@ Optional `template` is provenance only. Protocol-1 descriptors are refused:
 replace their combined sources list with separate C sources/Rez resources, add
 `toolchain` and `output`, and set `protocol` to 2 through ordinary guarded edits.
 
-Up to five total declared C/Rez/header files and a 4 KiB descriptor are supported;
+Declared C/Rez/header files are capped at `BUILD_INPUTS` (`build_plan.h`), with a 4 KiB descriptor;
 each input is at most 4 KiB, plain Finder `TEXT`, MacRoman/CR, without resource
 forks or aliases. Declare all project-owned headers. Relative paths use colon
 separators and lowercase ASCII letters, digits, underscore, dash and dot;

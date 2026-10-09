@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include "agent.h"
 #define JOB_PAGE 1024
-#define JOB_INPUT_MAX 8
+#define JOB_INPUT_MAX 13
 #define JOB_FILE_MAX 65536
 #define JOB_TOTAL_MAX 131072
 #define JOB_RECORD_MAX 256

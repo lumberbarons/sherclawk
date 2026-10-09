@@ -130,6 +130,12 @@ int main(void)
     assert(!build_project_recipe(good,recipe,sizeof(recipe)));
     assert(strstr(recipe,"MrC") && strstr(recipe,"PPCLink -o sample") && !strstr(recipe,"-- Rez"));
     assert(build_project_recipe("{\"protocol\":1}",recipe,sizeof(recipe)));
+    for(i=0;i<PROJECT_FILES;i++) if(!strcmp(project_inputs[i].name,"project.json")) {
+        /* The embedded starter's own descriptor must stay valid and complete. */
+        assert(!build_project_recipe(project_inputs[i].bytes,recipe,sizeof(recipe)));
+        assert(strstr(recipe,"selfrender.c") && strstr(recipe,"obj4.o") && strstr(recipe,"app.r") &&
+               strstr(recipe,"'tmpl.h'") && strstr(recipe,"'\":\"'"));
+    }
     const char *bad[]={"main.c;echo","..:main.c",":main.c","src::main.c","src/main.c","main.C","Main.c"};
     for(i=0;i<7;i++) {
         char s[512];snprintf(s,sizeof(s),"{\"protocol\":2,\"toolchain\":\"mpw-ppc-v2\",\"sources\":[\"%s\"],\"output\":\"sample\"}",bad[i]);assert(build_project_recipe(s,recipe,sizeof(recipe)));

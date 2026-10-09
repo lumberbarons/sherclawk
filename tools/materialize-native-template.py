@@ -13,9 +13,10 @@ parser.add_argument("destination", type=Path)
 args = parser.parse_args()
 source = Path(__file__).resolve().parents[1] / "templates" / "ppc-toolbox"
 files = {}
-for name in ("main.c", "app.r", "build-native.sh", "capture-toolchain.sh"):
+for name in ("main.c", "scene.c", "io.c", "png.c", "selfrender.c", "tmpl.h", "app.r",
+             "build-native.sh", "capture-toolchain.sh"):
     value = (source / name).read_text(encoding="utf-8")
-    if name.endswith((".c", ".r")):
+    if name.endswith((".c", ".h", ".r")):
         value = value.replace("\n", "\r")
     files[name] = value.encode("mac_roman")
 args.destination.mkdir(parents=True, exist_ok=False)
