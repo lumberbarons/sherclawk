@@ -102,29 +102,22 @@ fresh build working directory. Standard SDK includes are supplied by the adapter
 Sherclawk creates the queue itself before its first publication: it resolves
 the workspace root as a non-alias folder, creates `Worker01` then `buildjobs`
 one level at a time (journaled intent and verification, refusing a file or
-alias in either name) and only then publishes. Sherclawk acquires the existing
-`worker-lock` and executes its current snapshot itself when unowned. ToolServer
-and its installed SDK are still required; MacRelix is unnecessary for this
-path. General queue service is not implemented. The host step below is only
-needed when an external worker should serve the queue before the app has
-created it:
+alias in either name) and only then publishes. Sherclawk acquires `worker-lock`
+(the name is kept for existing queues) and executes the snapshot itself through
+MPW ToolServer and its installed SDK; nothing else needs to run in the guest.
+Queue paths, record formats and lock names are unchanged, so earlier queues,
+claimed jobs and artifacts stay readable and are never deleted or replayed.
+General queue service is not implemented.
 
-```bash
-ssh "$SHARE_HOST" 'sudo -n install -d -o macos9 -g macos9 -m 775 /srv/retro68/Worker01/buildjobs'
-```
-
-For the existing fallback, start the worker before publishing builds. Publish
-`worker/worker.pl` under a fresh filename first (see
-[worker/README.md](../worker/README.md)):
-
-```sh
-perl -w /Volumes/Retro68/Worker01/<published-worker-name>.pl /Volumes/Retro68/Worker01/buildjobs
-```
-
-An external lock makes Sherclawk poll without claiming or executing. Locks are
-not liveness evidence and are never stolen automatically. Quit the external
-worker normally before switching executors; inspect orphaned claims and locks
-before manual recovery. An idle background MacRelix worker may require activation.
+A build that cannot start says why instead of waiting, and never leaves an
+uncertain job: `NATIVE_EXECUTOR_UNAVAILABLE` (the ToolServer channel could not
+be set up at launch, or ToolServer could not be found or launched, so nothing
+ran), `NATIVE_EXECUTOR_BUSY` (an earlier ToolServer command is still draining)
+or `NATIVE_QUEUE_BLOCKED` (a `worker-lock` or `STOP` marker is present or the
+queue is unusable). Locks and markers are not liveness evidence and are never
+removed or stolen automatically; inspect orphaned claims and locks before
+manual recovery. Only a failure after the lock is taken is `uncertain`, and an
+uncertain build is never replayed.
 
 `build_project` reads/compares closed input pages before reserving a fresh build
 ID. Its snapshot retains the descriptor, generated trusted recipe and manifest
@@ -135,7 +128,7 @@ uncertain result stops the agent run. Keep the queue/journals for inspection.
 Revision hashes are observational FNV tokens, not cryptographic attestations;
 external server writes are outside File Manager locking guarantees.
 
-Success requires a matching worker success, the exact artifact marker and a
+Success requires a matching native success record, the exact artifact marker and a
 non-alias `APPL` with data and resource forks. Failed/uncertain builds return no
 artifact. Later source edits do not change older snapshots. Initial compiler
 diagnostics are bounded; `read_build_log(build_id, stream, start_byte)` reads
@@ -145,7 +138,7 @@ raw logs remain on disk. Successful builds persist a private Finder `ShAR`/`ShCk
 snapshot folder after recording the successful build. This versioned native
 binary record seals the output name, file identity, modification date, creator,
 sizes and FNV hashes of both forks. Old builds without this record require a
-fresh build; IDs or artifact paths alone cannot authorize execution. The worker
+fresh build; IDs or artifact paths alone cannot authorize execution. The build
 queue and its snapshots are read-only to model-facing source mutation tools.
 
 ## Native executor
@@ -155,25 +148,54 @@ ownership once. `selfbuild.c` renames `ready` to `claimed`, retains the unchange
 `started` record plus `native-executor`, and compares every staged input against
 the published representation in 1 KiB pages. It revalidates `project.json`, copies
 only declared inputs into a fresh `build:native` tree as TEXT/ttxt, and uses the
-same `BuildPlan` command generator as the fallback shell recipe. No extra job
+same `BuildPlan` command generator that produced the snapshot's recorded recipe. No extra job
 input or model-supplied shell command is introduced.
 
 MrC/PPCLink/Rez run one at a time through queued Apple events. Replies retain raw
 statuses in stdout; MPW status 2 maps to failure 1 and -1 to 127. Other statuses
 outside 0–255, malformed/oversized/binary text replies, disappearance, send errors,
 Stop and deadlines produce uncertainty, with no subsequent command or replay.
+The one exception is a first command that never left the app because ToolServer
+could not be found or launched: nothing ran, so the claim ends in a `rejected`
+result, the lock is released and the error is `NATIVE_EXECUTOR_UNAVAILABLE`.
 Logs are appended/read back in bounded pages. Success requires the PowerPC PEF
 header, both forks, Finder APPL metadata, a verified success marker, and the
 existing persisted artifact authorization. `read_build_log` and `run_application`
 retain their envelopes and authority checks.
 
 The executor outlives the observing chat run. An abandoned in-flight request
-holds the worker lock until its late reply drains or ToolServer disappears.
+holds the `worker-lock` until its late reply drains or ToolServer disappears.
 `native-unknown` and the claim stay as evidence without a terminal result;
 `native-drained` records an abandoned late reply. Quitting
 Sherclawk with an outstanding command leaves the lock for manual inspection.
 The app never scans or replays old jobs. Automatic queue creation is implemented. Queue preferences, status UI and a
 Serve Build Queue toggle remain future work.
+
+### ToolServer protocol
+
+The client in `toolserver.c` speaks the same Apple-event protocol as the
+upstream `tlsrvr` tool.
+
+- **Discovery.** Find a running process with signature `'MPSX'`; otherwise find
+  the ToolServer `APPL` through the mounted volumes' desktop databases and call
+  `LaunchApplication`.
+- **Request.** One `kAEMiscStandards`/`kAEDoScript` event per MPW command,
+  with the script as a `typeChar` direct object in MacRoman/CR text:
+  `Set Exit 0`, `Directory "<cwd>"`, `<command> < Dev:Null`,
+  `Set CommandStatus {Status}`, `Directory "{MPW}"`, `Exit {CommandStatus}`.
+- **Send.** Asynchronously with `kAEQueueReply | kAENeverInteract`. `tlsrvr`
+  itself blocks with `kAEWaitReply`, which would freeze the UI for the length of
+  every compile. `kAENeverInteract` is the API flag; foreground switching is a
+  separate concern and was verified in the guest, not assumed.
+- **Reply.** `'stat'` (`typeSInt32`) is the MPW status, the direct object holds
+  stdout and `'diag'` holds diagnostics, each as bounded `typeChar` text.
+  Replies are matched on return ID and sender PSN; anything unverifiable,
+  malformed or oversized is uncertain.
+- **Status mapping.** `-1` becomes 127 and `2` becomes 1; other values in
+  0–255 pass through; everything else is uncertain. Upstream also maps a
+  user-cancel reply (Command-period) to 128 and quits and retries once on an
+  out-of-memory error. Sherclawk does neither: cancellation is not claimed, and
+  an uncertain outcome is never replayed.
 
 ## Running applications
 
@@ -202,3 +224,20 @@ intent and session records first. Fork fingerprints are observational, not
 cryptographic; AFP-server writes and a change between final verification and
 launch remain outside File Manager guarantees. Native records are local to this
 version/architecture; AFP FlushVol is not a power-loss durability guarantee.
+
+## Owned process lifetime
+
+A successful launch now reports whether graceful Quit is supported. Only a new
+process absent from the complete prelaunch snapshot, matched to the verified
+artifact and launched by Sherclawk, can be owned. Authority is granted after
+`run_observed` is journaled and lives in memory across New Chat. An already
+running app gets no new handle; `original_run_id` identifies an existing owned
+handle when available. Tracking errors or capacity exhaustion do not block
+launches but return `quit_supported:false`. Journals and launch authorization
+records do not restore process ownership after restarting Sherclawk.
+
+`quit_application(run_id)` requests noninteractive normal Quit and
+observes process exit asynchronously for 30 seconds. It never force quits,
+discards changes, retries a send, or cleans up apps automatically. Stop after
+submission cannot cancel Quit. See the [implementation spec](quit-application.md)
+and [tool contract](tools.md#quit-an-owned-application).

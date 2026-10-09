@@ -42,7 +42,7 @@ int jobs_begin(NativeJob *, const FSSpec *queue, const char *id,
 /* <=1 KiB input write/read or <=256-byte record + two <=1 KiB log pages.
  * Poll at most once per 60 ticks. Pages are raw bytes, not C strings; caller
  * consumes each before the next step. Stop abandons unpublished jobs and
- * marks published jobs unknown; it never cancels the worker or writes STOP. */
+ * marks published jobs unknown; it never cancels the executor or writes STOP. */
 void jobs_step(NativeJob *, uint32_t now, int stop);
 /* Read-only log continuation, including after a terminal result. */
 int jobs_logs(NativeJob *);

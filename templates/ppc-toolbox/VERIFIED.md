@@ -87,8 +87,8 @@ Mac OS 9 behavior:
   protocol, frame spacing, clamping, stale-marker removal and error reporting
   are asserted. The same bytes also decompress with Python's `zlib`.
 - `./build.sh SherclawkTemplate_APPL` compiles and links all five sources with
-  `-Wall -Wextra` and no warnings; `tools/native-build-check.c` and
-  `build-native.sh` were updated for the same sources but not run.
+  `-Wall -Wextra` and no warnings; `tools/native-build-check.c` was
+  updated for the same sources but not run.
 
 Linked starter size from `powerpc-apple-macos-size` (Retro68, not MrC): text
 73,728 + data 1,536 + bss 1,152 bytes. The heap cost of a frame is
@@ -98,7 +98,7 @@ PNG row, computed, not measured.
 Still to run on OS 9.2.2, then record here with the build ID and the log:
 
 1. The five sources compile under MrC with `-i ":"`, in the `build_project`
-   path and in the fixed `build-native.sh`/`native-build-check` recipes, and
+   path and in the fixed `native-build-check` recipe, and
    `SIZE` reads 2 MiB / 1.5 MiB.
 2. Launch through `run_application` (`launchDontSwitch`), leave Sherclawk in
    front, and read `frame.ready`: `status=ok`. Confirm `frame1.png` shows the

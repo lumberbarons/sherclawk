@@ -5,7 +5,12 @@
 #include <ControlDefinitions.h>
 #include <Menus.h>
 #include <Events.h>
+#include <AppleEvents.h>
+#include <AERegistry.h>
 QDGlobals qd;
+static int done;
+static pascal OSErr event(const AppleEvent *e, AppleEvent *r, long quitting)
+{ (void)e; (void)r; if (quitting) done = 1; return noErr; }
 int main(void)
 {
 	WindowPtr hit;
@@ -14,10 +19,17 @@ int main(void)
 	Point local;
 	short part;
 	char key;
-	int done = 0, active = 1, first = 1, ok;
+	int active = 1, first = 1, ok;
+	AEEventHandlerUPP upp = NULL;
 	InitGraf(&qd.thePort); InitFonts(); InitWindows(); InitMenus();
 	TEInit(); InitCursor();
 	ok = log_start(); log_line("startup", 0);
+	upp = NewAEEventHandlerUPP(event);
+	if (!upp ||
+	    AEInstallEventHandler(kCoreEventClass, kAEOpenApplication, upp, 0, 0) ||
+	    AEInstallEventHandler(kCoreEventClass, kAEQuitApplication, upp, 1, 0)) {
+		log_line("AE init", -1); goto finish;
+	}
 	SetRect(&r, 80, 60, 470, 210);
 	w = NewWindow(0L, &r, P("\pTemplate"), 1,
 			   documentProc, (WindowPtr)-1L, 1, 0L);
@@ -38,6 +50,8 @@ int main(void)
 	while (!done) {
 		SetPort(w);
 		if (WaitNextEvent(everyEvent, &ev, 6L, 0L)) switch (ev.what) {
+		case kHighLevelEvent:
+			AEProcessAppleEvent(&ev); break;
 		case updateEvt:
 			if ((WindowPtr)ev.message != w) break;
 			BeginUpdate(w); draw_scene((GrafPtr)w, 0); EndUpdate(w);
@@ -84,6 +98,11 @@ int main(void)
 	TEDeactivate(edit); TEDispose(edit); DisposeWindow(w);
 	log_line("quit", 0);
 finish:
+	if (upp) {
+		AERemoveEventHandler(kCoreEventClass, kAEQuitApplication, upp, 0);
+		AERemoveEventHandler(kCoreEventClass, kAEOpenApplication, upp, 0);
+		DisposeAEEventHandlerUPP(upp);
+	}
 	log_stop();
 	return done ? 0 : 1;
 }

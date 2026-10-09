@@ -1,7 +1,8 @@
 /* Increment 2: fixed structured native build, independent of queue/chat state.
  * Sources come from the real starter, never a supplied shell script. Each
  * attempt keeps a fresh folder; unknown outcomes never advance or replay.
- * This acceptance fixture requires MacRelix absent and an idle ToolServer.
+ * This acceptance fixture requires an idle ToolServer and logs every running
+ * process as evidence of the executor environment.
  */
 #include "config.h"
 #include "toolserver.h"
@@ -86,12 +87,12 @@ static int write_file(const char *name,const char *bytes)
         info.hFileInfo.ioFlFndrInfo.fdCreator!='ttxt' || info.hFileInfo.ioFlRLgLen)return -1;
     record("input=%s bytes=%ld exact=1 TEXT/ttxt resource=0",name,n); return 0;
 }
-/* Process-name and application-leaf scan is evidence for this known fixture
- * installation, not a universal MacRelix detector or queue ownership lock. */
-static int macrelix_absent(void)
+/* Process listing is evidence for this fixture installation, not a queue
+ * ownership lock. Returns 1 when the whole list was read. */
+static int scan_processes(void)
 {
     ProcessSerialNumber psn={0,kNoProcess}; ProcessInfoRec info;
-    FSSpec spec; Str255 name; OSErr e; int absent=1;
+    FSSpec spec; Str255 name; OSErr e;
     while((e=GetNextProcess(&psn))==noErr) {
         memset(&info,0,sizeof(info)); info.processInfoLength=sizeof(info);
         info.processName=name; info.processAppSpec=&spec;
@@ -99,11 +100,8 @@ static int macrelix_absent(void)
         record("process=%lu:%lu signature=%08lx name=%.*s app=%.*s",
             (unsigned long)psn.highLongOfPSN,(unsigned long)psn.lowLongOfPSN,
             (unsigned long)info.processSignature,name[0],name+1,spec.name[0],spec.name+1);
-        if((name[0]==8 && !memcmp(name+1,"MacRelix",8)) ||
-            (spec.name[0]==8 && !memcmp(spec.name+1,"MacRelix",8)))absent=0;
     }
-    if(e!=procNotFound)return 0;
-    record("MacRelix absent=%d",absent); return absent;
+    return e==procNotFound;
 }
 static int fail(const char *reason,int unknown)
 {
@@ -119,7 +117,7 @@ static int send_step(uint32_t now)
 {
     OSErr e;
     if(stop)return fail("Stop between commands",0);
-    if(!macrelix_absent())return fail("MacRelix running or process scan failed",0);
+    if(!scan_processes())return fail("process scan failed",0);
     record("stage=%s started",steps[stage].stage);
     message(steps[stage].stage);
     e=toolserver_send(fixture,steps[stage].command,now);
@@ -169,7 +167,7 @@ static int verify_and_launch(void)
     if(stop)return fail("Stop before success/launch",0);
     if(write_file("success.txt","artifact=Template\n"))return fail("success record persistence",1);
     record("stage=complete status=0");
-    if(!macrelix_absent())return fail("MacRelix present before launch",0);
+    if(!scan_processes())return fail("process scan failed before launch",0);
     record("launch intent artifact=%sTemplate",fixture);
     memset(&launch,0,sizeof(launch)); launch.launchBlockID=extendedBlock;
     launch.launchEPBLength=extendedBlockLen;

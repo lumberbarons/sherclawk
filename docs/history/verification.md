@@ -101,7 +101,7 @@ and stdout/stderr continuation through the MacRelix worker. Command-period
 recorded an unknown outcome without changing the published job; a later explicit
 worker scan completed that original queued job. ASan/UBSan File Manager fault
 checks and the existing Python worker checks passed. Detailed evidence and
-limits are in [worker/VERIFIED.md](../../worker/VERIFIED.md). Model-facing build/run
+limits are in [macrelix-worker-verified.md](macrelix-worker-verified.md). Model-facing build/run
 tools, source revision binding and artifact authorization were planned at this
 point and have since been implemented.
 
@@ -138,7 +138,7 @@ snapshot paths in OS 9: the independent window displayed text from its second C
 file, and the starter displayed the native template window. This is visual
 launch evidence; automated run IDs/runtime observations were planned then and are covered by
 the native launch entry below. Retained
-build IDs and compiler results are recorded in [worker/VERIFIED.md](../../worker/VERIFIED.md).
+build IDs and compiler results are recorded in [macrelix-worker-verified.md](macrelix-worker-verified.md).
 The initial independent fixture exposed a missing `QDGlobals` definition; the
 linker failure was reported correctly and retained. Host checks include malformed
 descriptors, duplicate/unsupported settings, path metacharacters, source changes,
@@ -164,7 +164,7 @@ run IDs and native process observations. The main app's live
 `openai/gpt-6-luna` loop also launched a retained authorized build from a fresh
 session and received a final response, verifying persisted authority across app
 lifetimes. These are process observations, not functional smoke-test results.
-IDs and retained evidence are in [worker/VERIFIED.md](../../worker/VERIFIED.md).
+IDs and retained evidence are in [macrelix-worker-verified.md](macrelix-worker-verified.md).
 
 
 ToolServer spike verification, October 6, 2026: the standalone PowerPC diagnostic
@@ -178,7 +178,7 @@ switching focus. A background run received its reply, but had a maximum event-lo
 gap of 303 ticks (about five seconds). Abrupt process death and reply delivery
 during window dragging remain untested. This is ToolServer-channel evidence,
 not acceptance of a native queue executor or full C build. Detailed IDs, retained
-fixtures and limitations are in [idea 005](../archive/idea-005-sherclawk-queue-mode.md);
+fixtures and limitations are in [native executor evidence](native-executor-evidence.md#increment-1-guest-evidence--october-6-2026);
 raw evidence is under ignored `build/toolserver-check-verified.log` and
 `build/toolserver-final.png` / `build/toolserver-background.png`.
 
@@ -192,7 +192,7 @@ or launch. Stop during linking retained an unknown outcome and drained a late
 reply without Rez or launch. The reusable ToolServer client and fixed diagnostic
 are separate from the queue and model tools. Retained fixture IDs, repeat-byte
 comparison limits and ignored raw evidence are in
-[idea 005](../archive/idea-005-sherclawk-queue-mode.md#increment-2-guest-evidence--october-6-2026).
+[native executor evidence](native-executor-evidence.md#increment-2-guest-evidence--october-6-2026).
 
 Integrated self-build verification, October 6, 2026: `SherclawkSelfBuildCheck`
 reported `RESULT failures=0` in OS 9.2.2 with MacRelix absent before each build.
@@ -202,7 +202,7 @@ successful launches, two correctly refused failed builds. Resource checks read
 `cfrg`/0 and `SIZE`/-1 for every successful artifact. The independent window showed
 both the original text and the edited “Fresh revision compiled natively” text.
 The detailed build IDs and retained evidence are in
-[idea 005](../archive/idea-005-sherclawk-queue-mode.md#increment-3-guest-evidence--october-6-2026).
+[native executor evidence](native-executor-evidence.md#increment-3-guest-evidence--october-6-2026).
 Host ASan/UBSan checks and all seven Python worker compatibility tests pass.
 
 The integrated Stop fixture also reported `RESULT failures=0`: first MrC command
@@ -257,3 +257,26 @@ for the not-yet-existing preferences file (first run and first save), and
 tracks the toggle itself (`SetControlValue` followed by `Draw1Control`). The
 saved key was present in the file and used by the runs, but not yet
 distinguished from the identical compiled key in a no-compiled-key build.
+
+Owned application Quit verification, October 9, 2026: `SherclawkQuitCheck`
+reported `RESULT failures=0 project=BuildCheck000d104ds` in the running OS 9.2.2
+UTM guest. The independent, responsive app accepted one noninteractive Quit
+but kept running: `run-000d16c3-0001` (PSN `0:47185922`, build
+`build-000d12df-0002`) returned `uncertain/QUIT_TIMEOUT`. A subsequent launch
+returned `quit_supported:false`, `PROCESS_PREEXISTED`, new run
+`run-000d1fbd-0002` and the original handle; Quit with the new run returned
+`error/RUN_NOT_OWNED`. `SherclawkQuitIgnore.log` contained exactly one
+`Quit received` line, confirming the pre-existing launch caused no additional
+event. The generated starter from `build-000d2205-0004`, run
+`run-000d25f8-0003`, returned `ok/QUIT_OBSERVED` through its ordinary cleanup
+handler. The diagnostic pumped high-level events and updates while observing;
+the guest continued processing input and advancing the diagnostic.
+
+The first guest attempt safely withheld authority because the initial protected
+process check rejected the default `ShCk` creator used by generated artifacts.
+It sent no Quit. The correction protects Sherclawk by its exact current PSN,
+while preserving artifact, launch-date, launcher, Finder and system exclusions.
+Main app, template and Quit diagnostic Docker builds passed; clang ASan/UBSan
+host suites and Linux GCC 13 ASan/UBSan suites passed. The successful guest
+logs are retained locally under ignored `build/quit-check-verified.log` and
+`build/quit-ignore-verified.log`. The schema/discovery gate is now open.

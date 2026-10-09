@@ -17,7 +17,7 @@ Process Manager APIs, with a cooperative event loop and Stop controls.
 - Workspace catalog and text reads, literal search, create-only writes and
   folders, revision-guarded edits, and read-only platform inspection.
 - Optional starter projects or independently assembled project descriptors,
-  native ToolServer builds, a MacRelix worker fallback, and guarded app launch.
+  native MPW ToolServer builds, and guarded app launch.
 - Preferences for the model, API key, workspace and per-run limits.
 
 This is experimental software with explicit bounds: source writes and edits
@@ -89,7 +89,6 @@ Host checks need no Docker, guest or API key; transport checks require Certainly
 ```bash
 tools/check.sh
 tools/check-transport.sh
-python3 tests/test_worker.py
 tools/lint.sh
 ```
 
@@ -109,7 +108,6 @@ Host success alone is not guest acceptance.
 | [Limits](docs/limits.md) | Buffer, token, memory and deadline relationships |
 | [MCP](docs/mcp.md) | Protocol diagnostic and remaining integration gates |
 | [PowerPC template](templates/ppc-toolbox/README.md) | Starter UI, native compilation, runtime logging and self-render |
-| [MacRelix worker](worker/README.md) | Fallback executor and job protocol |
 | [OS 9 guest setup](docs/macos9-qemu.md) | Optional QEMU/UTM testbed notes |
 | [Verification history](docs/history/verification.md) | Dated acceptance evidence |
 | [Archived design notes](docs/archive/README.md) | Historical proposals and research |

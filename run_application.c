@@ -3,6 +3,7 @@
  * steps, journal intent before launch, and never retry an uncertain launch.
  * FNV hashes detect changes, not hostile AFP-server writes or power loss. */
 #include "run_application.h"
+#include "application_process.h"
 #include "json.h"
 #include "config.h"
 #include <Processes.h>
@@ -19,7 +20,7 @@ typedef struct {
 static Authority seal, observed;
 static FSSpec artifact;
 static char build_id[25], run_id[32];
-static int active, authorizing, fork_index;
+static int active, authorizing, fork_index, tracking_done;
 static long offset;
 static uint32_t started;
 static unsigned long sequence;
@@ -94,7 +95,9 @@ static int begin(int authorize,AgentJournal journal,void *ctx,uint32_t now)
     if(!authorize && !same_metadata(&observed,&seal))return -1;
     observed.data_hash=observed.resource_hash=2166136261UL;
     authorizing=authorize; fork_index=0; offset=0; started=now;
-    journal_fn=journal; journal_context=ctx; active=1; return 2;
+    journal_fn=journal; journal_context=ctx; active=1; tracking_done=0;
+    if(!authorize)application_tracking_begin();
+    return 2;
 }
 int application_authorize_begin(const char *id,const char *output,AgentJournal journal,void *ctx,uint32_t now)
 {
@@ -149,7 +152,7 @@ int run_application_step(char *out,size_t cap,uint32_t now,int stop)
     Authority current=observed; short ref; OSErr e,c; long n;
     unsigned char page[1024]; uint32_t *h;
     if(!active)return fail(out,cap,"NO_ACTIVE_LAUNCH",1);
-    if(stop || (uint32_t)(now-started)>=60UL*60UL)return fail(out,cap,"LAUNCH_VERIFICATION_STOPPED",0);
+    if(stop || ((authorizing || fork_index<2) && (uint32_t)(now-started)>=60UL*60UL))return fail(out,cap,"LAUNCH_VERIFICATION_STOPPED",0);
     if(metadata(&current) || !same_metadata(&current,&observed))return fail(out,cap,"ARTIFACT_CHANGED",0);
     if(fork_index<2) {
         n=(long)(fork_index ? observed.resource_size : observed.data_size)-offset;
@@ -175,6 +178,12 @@ int run_application_step(char *out,size_t cap,uint32_t now,int stop)
     if(memcmp(&seal,&observed,sizeof(seal)))return fail(out,cap,"ARTIFACT_CHANGED",0);
     /* Recheck the authority after the multi-turn fork scan. */
     if(read_record(&current) || memcmp(&seal,&current,sizeof(seal)))return fail(out,cap,"AUTHORITY_CHANGED",0);
+    if(!tracking_done) {
+        /* Tracking must not turn an otherwise valid launch into a failure. */
+        if((uint32_t)(now-started)>=60UL*60UL)application_tracking_expire();
+        else if(application_tracking_step()==2)return 2;
+        tracking_done=1;
+    }
     snprintf(run_id,sizeof(run_id),"run-%08lx-%04lx",(unsigned long)now,(++sequence)&0xffffUL);
     snprintf(out,cap,"{\"status\":\"pending\",\"run_id\":\"%s\",\"build_id\":\"%s\",\"snapshot\":\"" QUEUE ":%s\"}",run_id,build_id,build_id);
     if(journal_fn(journal_context,"run_intent",out))return fail(out,cap,"JOURNAL_BEFORE_LAUNCH",0);
@@ -193,7 +202,9 @@ int run_application_step(char *out,size_t cap,uint32_t now,int stop)
     e=GetProcessInformation(&launch.launchProcessSN,&process);
     if(e || actual.vRefNum!=artifact.vRefNum || actual.parID!=artifact.parID ||
         actual.name[0]!=artifact.name[0] || memcmp(actual.name,artifact.name,(size_t)artifact.name[0]+1))return fail(out,cap,"PROCESS_OBSERVATION_UNCERTAIN",1);
-    snprintf(out,cap,"{\"status\":\"ok\",\"code\":\"LAUNCHED\",\"run_id\":\"%s\",\"build_id\":\"%s\",\"snapshot\":\"" QUEUE ":%s\",\"artifact\":\"" QUEUE ":%s:build:native:%s\",\"process\":{\"high\":%lu,\"low\":%lu},\"observation\":\"process_present\",\"smoke_test\":\"not_performed\"}",run_id,build_id,build_id,build_id,seal.output,(unsigned long)launch.launchProcessSN.highLongOfPSN,(unsigned long)launch.launchProcessSN.lowLongOfPSN);
+    const char *reason=application_tracking_reason(&launch.launchProcessSN,&process);
+    snprintf(out,cap,"{\"quit_supported\":%s,\"quit_reason\":\"%s\",\"original_run_id\":\"%s\",\"status\":\"ok\",\"code\":\"LAUNCHED\",\"run_id\":\"%s\",\"build_id\":\"%s\",\"snapshot\":\"" QUEUE ":%s\",\"artifact\":\"" QUEUE ":%s:build:native:%s\",\"process\":{\"high\":%lu,\"low\":%lu},\"observation\":\"process_present\",\"smoke_test\":\"not_performed\"}",reason ? "false" : "true",reason ? reason : "",application_original_run(&launch.launchProcessSN),run_id,build_id,build_id,build_id,seal.output,(unsigned long)launch.launchProcessSN.highLongOfPSN,(unsigned long)launch.launchProcessSN.lowLongOfPSN);
     if(journal_fn(journal_context,"run_observed",out))return fail(out,cap,"JOURNAL_AFTER_LAUNCH_NO_RETRY",1);
+    if(!reason)application_tracking_commit(run_id,&launch.launchProcessSN,&artifact,&process);
     return 0;
 }

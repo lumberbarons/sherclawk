@@ -131,8 +131,8 @@ OSErr FSpRename(const FSSpec *s, const unsigned char *name)
 struct Resource { int used, file; ResType type; short id; unsigned char rname[256]; long size; unsigned char data[1024]; };
 static struct Resource resources[16];
 static short res_ref, res_error;
-static struct TestProcess { unsigned long hi, lo; const char *name, *app; } processes[4];
-static int process_count, process_self, process_front;
+static struct TestProcess { unsigned long hi, lo; const char *name, *app; } processes[260];
+static int process_count, process_self, process_front, process_enumeration_error;
 static struct TestFont { FMFontFamily id; const char *name; } test_fonts[8];
 static int test_font_count;
 static GrafPort test_port;
@@ -261,6 +261,7 @@ OSErr ResolveAlias(const FSSpec *from, AliasHandle alias, FSSpec *target, Boolea
 OSErr GetNextProcess(ProcessSerialNumber *psn)
 {
     int i;
+    if(process_enumeration_error)return ioErr;
     if(!psn->highLongOfPSN && !psn->lowLongOfPSN) {
         if(process_count<1)return procNotFound;
         psn->highLongOfPSN=processes[0].hi; psn->lowLongOfPSN=processes[0].lo; return 0;
