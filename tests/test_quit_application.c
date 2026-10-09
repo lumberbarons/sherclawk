@@ -25,7 +25,7 @@ static int launch_again(void)
 {
     int r,turns=0;
     strcpy(call.arguments,runargs);
-    assert(run_application_begin(&call,result,sizeof(result),build_journal,NULL,1000)==2);
+    r=run_application_begin(&call,result,sizeof(result),build_journal,NULL,1000);assert(r==2);
     do {r=run_application_step(result,sizeof(result),1001,0);turns++;assert(turns<400);}while(r==2);
     field("run_id",handle,sizeof(handle));return r;
 }
@@ -70,9 +70,9 @@ int main(void)
     ae_fail_stage=2;assert(ae_dispatch_init()==ioErr && !ae_dispatch_ready());
     ae_fail_stage=0;assert(!toolserver_init(log_message));
     n=ae_sends;
-    strcpy(call.arguments,"{\"run_id\":\"arbitrary\"}");assert(!quit_application_begin(&call,result,sizeof(result),quit_log,NULL,1));
+    strcpy(call.arguments,"{\"run_id\":\"arbitrary\"}");r=quit_application_begin(&call,result,sizeof(result),quit_log,NULL,1);assert(!r);
     assert(strstr(result,"RUN_NOT_OWNED"));unchanged_sends(n);
-    strcpy(call.arguments,"{\"run_id\":\"arbitrary\",\"process\":42}");assert(!quit_application_begin(&call,result,sizeof(result),quit_log,NULL,1));assert(strstr(result,"QUIT_ARGUMENTS"));
+    strcpy(call.arguments,"{\"run_id\":\"arbitrary\",\"process\":42}");r=quit_application_begin(&call,result,sizeof(result),quit_log,NULL,1);assert(!r);assert(strstr(result,"QUIT_ARGUMENTS"));
     fresh();n=ae_sends;assert(quit_begin()==2);assert(!quit_application_step(result,sizeof(result),2001,1));unchanged_sends(n);
     submit();old_id=ae_last_id;
     for(i=1;i<=8;i*=2) {
@@ -149,7 +149,7 @@ int main(void)
     fresh();for(i=1;i<257;i++){processes[i].hi=0;processes[i].lo=(unsigned long)i+100;}
     process_count=257;assert(!launch_again() && strstr(result,"SNAPSHOT_FULL"));n=ae_sends;assert(!quit_begin());unchanged_sends(n);
     fresh();strcpy(call.arguments,runargs);
-    assert(run_application_begin(&call,result,sizeof(result),build_journal,NULL,1000)==2);
+    r=run_application_begin(&call,result,sizeof(result),build_journal,NULL,1000);assert(r==2);
     assert(run_application_step(result,sizeof(result),1001,0)==2);
     assert(run_application_step(result,sizeof(result),1002,0)==2);
     assert(!run_application_step(result,sizeof(result),4600,0) && strstr(result,"SNAPSHOT_DEADLINE"));field("run_id",handle,sizeof(handle));
