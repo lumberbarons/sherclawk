@@ -103,7 +103,7 @@ registry notice; ambiguous or over-budget discovery clears the whole registry.
 ## Verification evidence (2026-10-08)
 
 The ASan/UBSan host suites (`tools/check.sh`), patched TLS transport suites,
-seven worker protocol tests, and lint gate (shellcheck, cppcheck, ruff) passed.
+worker protocol tests, and lint gate (shellcheck, cppcheck, ruff) passed.
 The new protocol and cooperative-client fixtures also passed host GCC in the
 Retro68 image with `-Wall -Wextra -Werror`. Docker builds passed for both
 `Sherclawk_APPL` and `SherclawkMCPCheck_APPL`.

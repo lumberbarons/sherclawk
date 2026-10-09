@@ -26,7 +26,7 @@ static int decimal(const char *p, size_t *out)
 static int headers(McpStream *s)
 {
     char *p = s->headers, *end;
-    int type = 0, session = 0, length = 0, encoding = 0, transfer = 0;
+    int type = 0, session = 0, length = 0, encoding = 0, transfer = 0, bad_type = 0;
     end = strstr(p, "\r\n");
     if (!end) return fail(s);
     *end = 0;
@@ -61,7 +61,7 @@ static int headers(McpStream *s)
             if (semi) *semi = 0;
             if (type++) return fail(s);
             if (equal(v, "text/event-stream")) s->sse = 1;
-            else if (!equal(v, "application/json")) return fail(s);
+            else if (!equal(v, "application/json")) bad_type = 1; /* only matters when a body is expected */
         } else if (equal(p, "content-length")) {
             if (length++ || decimal(v, &s->remaining)) return fail(s);
             s->has_length = 1;
@@ -85,7 +85,7 @@ static int headers(McpStream *s)
         if ((s->status != 202 && s->status != 204) || s->chunked || (length && s->remaining)) return fail(s);
         s->done = 1; return 1;
     }
-    if (!type || s->status != 200 || (length && !s->remaining)) return fail(s);
+    if (!type || bad_type || s->status != 200 || (length && !s->remaining)) return fail(s);
     s->headers_done = 1;
     return 0;
 }

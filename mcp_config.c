@@ -43,6 +43,30 @@ static int owned_header(const char *s)
         if (lower_equal(s, names[i])) return 1;
     return 0;
 }
+static int add_secret(McpConfig *c, const char *v, size_t n)
+{
+    if (n + 1 > sizeof(c->secrets) - c->secrets_len) return -1;
+    memcpy(c->secrets + c->secrets_len, v, n); c->secrets[c->secrets_len + n] = 0;
+    c->secrets_len += n + 1;
+    return 0;
+}
+/* Query values can carry API keys. Very short values are not registered:
+ * redacting them would mangle unrelated text such as "v=1". */
+#define QUERY_SECRET_MIN 8
+static int query_secrets(McpConfig *c)
+{
+    const char *p = strchr(c->path, '?');
+    if (!p) return 0;
+    for (p++; *p;) {
+        size_t n = strcspn(p, "&");
+        const char *eq = memchr(p, '=', n), *v = eq ? eq + 1 : p;
+        size_t vn = (size_t)(p + n - v);
+        if (vn >= QUERY_SECRET_MIN && add_secret(c, v, vn)) return -1;
+        p += n;
+        if (*p == '&') p++;
+    }
+    return 0;
+}
 /* Reject duplicates even when escaped spellings differ, at every depth. */
 static int unique(const char *s, const JsonToken *t, int count)
 {
@@ -118,8 +142,11 @@ int mcp_config_parse(const char *s, size_t len, McpConfig *c, char *err, size_t 
             if (written < 0 || (size_t)written >= sizeof(c->path)) return error(c, err, cap, "url path limit");
         }
     }
+    /* The query string (which may carry the key) is not part of the match. */
+    k = strcspn(c->path, "?");
     c->official_tavily = lower_equal(c->host, "mcp.tavily.com") && c->port == 443 &&
-        (!strcmp(c->path, "/mcp/") || !strcmp(c->path, "/mcp"));
+        ((k == 5 && !memcmp(c->path, "/mcp/", 5)) || (k == 4 && !memcmp(c->path, "/mcp", 4)));
+    if (query_secrets(c)) return error(c, err, cap, "url query limit");
     i = json_member(s, t, server, "headers");
     if (i >= 0) {
         if (t[i].type != JSON_OBJECT) return error(c, err, cap, "headers object");
@@ -141,9 +168,7 @@ int mcp_config_parse(const char *s, size_t len, McpConfig *c, char *err, size_t 
             if (wrote < 0 || (size_t)wrote >= sizeof(c->headers) - used)
                 return error(c, err, cap, "headers limit");
             used += (size_t)wrote;
-            k = strlen(val) + 1;
-            if (k > sizeof(c->secrets) - c->secrets_len) return error(c, err, cap, "headers limit");
-            memcpy(c->secrets + c->secrets_len, val, k); c->secrets_len += k;
+            if (add_secret(c, val, strlen(val))) return error(c, err, cap, "headers limit");
         }
     }
     i = json_member(s, t, server, "tools");

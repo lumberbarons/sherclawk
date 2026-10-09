@@ -14,7 +14,7 @@ static struct MacTLS_Context contexts[2];
 static McpClient client;
 static McpConfig config;
 static int creates, closes, lists, calls, cancels, ping_replies, reads_in_step;
-static int connecting, stalled, bad_version, bad_status, tool_error, disconnect, with_ping;
+static int connecting, stalled, bad_version, bad_status, tool_error, disconnect, with_ping, close_after_reply;
 static char error[256];
 MacTLS_Context *MacTLS_Create(const char *host, uint16_t port)
 {
@@ -33,6 +33,7 @@ MacTLS_State MacTLS_Pump(MacTLS_Context *c)
     if (connecting) return c->state = kMacTLS_Connecting;
     if (stalled) return c->state = kMacTLS_Handshaking;
     if (disconnect && c->sent) return kMacTLS_Closed;
+    if (close_after_reply && c->response[0]) return kMacTLS_Closed;
     return c->state = kMacTLS_Connected;
 }
 int MacTLS_Write(MacTLS_Context *c, const void *bytes, size_t len)
@@ -114,7 +115,7 @@ static void reset(void)
 {
     memset(&client, 0, sizeof(client)); memset(contexts, 0, sizeof(contexts));
     creates = closes = lists = calls = cancels = ping_replies = 0;
-    connecting = stalled = bad_version = bad_status = tool_error = disconnect = with_ping = 0;
+    connecting = stalled = bad_version = bad_status = tool_error = disconnect = with_ping = close_after_reply = 0;
     {
         const char *s = "{\"mcpServers\":{\"tavily\":{\"url\":\"https://mcp.tavily.com/mcp/\"}}}";
         assert(!mcp_config_parse(s, strlen(s), &config, error, sizeof(error)));
@@ -175,6 +176,12 @@ int main(void)
     assert(!mcp_client_discover(&client, &config, 0));
     expect_step(1800, 0); assert(client.state == MCP_FAIL_DRAIN && !closes);
     connecting = 0; expect_step(1801, -1); assert(creates == closes);
+    /* A server that closes right after replying still has buffered bytes to
+     * read; they must not be mistaken for the end of the stream. */
+    reset(); close_after_reply = 1; ready();
+    assert(!mcp_client_call(&client, "mcp_tavily_tavily_search", "{\"query\":\"fixture\"}", 2000));
+    for (i = 2000; i < 3000 && !step((unsigned long)i); i++) {}
+    assert(client.state == MCP_COMPLETE && !client.call_error && calls == 1);
     puts("PASS MCP cooperative discovery, pagination, calls, ping, deadlines, failures and Stop");
     return 0;
 }

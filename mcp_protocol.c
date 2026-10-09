@@ -122,8 +122,14 @@ int mcp_discover_page(const McpConfig *c, McpRegistry *r, const char *s)
         int j, schema, annotation, read_only = 0, selected = !c->selection_present, n;
         size_t room;
         if (r->entries == MCP_ENTRY_MAX) return discard(r, "discovery entry limit");
-        if (tokens[i].type != JSON_OBJECT || string(s, i, "name", name, sizeof(name)) < 0)
-            return discard(r, "invalid tool entry");
+        if (tokens[i].type != JSON_OBJECT || (j = json_member(s, tokens, i, "name")) < 0 ||
+            tokens[j].type != JSON_STRING) return discard(r, "invalid tool entry");
+        if (json_string(s, tokens, j, name, sizeof(name)) < 0) {
+            /* An over-long name only disqualifies that tool. */
+            r->seen[r->entries++][0] = 0;
+            strcpy(r->notice, "Skipped MCP tool: unsupported name.");
+            continue;
+        }
         for (j = 0; j < r->entries; j++) if (!strcmp(r->seen[j], name))
             return discard(r, "duplicate tool name");
         strcpy(r->seen[r->entries++], name);

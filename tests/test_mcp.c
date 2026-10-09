@@ -60,6 +60,19 @@ static void configuration(void)
     assert(!strcmp(roundtrip, "caf\xc3\xa9\n\\u2603"));
     assert(text_to_macroman_strict("\xe2\x98\x83", editor, sizeof(editor)) < 0);
 }
+static void query_key(void)
+{
+    static McpConfig queried;
+    const char url[] = "{\"mcpServers\":{\"tavily\":{\"url\":\"https://mcp.tavily.com/mcp/?v=1&tavilyApiKey=tvly-querysecret\"}}}";
+    char text[128];
+    assert(!mcp_config_parse(url, strlen(url), &queried, error, sizeof(error)));
+    /* The query does not defeat the official-endpoint match... */
+    assert(queried.official_tavily && strstr(queried.path, "?v=1&tavilyApiKey=tvly-querysecret"));
+    /* ...and its key is redacted, while a short value is left alone. */
+    strcpy(text, "echo tvly-querysecret v=1");
+    mcp_redact(&queried, NULL, text);
+    assert(!strstr(text, "tvly-querysecret") && strstr(text, "v=1"));
+}
 static void protocol(void)
 {
     char reply[1024], version[32];
@@ -104,6 +117,15 @@ static void discover(void)
     assert(mcp_discover_page(&config, &registry, other) == 1 && registry.count == 1);
     memset(&registry, 0, sizeof(registry)); config.selection_present = 1; config.selected_count = 0;
     assert(mcp_discover_page(&config, &registry, other) == 1 && registry.count == 0);
+    /* An over-long name skips only that tool; its neighbours survive. */
+    {
+        char longname[512];
+        snprintf(longname, sizeof(longname), "{\"result\":{\"tools\":[{\"name\":\"%0100d\",\"inputSchema\":{}},{\"name\":\"tavily_search\",\"inputSchema\":{\"type\":\"object\"}}]}}", 7);
+        memset(&registry, 0, sizeof(registry));
+        config.official_tavily = 1; config.selection_present = 0;
+        assert(mcp_discover_page(&config, &registry, longname) == 1);
+        assert(registry.count == 1 && registry.entries == 2 && strstr(registry.notice, "unsupported name"));
+    }
 }
 static void fragments(const char *wire, size_t width)
 {
@@ -137,6 +159,14 @@ static void streaming(void)
     mcp_stream_init(&stream, 1, NULL, NULL);
     strcpy(wire, "HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n");
     assert(mcp_stream_feed(&stream, wire, strlen(wire)) == 1);
+    /* A bodyless acknowledgment is valid whatever Content-Type it carries,
+     * but a response that expects a body still needs JSON or SSE. */
+    mcp_stream_init(&stream, 1, NULL, NULL);
+    strcpy(wire, "HTTP/1.1 202 Accepted\r\nContent-Type: text/plain\r\nContent-Length: 0\r\n\r\n");
+    assert(mcp_stream_feed(&stream, wire, strlen(wire)) == 1);
+    mcp_stream_init(&stream, 0, message, &id);
+    strcpy(wire, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\n{}");
+    assert(mcp_stream_feed(&stream, wire, strlen(wire)) < 0);
     mcp_stream_init(&stream, 0, message, &id);
     strcpy(wire, "HTTP/1.1 302 Found\r\nLocation: https://elsewhere/\r\n\r\n");
     assert(mcp_stream_feed(&stream, wire, strlen(wire)) < 0);
@@ -158,7 +188,7 @@ static void streaming(void)
 }
 int main(void)
 {
-    configuration(); protocol(); discover(); streaming();
+    configuration(); query_key(); protocol(); discover(); streaming();
     puts("MCP configuration, RPC, registry and fragmented HTTP/SSE tests passed");
     return 0;
 }

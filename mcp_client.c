@@ -71,7 +71,7 @@ static int start(McpClient *c, McpExchange *e, const char *body, int ack)
 static int step_exchange(McpExchange *e)
 {
     MacTLS_State state;
-    int i;
+    int i, drained = 0;
     char bytes[2048];
     if (!e->ctx) return -1;
     state = MacTLS_Pump(e->ctx);
@@ -88,13 +88,15 @@ static int step_exchange(McpExchange *e)
     for (i = 0; i < 4; i++) {
         int read = MacTLS_Read(e->ctx, bytes, sizeof(bytes)), r;
         if (read < 0) return -1;
-        if (!read) break;
+        if (!read) { drained = 1; break; }
         if ((size_t)read > sizeof(bytes)) return -1;
         r = mcp_stream_feed(&e->stream, bytes, (size_t)read);
         if (r < 0) return -1;
         if (r > 0) return e->sent == e->length ? 1 : -1;
     }
-    if (state == kMacTLS_Closed) return e->sent == e->length ? mcp_stream_eof(&e->stream) : -1;
+    /* A closed connection may still hold buffered plaintext; only an empty
+     * read means the stream truly ended. */
+    if (state == kMacTLS_Closed && drained) return e->sent == e->length ? mcp_stream_eof(&e->stream) : -1;
     return 0;
 }
 int mcp_client_discover(McpClient *c, const McpConfig *config, unsigned long ticks)
