@@ -625,7 +625,13 @@ calls, or no visible text at all (reasoning used the whole budget), it is
 discarded and the model is told, in a user message, that its last reply was cut
 off and not run, so it can retry with a smaller step; the run continues and the
 retry counts as a model round. A cut-off reply that is only partial text is
-shown with a notice and ends the run. There is no automatic network retry.
+shown with a notice and ends the run. A complete reply with a tool call whose
+arguments exceed 8 KiB, or with more calls than a response may carry, is handled
+the same way: discarded unrun, the model told to split the work (`write_text` and
+`edit_text` text is limited to 4096 bytes), and the retry counts as a round.
+Every other malformed reply stops the run with the failed check named in the
+error and the lifecycle log, for example a missing call id or a duplicate one.
+There is no automatic network retry.
 Reaching a run limit pauses with the actual model-round and tool counts, the
 configured ceilings, history usage
 percentage, and a reminder to send Continue. Sending another message resets
@@ -667,7 +673,8 @@ teardown yields, `up` and `down` are request and response bytes, `out` is the
 provider-reported completion tokens against the request cap and `reasoning` the
 part of them spent reasoning (each omitted when the provider does not report it),
 `end=abort` marks a round that stopped early and `end=truncated` one cut off at
-the output limit and retried. Each tool call logs `tool=<n> name=<tool> ticks=<elapsed>`; for
+the output limit and retried; `end=discarded` is a complete reply dropped for an
+oversized or excess tool call and retried. Each tool call logs `tool=<n> name=<tool> ticks=<elapsed>`; for
 `build_project` and `run_application` that spans the whole stepped operation.
 
 The Open Transport teardown that dominates `close` is tunable at build time for

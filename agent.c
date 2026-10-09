@@ -227,9 +227,21 @@ int agent_handoff_response(const char *body, size_t len, int status, char *summa
     if (json_string(body, tokens, json_member(body, tokens, msg, "content"), summary, cap) <= 0) return -1;
     error[0] = 0; return 0;
 }
-/* The reply hit the output limit before it could be used. Nothing in it is
- * recorded or run: the model is told, as a user message, that its last reply
- * was cut off and discarded, so it can retry with a smaller step. */
+/* A reply that cannot be used as sent. Nothing in it is recorded or run: the
+ * model is told, as a user message, that its last reply was discarded, so it
+ * can retry with a smaller step. */
+static int discard_reply(Agent *a, const char *body, size_t len, const char *notice, char *error, size_t cap)
+{
+    a->text[0] = 0;
+    if (record(a, "truncated", notice)) {
+        snprintf(error, cap, "Could not record retry notice. Start a new session."); return -1;
+    }
+    /* The discarded completion was still billed. */
+    agent_usage_absorb(a, body, len);
+    a->count = a->next = 0; a->rounds++;
+    error[0] = 0; return 0;
+}
+/* The reply hit the output limit before it could be used. */
 static int discard_truncated(Agent *a, const char *body, size_t len, char *error, size_t cap)
 {
     static const char notice[] =
@@ -237,14 +249,37 @@ static int discard_truncated(Agent *a, const char *body, size_t len, char *error
         "It was discarded and nothing in it was executed. Retry with a smaller step: shorten "
         "edit_text old_text/new_text or write_text text, split the change into several calls, "
         "and reason more briefly.\"}";
-    a->text[0] = 0;
-    if (record(a, "truncated", notice)) {
-        snprintf(error, cap, "Could not record truncation notice. Start a new session."); return -1;
-    }
-    /* The cut-off completion was still billed. */
-    agent_usage_absorb(a, body, len);
-    a->count = a->next = 0; a->rounds++; a->truncated = 1;
-    error[0] = 0; return 0;
+    if (discard_reply(a, body, len, notice, error, cap)) return -1;
+    a->truncated = 1;
+    return 0;
+}
+/* A complete reply whose tool calls do not fit the per-call buffers. */
+static int discard_oversized(Agent *a, const char *body, size_t len, int too_many, char *error, size_t cap)
+{
+    static const char big[] =
+        "{\"role\":\"user\",\"content\":\"Your previous reply was discarded and nothing in it was executed: "
+        "a tool call's arguments were larger than " STRINGIFY(AGENT_ARGUMENT_CAP) " bytes. Retry with a smaller step: "
+        "write_text text and edit_text old_text/new_text are limited to 4096 bytes each, so split the change "
+        "into several smaller calls and reason more briefly.\"}";
+    static const char many[] =
+        "{\"role\":\"user\",\"content\":\"Your previous reply was discarded and nothing in it was executed: "
+        "it contained more than " STRINGIFY(AGENT_CALL_MAX) " tool calls. Retry with at most "
+        STRINGIFY(AGENT_CALL_MAX) " tool calls per reply.\"}";
+    if (discard_reply(a, body, len, too_many ? many : big, error, cap)) return -1;
+    a->discarded = too_many ? "reply carried too many tool calls" : "tool call arguments were too large";
+    return 0;
+}
+/* 1 when the string token decodes into a cap-byte buffer, 0 when it is valid
+ * but too long, -1 when it is not a valid string. */
+static int string_fit(const char *body, int index, size_t cap)
+{
+    int n = json_string(body, tokens, index, NULL, 0);
+    return n < 0 ? -1 : (size_t)n < cap;
+}
+static int reject(char *error, size_t cap, int status, const char *reason)
+{
+    snprintf(error, cap, "HTTP %d: %s", status, reason);
+    return -1;
 }
 int agent_response(Agent *a, const char *body, size_t len, int status, char *error, size_t cap)
 {
@@ -252,7 +287,7 @@ int agent_response(Agent *a, const char *body, size_t len, int status, char *err
      * its scratch buffer need not grow with total conversation history. */
     static char message[CHAT_RESPONSE_CAP + 1];
     char finish[64], role[32], kind[32];
-    int parsed, choice, msg, content, calls, i, count = 0, limited;
+    int parsed, choice, msg, content, calls, i, count = 0, limited, too_many = 0, too_big = 0;
     size_t length;
     snprintf(error, cap, "HTTP %d: invalid, truncated, or unsupported model response.", status);
     if (!a->active || a->next < a->count) return -1;
@@ -275,31 +310,51 @@ int agent_response(Agent *a, const char *body, size_t len, int status, char *err
         return -1;
     }
     choice = i + 1; msg = json_member(body, tokens, choice, "message");
-    if (msg < 0 || tokens[msg].type != JSON_OBJECT ||
-        json_string(body, tokens, json_member(body, tokens, msg, "role"), role, sizeof(role)) < 0 ||
-        strcmp(role, "assistant") ||
-        json_string(body, tokens, json_member(body, tokens, choice, "finish_reason"), finish, sizeof(finish)) < 0) return -1;
-    limited = !strcmp(finish, "length"); a->truncated = 0;
+    if (msg < 0 || tokens[msg].type != JSON_OBJECT) return reject(error, cap, status, "choice has no message object.");
+    if (json_string(body, tokens, json_member(body, tokens, msg, "role"), role, sizeof(role)) < 0 || strcmp(role, "assistant"))
+        return reject(error, cap, status, "message role is missing or not \"assistant\".");
+    if (json_string(body, tokens, json_member(body, tokens, choice, "finish_reason"), finish, sizeof(finish)) < 0)
+        return reject(error, cap, status, "choice has no finish_reason.");
+    limited = !strcmp(finish, "length"); a->truncated = 0; a->discarded = NULL;
     content = json_member(body, tokens, msg, "content"); a->text[0] = 0;
     if (content >= 0 && !null_token(body, tokens, content) &&
-        json_string(body, tokens, content, a->text, sizeof(a->text)) < 0) goto malformed;
+        json_string(body, tokens, content, a->text, sizeof(a->text)) < 0) {
+        if (limited) return discard_truncated(a, body, len, error, cap);
+        return reject(error, cap, status, string_fit(body, content, sizeof(a->text)) == 0 ?
+            "reply text exceeds the " STRINGIFY(AGENT_REPLY_CAP) "-byte reply buffer." : "reply text is not a valid string.");
+    }
     calls = json_member(body, tokens, msg, "tool_calls");
     if (calls >= 0 && !null_token(body, tokens, calls)) {
-        if (tokens[calls].type != JSON_ARRAY) goto malformed;
-        for (i = calls + 1; i < tokens[calls].next; i = tokens[i].next) {
+        const char *why = NULL;
+        if (tokens[calls].type != JSON_ARRAY) why = "tool_calls is not an array.";
+        for (i = calls + 1; !why && i < tokens[calls].next; i = tokens[i].next) {
             AgentCall *call;
-            int f, j;
-            if (count == AGENT_CALL_MAX || tokens[i].type != JSON_OBJECT) goto malformed;
+            int f, j, fit;
+            if (tokens[i].type != JSON_OBJECT) { why = "a tool call is not an object."; break; }
+            if (count == AGENT_CALL_MAX) { too_many = 1; break; }
             call = &a->calls[count];
             f = json_member(body, tokens, i, "function");
             if (json_string(body, tokens, json_member(body, tokens, i, "type"), kind, sizeof(kind)) < 0 ||
-                strcmp(kind, "function") ||
-                json_string(body, tokens, json_member(body, tokens, i, "id"), call->id, sizeof(call->id)) <= 0 ||
-                json_string(body, tokens, json_member(body, tokens, f, "name"), call->name, sizeof(call->name)) <= 0 ||
-                json_string(body, tokens, json_member(body, tokens, f, "arguments"), call->arguments, sizeof(call->arguments)) < 0) goto malformed;
-            for (j = 0; j < count; j++) if (!strcmp(call->id, a->calls[j].id)) goto malformed;
+                strcmp(kind, "function")) { why = "a tool call has no \"function\" type."; break; }
+            if (json_string(body, tokens, json_member(body, tokens, i, "id"), call->id, sizeof(call->id)) <= 0) {
+                why = "a tool call has a missing or oversized id."; break;
+            }
+            if (json_string(body, tokens, json_member(body, tokens, f, "name"), call->name, sizeof(call->name)) <= 0) {
+                why = "a tool call has a missing or oversized name."; break;
+            }
+            if (json_string(body, tokens, json_member(body, tokens, f, "arguments"), call->arguments, sizeof(call->arguments)) < 0) {
+                fit = string_fit(body, json_member(body, tokens, f, "arguments"), sizeof(call->arguments));
+                if (fit == 0) { too_big = 1; break; }
+                why = "a tool call's arguments are missing or not a valid string."; break;
+            }
+            for (j = 0; j < count; j++) if (!strcmp(call->id, a->calls[j].id)) why = "duplicate tool call id.";
             count++;
         }
+        /* A cut-off reply may stop mid-structure; at the limit that is the
+         * truncation itself, not a protocol violation. */
+        if (limited && (why || too_many || too_big)) return discard_truncated(a, body, len, error, cap);
+        if (too_many || too_big) return discard_oversized(a, body, len, too_many, error, cap);
+        if (why) return reject(error, cap, status, why);
     }
     a->limited = limited;
     if (strcmp(finish, "stop") && strcmp(finish, "tool_calls") && !limited) {
@@ -327,11 +382,6 @@ int agent_response(Agent *a, const char *body, size_t len, int status, char *err
     a->count = count; a->next = 0; a->rounds++;
     if (!count) a->active = 0;
     error[0] = 0; return 0;
-malformed:
-    /* A cut-off reply may stop mid-structure; at the limit that is the
-     * truncation itself, not a protocol violation. */
-    if (limited) return discard_truncated(a, body, len, error, cap);
-    return -1;
 }
 int agent_tool_result(Agent *a, const char *result, char *error, size_t cap)
 {

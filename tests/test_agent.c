@@ -156,8 +156,103 @@ static void truncation(void)
     /* The notice must be journaled; if it cannot be, nothing advances. */
     begin(); call("length"); used = a.used; fail_record = 1;
     assert(agent_response(&a, response, strlen(response), 200, error, sizeof(error)) == -1);
-    assert(a.used == used && !a.truncated && !a.rounds && strstr(error, "truncation notice"));
+    assert(a.used == used && !a.truncated && !a.rounds && strstr(error, "retry notice"));
     fail_record = 0;
+}
+/* A reply whose tool calls cannot be accepted as sent is discarded with a
+ * retry notice (like a cut-off reply) when smaller steps can fix it; every
+ * other malformation stops the run with the check that failed named. */
+static void big_call(char *out, size_t cap, size_t bytes)
+{
+    size_t at = (size_t)snprintf(out, cap, "{\"choices\":[{\"finish_reason\":\"tool_calls\",\"message\":{\"role\":\"assistant\","
+        "\"content\":null,\"tool_calls\":[{\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"write_text\","
+        "\"arguments\":\"{\\\"text\\\":\\\"");
+    memset(out + at, 'x', bytes); at += bytes;
+    snprintf(out + at, cap - at, "\\\"}\"}}]}}]}");
+}
+static void rejections(void)
+{
+    static char big[AGENT_ARGUMENT_CAP + 512];
+    size_t used;
+    int i;
+    char many[2048] = "{\"choices\":[{\"finish_reason\":\"tool_calls\",\"message\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[";
+    /* Arguments over the cap: nothing runs, the model is told to split the work. */
+    begin(); used = a.used; big_call(big, sizeof(big), AGENT_ARGUMENT_CAP);
+    assert(!agent_response(&a, big, strlen(big), 200, error, sizeof(error)));
+    assert(a.discarded && strstr(a.discarded, "arguments") && !a.truncated && !a.limited);
+    assert(a.active && !a.count && !a.next && a.rounds == 1 && !a.tool_count && records == 2);
+    assert(a.used > used && !strstr(a.history, "c1") && strstr(a.history, "split"));
+    assert(agent_request(&a, "model", req, sizeof(req)) > 0 && strstr(req, "4096"));
+    /* The retry is an ordinary round and clears the flag. */
+    call("tool_calls");
+    assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
+    assert(!a.discarded && a.count == 1 && a.rounds == 2);
+    /* Just under the cap is accepted whole. */
+    begin(); big_call(big, sizeof(big), AGENT_ARGUMENT_CAP - 64);
+    assert(!agent_response(&a, big, strlen(big), 200, error, sizeof(error)) && !a.discarded && a.count == 1);
+    /* More calls than one reply may carry. */
+    for (i = 0; i <= AGENT_CALL_MAX; i++) {
+        char one[160];
+        snprintf(one, sizeof(one), "%s{\"id\":\"c%d\",\"type\":\"function\",\"function\":{\"name\":\"get_environment\",\"arguments\":\"{}\"}}", i ? "," : "", i);
+        strcat(many, one);
+    }
+    strcat(many, "]}}]}");
+    begin(); used = a.used;
+    assert(!agent_response(&a, many, strlen(many), 200, error, sizeof(error)));
+    assert(a.discarded && strstr(a.discarded, "calls") && !a.count && a.active && a.rounds == 1 && a.used > used);
+    assert(!strstr(a.history, "c0"));
+    /* At the output limit an oversized call is still the truncation itself. */
+    begin(); big_call(big, sizeof(big), AGENT_ARGUMENT_CAP);
+    memcpy(strstr(big, "\"tool_calls\""), "\"length\"    ", 12);
+    assert(!agent_response(&a, big, strlen(big), 200, error, sizeof(error)) && a.truncated && !a.discarded);
+    /* The notice must be journaled; if it cannot be, nothing advances. */
+    begin(); big_call(big, sizeof(big), AGENT_ARGUMENT_CAP); used = a.used; fail_record = 1;
+    assert(agent_response(&a, big, strlen(big), 200, error, sizeof(error)) == -1);
+    assert(a.used == used && !a.discarded && !a.rounds && strstr(error, "notice"));
+    fail_record = 0;
+    /* Unrecoverable malformations name the failed check and change nothing. */
+    {
+        static const struct { const char *from, *to, *expect; } cases[] = {
+            { "\"id\":\"c1\"", "\"id\":\"\"  ", "id" },
+            { "\"name\":\"get_environment\"", "\"name\":\"\"               ", "name" },
+            { "\"type\":\"function\",\"function\"", "\"type\":\"fnctn   \",\"function\"", "type" },
+            { "\"arguments\":\"{}\"", "\"arguments\":null", "arguments" },
+            { "\"role\":\"assistant\"", "\"role\":\"user\"     ", "role" },
+            { "\"finish_reason\":\"tool_calls\"", "\"finish_reason\":\"content_filter\"", "finish_reason" },
+        };
+        for (i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {
+            char body[1024];
+            begin(); used = a.used; call("tool_calls");
+            snprintf(body, sizeof(body), "%s", response);
+            {
+                char *at = strstr(body, cases[i].from);
+                assert(at && strlen(cases[i].from) <= strlen(cases[i].to) + 1);
+                memmove(at + strlen(cases[i].to), at + strlen(cases[i].from), strlen(at + strlen(cases[i].from)) + 1);
+                memcpy(at, cases[i].to, strlen(cases[i].to));
+            }
+            assert(agent_response(&a, body, strlen(body), 200, error, sizeof(error)) == -1);
+            assert(a.used == used && !a.discarded && !a.count && strstr(error, cases[i].expect) && strstr(error, "HTTP 200"));
+            assert(!strstr(error, "invalid, truncated, or unsupported"));
+        }
+    }
+    {
+        static char dup[1024];
+        begin(); used = a.used;
+        snprintf(dup, sizeof(dup), "{\"choices\":[{\"finish_reason\":\"tool_calls\",\"message\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":["
+            "{\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"get_environment\",\"arguments\":\"{}\"}},"
+            "{\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"get_environment\",\"arguments\":\"{}\"}}]}}]}");
+        assert(agent_response(&a, dup, strlen(dup), 200, error, sizeof(error)) == -1);
+        assert(a.used == used && !a.discarded && strstr(error, "duplicate"));
+    }
+    /* Visible text beyond the reply buffer. */
+    {
+        static char long_reply[AGENT_REPLY_CAP + 16], body[AGENT_REPLY_CAP + 256];
+        memset(long_reply, 'x', AGENT_REPLY_CAP); long_reply[AGENT_REPLY_CAP] = 0;
+        snprintf(body, sizeof(body), "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"%s\"}}]}", long_reply);
+        begin(); used = a.used;
+        assert(agent_response(&a, body, strlen(body), 200, error, sizeof(error)) == -1);
+        assert(a.used == used && strstr(error, "reply text"));
+    }
 }
 static void model_metadata(void)
 {
@@ -416,6 +511,7 @@ int main(void)
     /* The wire request carries the named cap, so docs and code share one value. */
     begin();
     assert(agent_request(&a, "model", req, sizeof(req)) > 0 && strstr(req, "\"max_tokens\":6000,"));
+    rejections();
     model_metadata();
     model_page();
     puts("PASS agent tools, usage accounting, history, truncation, Stop, persistence barriers, bounds and model metadata");

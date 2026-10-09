@@ -50,6 +50,7 @@ typedef struct {
     AgentCall calls[AGENT_CALL_MAX];
     size_t used;
     int messages, count, next, rounds, tool_count, active, limited, truncated;
+    const char *discarded; /* static reason a whole reply was discarded unrun, else NULL */
     long long cost_micros;
     long context_tokens;
     int cost_seen, context_seen;
@@ -71,7 +72,10 @@ int agent_handoff_seed(Agent *candidate, const char *summary, const char *source
  * nothing: it is discarded, a user notice telling the model to retry smaller
  * is recorded instead, and the run stays active with `truncated` set and no
  * pending calls (the caller sends the next request). Text-only cut-offs end the
- * run with `limited` set. */
+ * run with `limited` set. A complete reply whose tool calls exceed
+ * AGENT_ARGUMENT_CAP or AGENT_CALL_MAX is discarded the same way, with
+ * `discarded` pointing at the reason instead of `truncated` set. Every other
+ * rejection returns -1 with the failed check named in `error`. */
 int agent_response(Agent *a, const char *body, size_t len, int status, char *error, size_t cap);
 int agent_tool_result(Agent *a, const char *result, char *error, size_t cap);
 int agent_stop(Agent *a, const char *reason);

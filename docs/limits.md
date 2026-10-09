@@ -57,7 +57,13 @@ against it, along with dynamic TLS and UI allocations.
    `network.h`, which is `CHAT_REQUEST_CAP` plus header room.
 4. **A cut-off reply is a model round.** At the token limit the reply is
    discarded and the model is told to retry, which consumes one of the run's
-   rounds; the round limit is what bounds repeated truncation.
+   rounds; the round limit is what bounds repeated truncation. A complete reply
+   with a call whose arguments exceed `AGENT_ARGUMENT_CAP`, or with more than
+   `AGENT_CALL_MAX` calls, is discarded the same way (`end=discarded`); the
+   per-call argument cap sits above the 4096-byte text limit of `write_text` and
+   `edit_text` to leave room for JSON escaping, so a model that overshoots the text
+   limit by a little gets a tool error, and one that overshoots the argument cap
+   gets the retry notice.
 5. **One response must fit in the remaining history.** `agent_response`
    refuses a reply that would not fit with room for its tool results.
    Reasoning fields are recorded with the message, so a reasoning-heavy round
@@ -118,6 +124,7 @@ stack, so keep the minimum partition comfortably above it.
 Each model round logs one line to `Retro68:Sherclawk.log` with
 `out=<completion>/<max_tokens>`, `reasoning=<n>` (when the provider reports it)
 and `down=<bytes>`. Divide `down` by `out` for the real bytes per token, and see
-`end=truncated` for rounds that hit the limit and were retried. Re-check the
+`end=truncated` for rounds that hit the limit and were retried and
+`end=discarded` for replies dropped for an oversized or excess tool call. Re-check the
 bytes-per-token figures in invariant 1 against fresh logs whenever the model or
 provider changes.
