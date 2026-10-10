@@ -319,11 +319,15 @@ int main(void)
     ctx.tls13_recv_buf[8200] = 0x21; ctx.tls13_recv_buf[8201] = 0x34;
     memset(ctx.tls13_recv_buf + 8202, 'b', 8500);
     ctx.tls13_recv_len = 16702;
+    assert(MacTLS_Available(&ctx) == 0);
     pump(); assert(ctx.tls13_app_len == 8192 && ctx.tls13_recv_len == 8505);
+    assert(MacTLS_Available(&ctx) == 8192);
     old = recvs; pump(); assert(recvs == old); /* Still undrained. */
     assert(MacTLS_Read(&ctx, received, sizeof(received)) == 8192 && received[0] == 'a' && received[8191] == 'a');
-    pump(); assert(MacTLS_Read(&ctx, received, sizeof(received)) == 8500 && received[0] == 'b' && received[8499] == 'b');
-    assert(ctx.tls13_recv_len == 0);
+    assert(MacTLS_Available(&ctx) == 0);
+    pump(); assert(MacTLS_Available(&ctx) == 8500);
+    assert(MacTLS_Read(&ctx, received, sizeof(received)) == 8500 && received[0] == 'b' && received[8499] == 'b');
+    assert(MacTLS_Available(&ctx) == 0 && ctx.tls13_recv_len == 0);
     application_reset(); ctx.tls13_active = false; engine_state = BR_SSL_SENDAPP;
     memset(engine_buf, 0xEE, sizeof(engine_buf));
     assert(MacTLS_Write(&ctx, "abcdef", 6) == 3 && send_acks == 1);
@@ -332,9 +336,30 @@ int main(void)
 
     /* TLS 1.2 read: plaintext leaves BearSSL's recvapp buffer and is acked. */
     memcpy(recvapp_data, "world", 5); recvapp_len = 5;
+    assert(MacTLS_Available(&ctx) == 5);
     assert(MacTLS_Read(&ctx, received, sizeof(received)) == 5);
     assert(!memcmp(received, "world", 5));
     assert(last_recvapp_ack == 5 && recvapp_len == 0);
+    assert(MacTLS_Available(&ctx) == 0);
+    /* An accepted application record still pending in the send buffer must
+     * not be followed by an encrypted close_notify: it would be interleaved
+     * into the middle of that record on the wire. */
+    application_reset();
+    assert(MacTLS_Write(&ctx, "hello", 5) == 5 && encryptions == 1);
+    assert(ctx.tls13_send_offset < ctx.tls13_send_len);
+    send_result = 0; old = sends;
+    closes = destroys = 0;
+    closing = malloc(sizeof(*closing)); assert(closing); *closing = ctx;
+    MacTLS_Close(closing);
+    assert(encryptions == 1 && sends == old && wire_len == 0);
+    assert(closes == 1 && destroys == 1);
+    /* Control: with nothing pending, the same Close does encrypt and send it. */
+    application_reset();
+    closes = destroys = 0;
+    closing = malloc(sizeof(*closing)); assert(closing); *closing = ctx;
+    MacTLS_Close(closing);
+    assert(encryptions == 1 && sends == 1 && wire_len == 5 + 2);
+    assert(closes == 1 && destroys == 1);
     /* Native Escape during TLS 1.3 initialization must never enter the
      * uninitialized BearSSL runner. Use heap storage: Close wipes/frees it. */
     reset(1);
@@ -348,6 +373,7 @@ int main(void)
     MacTLS_Close(closing);
     assert(closes == 2 && destroys == 2 && engine_closes == 1 && encryptions == 0);
     puts("PASS application TLS partial I/O, backpressure, record boundaries, receive draining");
+    puts("PASS TLS 1.3 Close skips close_notify behind a pending record; MacTLS_Available counts queued bytes");
     puts("PASS TLS handshake Stop skips uninitialized TLS 1.3 engine and preserves TLS 1.2 close");
     return 0;
 }
