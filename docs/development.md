@@ -143,6 +143,7 @@ diagnostic built as its own CMake target; launch it in the guest and read
 | `SherclawkViewImageCheck` | `view_image` against the File Manager: a PNG at the size cap read in bounded steps, refusals and the vision gate |
 | `SherclawkMCPCheck` (`tools/mcp-check.c`) | MCP configuration, TLS initialize, discovery and a Tavily search; see [the MCP guide](mcp.md#protocol-diagnostic) |
 | `SherclawkTrashCheck` | `move_to_trash` against the real volume Trash: what `FindFolder` resolves, a pinned rename, destination identity, recovery and the fallback |
+| `SherclawkMCPGuardCheck` (`tools/mcp-guard-check.c`) | The MCP configuration guard against the real Preferences folder: the workspace is pointed at the boot volume, every protected tool is refused, listing and search skip the file, an alias target is refused, and its size and modification date stay unchanged; the log carries only statuses |
 | `SherclawkProjectCheck` | `create_project` publication, bytes and metadata |
 | `SherclawkBuildCheck`, `SherclawkRunCheck`, `SherclawkSelfBuildCheck`, `SherclawkSelfBuildStopCheck` | `build_project` / `run_application` through the native executor (`tools/build-check.c`) |
 | `SherclawkToolServerCheck`, `SherclawkNativeBuildCheck`, `SherclawkNativeBuildErrorCheck` | ToolServer channel and fixed native build, described below |
@@ -182,6 +183,9 @@ ssh "$SHARE_HOST" 'cat /srv/retro68/SherclawkEditCheck.log'
 APP=SherclawkInspectCheck tools/deploy-to-share.sh
 # Launch SherclawkInspectCheck in OS 9; retains alias/resource fixtures.
 ssh "$SHARE_HOST" 'cat /srv/retro68/SherclawkInspectCheck.log'
+APP=SherclawkMCPGuardCheck tools/deploy-to-share.sh
+# Launch SherclawkMCPGuardCheck in OS 9; it logs statuses only, never file content.
+ssh "$SHARE_HOST" 'cat /srv/retro68/SherclawkMCPGuardCheck.log'
 APP=SherclawkTrashCheck tools/deploy-to-share.sh
 # Launch SherclawkTrashCheck in OS 9; retains its fixture folder and leaves the
 # moved item visible in the Trash. Record the resolution NOTES and RESULT line.

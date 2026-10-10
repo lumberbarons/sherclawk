@@ -5,7 +5,7 @@ project(sherclawk C)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 # Shared native tool sources; read-only inspection lives in inspect.c.
-set(TOOLS_SRC tools.c inspect.c)
+set(TOOLS_SRC tools.c inspect.c mcp_guard.c)
 # Certainly is fetch-only; build.sh expects it next to this repo. Override
 # with -DCERTAINLY_DIR=<path> when it is cloned elsewhere.
 if(NOT CERTAINLY_DIR)
@@ -78,6 +78,7 @@ target_compile_definitions(SherclawkNativeBuildErrorCheck PRIVATE NATIVE_BUILD_E
 sherclawk_app(SherclawkInspectCheck tools/inspect-check.c ${TOOLS_SRC} json.c text.c hello.r)
 sherclawk_app(SherclawkViewImageCheck tools/view-image-check.c ${TOOLS_SRC} view_image.c json.c text.c hello.r)
 sherclawk_app(SherclawkTrashCheck tools/trash-check.c ${TOOLS_SRC} json.c text.c hello.r)
+sherclawk_app(SherclawkMCPGuardCheck tools/mcp-guard-check.c ${TOOLS_SRC} json.c text.c hello.r)
 # These two diagnostics #include ../main.c themselves, so APP_SRC carries the
 # app modules they do not name directly.
 sherclawk_app(SherclawkScrollCheck tools/scroll-check.c ${APP_SRC})

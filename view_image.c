@@ -5,6 +5,7 @@
  * rewritten by a running application cannot be sent half old, half new. */
 #include "view_image.h"
 #include "json.h"
+#include "mcp_guard.h"
 #include <Files.h>
 #include <stdio.h>
 #include <string.h>
@@ -37,6 +38,7 @@ const AgentImage *view_image_take(void)
 static int fail(char *out, size_t cap, const char *code, const char *message, int native)
 {
     char quoted[512];
+    if (native == MCP_GUARD_DENIED) { code = MCP_GUARD_CODE; message = MCP_GUARD_MESSAGE; }
     if (json_quote(message, quoted, sizeof(quoted)) < 0) strcpy(quoted, "\"view_image failed\"");
     snprintf(out, cap, "{\"status\":\"error\",\"code\":\"%s\",\"message\":%s,\"os_error\":%d}", code, quoted, native);
     return 0;
