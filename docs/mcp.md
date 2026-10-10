@@ -3,9 +3,9 @@
 The protocol core and native diagnostic for #76 are implemented, and the
 application has a configuration editor (**Edit ▸ MCP Servers…**). The agent
 does not use the configuration yet: discovery, tools and results are not wired
-into the run loop. The next gate is a real OS 9 Tavily diagnostic run, followed
-by agent integration and release acceptance. The implemented diagnostic does
-not establish that those application-integration gates have passed.
+into the run loop. The OS 9.2.2 Tavily diagnostic gate passed on October 10,
+2026 (see [guest evidence](history/verification.md#mcp-tavily-diagnostic-october-10-2026)).
+Agent integration and release acceptance remain separate gates.
 
 ## Configuration editor
 
@@ -77,11 +77,22 @@ ssh "$SHARE_HOST" 'cat /srv/retro68/SherclawkMCPCheck.log'
 ```
 
 Expected milestones are `PASS configuration`, `PASS TLS initialize` (including
-negotiated version, discovery counts), `PASS Tavily search`, and `END PASS`.
+negotiated version, discovery counts), `PASS Tavily search` (including a count
+of HTTP/HTTPS result URLs), and `END PASS`. Non-empty content alone does not
+prove a search: the diagnostic requires result URLs in Tavily's JSON results
+or formatted detailed results, without logging their values.
 Escape requests Stop. Outstanding OT connects drain cooperatively before their
 contexts are freed (the existing #34 crash window); the TLS library owns its
 connect timeout. No new tool request is launched during this cleanup. Closing a connection does not prove cancellation of
 server-side work; cancellation notifications are best effort, with no replay.
+The Stop log records the client phase, TLS state, whether a connect was
+outstanding, elapsed drain ticks, remaining contexts and whether the request ID
+changed. `tls_state=1` is connecting and `tls_state=2` is handshaking. An
+intentional stop ends with `FAIL stopped` and `END FAIL`; its separate
+`PASS Stop drained` milestone records completed cleanup. The TLS 1.3 handshake
+abort skips BearSSL's uninitialized runner; TLS 1.2 fallback retains its
+graceful close.
+
 Search forwards a fixed diagnostic query, five results, basic depth, and
 images/raw content disabled. The production adapter forwards arguments rather
 than silently rewriting them.
@@ -124,7 +135,6 @@ servers add a second host with its own chain.
 
 ## Remaining implementation and acceptance
 
-- Prove guest TLS, initialization, discovery and a search against Tavily.
 - Protect the configuration file's identity from all model-facing file tools.
   Tools are confined to the workspace, but a workspace that contains the
   Preferences folder would expose it.
@@ -156,4 +166,10 @@ Retro68 image with `-Wall -Wextra -Werror`. Docker builds passed for both
 6,624 data and 1,190,632 bss: 1,537,224 bytes total. The main application's
 linked total remains 3,036,744 bytes. These figures exclude TLS/UI heap and
 stack allocations; they do not establish guest minimum-partition acceptance.
-No guest/live Tavily result has been recorded yet.
+Guest/live Tavily evidence was subsequently recorded on October 10, 2026:
+configuration, TLS initialize (`2025-11-25`), discovery (one page, five entries,
+two eligible tools), five search result URLs and `END PASS`. Escape during
+an outstanding connect and during the TLS 1.3 handshake drained safely after
+fixing the handshake close path. This does not establish agent integration,
+server-side cancellation or minimum-partition acceptance. See the
+[attributable build and guest evidence](history/verification.md#mcp-tavily-diagnostic-october-10-2026).
