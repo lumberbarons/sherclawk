@@ -549,8 +549,8 @@ the round aborts, tick 4 after the handoff stop and tick 1 after quit. The
 `connect=-` lines are the window where the connect had not yet been marked; the
 close was deferred until it settled. The pre-fix crash was not re-run as a
 control. These lines predate the pump-only drain (no request is sent while
-draining; connected exchanges close at once), so that guest gate needs a rerun
-before it is treated as covering the current code:
+draining; connected exchanges close at once), so they are superseded by the rerun
+below:
 
 ```text
 round=1 init=0 connect=3 handshake=- sent=- first_byte=- done=- close=4 up=0 down=0 end=abort
@@ -574,3 +574,30 @@ passed on the branch.
 Not exercised: the send-time lookup's own 30 s deadline can still close before
 the transport timeout (filed as #182), and the pre-fix crash was not re-run as
 a control — #34 records it at three type-3 failures.
+
+Rerun with the pump-only drain (October 10, 2026, OS 9.2.2 UTM guest, same
+model and Preferences). Docker-built `Sherclawk` published to the AFP share;
+local and published SHA-256 matched,
+`a6717010e752886e101687978a223d2f430db21aa8e70da47c2fd1ec0f11bb43`. Stops were
+a QMP `send-key` Command-Return then Command-Period about 15 ms apart; the
+handoff stop clicked Save Handoff and sent Command-Period straight after the
+button release. No abort line below carries a `sent` tick or request bytes
+except the completed round:
+
+```text
+Model context lookup stopped. Reason: Stopped. Completed tool results are retained.
+round=1 init=0 connect=3 handshake=- sent=- first_byte=- done=- close=5 up=0 down=0 end=abort
+handoff init=0 connect=2 handshake=- sent=- first_byte=- done=- close=4 up=0 down=0 end=abort
+handoff init=0 connect=1 handshake=- sent=- first_byte=- done=- close=4 up=0 down=0 end=abort
+handoff init=0 connect=2 handshake=- sent=- first_byte=- done=- close=5 up=0 down=0 end=abort
+round=1 init=0 connect=3 handshake=15 sent=15 first_byte=57 done=121 close=144 up=19799 down=3725 out=16/6000 reasoning=9 end=ok
+round=1 init=0 connect=3 handshake=- sent=- first_byte=- done=- close=13 up=0 down=0 end=abort
+Agent stopped; completed records retained. Reason: Application quit.
+Sherclawk session ended.
+```
+
+The app stayed running after every stop, a later request completed, and
+Command-Q during a connecting request exited to the Finder with no crash.
+Three earlier handoff stops landed after the connect (`handshake` and `sent`
+set, `up=1133`) and closed at once, as designed for a connected exchange. Not
+exercised: the 30 s forced-close backstop and a long hidden-window quit wait.
