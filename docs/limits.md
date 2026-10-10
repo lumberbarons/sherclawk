@@ -38,7 +38,7 @@ in the headers today; the headers win if this drifts.
 
 ### Memory partition (`hello.r`)
 
-`SIZE` asks for 8 MiB preferred and 4 MiB minimum. The static data below counts
+`SIZE` asks for 8 MiB preferred and 6 MiB minimum. The static data below counts
 against it, along with dynamic TLS and UI allocations.
 
 ### Generated-app starter (`templates/ppc-toolbox`)
@@ -201,7 +201,13 @@ provider changes.
 
 ## MCP diagnostic limits (`mcp.h`, `mcp_client.h`)
 
-These buffers currently belong to `SherclawkMCPCheck`, not the main app.
+The protocol and client buffers below belong to `SherclawkMCPCheck`, not the
+main app. The main app links only the configuration parser and the editor
+(`mcp_editor.c`, `mcp_store.c`). Its static buffers hold the editor text, its
+UTF-8 conversion (up to three bytes per MacRoman byte), the file contents and
+the read-back copies that verify a save, plus the parser's scratch and
+`McpConfig`; they are wiped after use. The editor's TextEdit record is bounded
+by the same 8 KiB configuration cap.
 
 | Limit | Value | Bounds |
 |---|---|---|
@@ -241,9 +247,10 @@ pagination are not implemented yet.
 
 On 2026-10-08 the Docker-linked MCP diagnostic measured 339,968 bytes text,
 6,624 data and 1,190,632 bss (1,537,224 total). The main app remains 3,036,744
-bytes because it does not yet link MCP. These measurements exclude dynamic
-TLS/UI allocations and stack; they do not prove the integrated 4 MiB minimum
-partition is sufficient.
+bytes because it did not yet link MCP. With the configuration editor the main
+app linked at 585,728 bytes text, 9,664 data and 3,173,888 bss: 3,769,280 total
+(3.59 MiB). These measurements exclude dynamic TLS/UI allocations and stack;
+they do not prove the integrated 6 MiB minimum partition is sufficient.
 
 ## Owned process Quit
 

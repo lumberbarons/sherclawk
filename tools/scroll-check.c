@@ -52,8 +52,8 @@ int main(void)
     ResponseSetText(text, strlen(text));
     CheckPosition("loaded at top", 0);
     maximum = GetControlMaximum(gResponseScroll);
-    lh = ResponseLineHeight();
-    if (maximum <= ResponsePageHeight()) failures++;
+    lh = PaneLineHeight(gResponseTE);
+    if (maximum <= PanePageHeight(gResponseTE)) failures++;
     ResponseScrollTo(maximum);
     CheckPosition("reply revealed at bottom", maximum);
     if ((long)(*gResponseTE)->destRect.top + (*gResponseTE)->nLines * lh !=
@@ -63,7 +63,7 @@ int main(void)
     ScrollActionProc(gResponseScroll, kControlDownButtonPart);
     CheckPosition("down arrow", maximum);
     ScrollActionProc(gResponseScroll, kControlPageUpPart);
-    CheckPosition("page up", maximum - ResponsePageHeight());
+    CheckPosition("page up", maximum - PanePageHeight(gResponseTE));
     ScrollActionProc(gResponseScroll, kControlPageDownPart);
     CheckPosition("page down", maximum);
 

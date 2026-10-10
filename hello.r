@@ -65,6 +65,7 @@ resource 'MENU' (130, "Edit") {
         "Select All", noIcon, "A", noMark, plain;
         "-", noIcon, noKey, noMark, plain;
         "Preferences\0xC9", noIcon, noKey, noMark, plain;
+        "MCP Servers\0xC9", noIcon, noKey, noMark, plain;
     }
 };
 
@@ -106,6 +107,30 @@ resource 'DITL' (128, "Preferences") {
         /* [17] */                   {322, 312, 338, 356}, EditText { enabled, "128" };
         /* [18] Debug toggle */      {352, 16, 368, 32}, CheckBox { enabled, "" };
         /* [19] Debug label */       {352, 36, 368, 524}, StaticText { disabled, "Show tool debug in Conversation" };
+    }
+};
+
+/* MCP Servers (Edit menu, item after Preferences). The editor is a TextEdit
+ * record and scroll bar that main.c creates inside the frame user item [3]
+ * (scroll bar on its right 16 pixels); the hint line [4] reports limits. */
+resource 'DLOG' (131, "MCP Servers") {
+    {44, 40, 420, 580},
+    movableDBoxProc,
+    visible,
+    noGoAway,
+    0x0,
+    131,
+    "MCP Servers",
+    centerMainScreen
+};
+
+resource 'DITL' (131, "MCP Servers") {
+    {
+        /* [1] Save */      {344, 372, 364, 444}, Button { enabled, "Save" };
+        /* [2] Cancel */    {344, 452, 364, 524}, Button { enabled, "Cancel" };
+        /* [3] Editor */    {40, 16, 330, 524}, UserItem { disabled };
+        /* [4] Hint */      {336, 16, 368, 360}, StaticText { disabled, "Stored as clear text in the Preferences folder. The agent does not use this yet." };
+        /* [5] Title */     {14, 16, 30, 524}, StaticText { disabled, "MCP server configuration (JSON):" };
     }
 };
 

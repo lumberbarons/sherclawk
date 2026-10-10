@@ -1,10 +1,47 @@
 # Single-server MCP implementation
 
-The protocol core and native diagnostic for #76 are implemented.
-MCP is not yet exposed in the Sherclawk application. The next gate is a real
-OS 9 Tavily diagnostic run, followed by the configuration editor, agent
-integration and release acceptance. The implemented diagnostic does not
-establish that those application-integration gates have passed.
+The protocol core and native diagnostic for #76 are implemented, and the
+application has a configuration editor (**Edit ▸ MCP Servers…**). The agent
+does not use the configuration yet: discovery, tools and results are not wired
+into the run loop. The next gate is a real OS 9 Tavily diagnostic run, followed
+by agent integration and release acceptance. The implemented diagnostic does
+not establish that those application-integration gates have passed.
+
+## Configuration editor
+
+**Edit ▸ MCP Servers…** opens a modal dialog with the contents of
+`System Folder:Preferences:Sherclawk MCP Servers.json` in a scrolling
+TextEdit pane (Monaco 9, Cut/Copy/Paste/Clear/Select All through the Edit menu
+or Command keys). The item is refused while a run or a stopped lookup is still
+closing, like Preferences. Return inserts a newline; Enter saves; Escape and
+Command-. cancel and discard.
+
+- **Opening.** With no file the editor shows `{"mcpServers": {}}` (disabled).
+  A readable file is shown even when it is invalid, so it can be fixed. A
+  file that is over 8 KiB, unreadable, or not representable as MacRoman is not
+  opened (an editor that cannot show a file must not be able to overwrite it),
+  and neither is a folder holding only `Sherclawk MCP Servers.json.old` from an
+  interrupted save; the alert says what to rename.
+- **Saving.** The text is converted from MacRoman/CR to UTF-8/LF and must be
+  accepted by the same `mcp_config_parse` the client uses. A rejected save
+  shows the parser's message, which names a field and never a value, keeps the
+  dialog open and writes nothing. Editor text is limited to 8 KiB; MacRoman
+  characters that need more bytes in UTF-8 are checked after conversion.
+- **Persistence.** The new bytes are staged as `….json.new` in the same
+  folder, flushed, read back and compared. They replace the file by renaming
+  the old one to `….json.old`, renaming the stage in and reading the result back
+  again; any failure after the first rename puts the old file back. A failure
+  before the first rename leaves the previous file untouched. If restoring also
+  fails, the previous file stays as `….json.old` and the alert says so. After a
+  successful replace the `.old` file is deleted, since it holds the same
+  credentials. `FSpExchangeFiles` is not used: it is unverified on AFP shares.
+- **Credentials.** The file and the editor show header values in clear text,
+  as Preferences does for the OpenRouter key. The status line, alerts and logs
+  carry only fixed text and the parser's field names, and the editor's buffers
+  are wiped when it closes.
+
+The save path is covered by host fault tests (`tests/test_mcp_store.c`) and the
+text and validation rules by `tests/test_mcp_editor.c`.
 
 ## Protocol diagnostic
 
@@ -88,11 +125,9 @@ servers add a second host with its own chain.
 ## Remaining implementation and acceptance
 
 - Prove guest TLS, initialization, discovery and a search against Tavily.
-- Add the scrolling MacRoman/CR editor and strict UTF-8/LF conversion; preserve
-  readable invalid files and refuse unsafe overwrites.
-- Add stage/flush/read-back/publication verification, first-create rename and
-  replacement exchange, with persistence fault tests and identity protection
-  from all model-facing file tools.
+- Protect the configuration file's identity from all model-facing file tools.
+  Tools are confined to the workspace, but a workspace that contains the
+  Preferences folder would expose it.
 - Integrate frozen per-run discovery, schemas and remote calls into the event
   loop, history/journal notices, native-only fallback and Stop.
 - Make JSON parsing, duplicate validation and schema/result processing
@@ -104,9 +139,9 @@ servers add a second host with its own chain.
   alone is not sufficient for production result retention.
 - Add immutable verified result artifacts, session-scoped IDs and
   `read_mcp_result`, with UTF-8/escaped-output pagination and fault tests.
-- Demonstrate editor save/cancel/restart/scrolling/paste/errors, model-triggered
-  search with source links, extraction and multi-page results, failed-discovery
-  fallback, responsive Stop without replay, and absence of credentials.
+- Demonstrate model-triggered search with source links, extraction and
+  multi-page results, failed-discovery fallback, responsive Stop without
+  replay, and absence of credentials in model-visible output.
 - Measure the integrated linked footprint and test the guest minimum partition.
 
 ## Verification evidence (2026-10-08)
