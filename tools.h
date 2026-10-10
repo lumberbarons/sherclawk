@@ -15,6 +15,15 @@ int edit_text_step(char *, size_t, uint32_t, int);
 OSErr tools_resolve(const char *, FSSpec *);
 /* The configured workspace as a non-alias folder (bootstrap children). */
 OSErr tools_workspace_root(FSSpec *);
+/* Catalog revision token for a file: catalog identity, modification date and
+ * both fork sizes. Emitted by list_files/get_file_info and required by
+ * move_to_trash; it detects a changed or replaced target, not a rewritten one. */
+void tools_catalog_revision(const CInfoPBRec *, char *out, size_t cap);
+/* Bounded depth-first catalog walk for the directory with the wanted ID,
+ * filling its workspace-relative MacRoman path with a trailing colon. Stops at
+ * *budget entries or depth 8; *complete reports an incomplete walk. */
+int tools_find_dir(const FSSpec *spec, long dir, const char *prefix, long wanted,
+                   char *found, size_t cap, int depth, int *budget, int *complete);
 #endif
 int tools_execute(const AgentCall *call, char *result, size_t cap);
 /* 2 pending, 0 completed, 1 stop (recording failed or uncertain outcome). */

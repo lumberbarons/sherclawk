@@ -43,4 +43,5 @@ OSErr FSpDelete(const FSSpec *);
 OSErr FSpGetFInfo(const FSSpec *,FInfo *);
 OSErr FSpSetFInfo(const FSSpec *,const FInfo *);
 OSErr FSpRename(const FSSpec *, const unsigned char *);
+OSErr FSpCatMove(const FSSpec *, const FSSpec *);
 #endif

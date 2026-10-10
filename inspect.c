@@ -200,7 +200,7 @@ static int parse_hex32(const char **p, unsigned long *out)
 /* ------------------------------------------------------------------ */
 static void file_info(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap)
 {
-    char path[512], file_type[12], creator[12], created[32], modified[32], tail[320];
+    char path[512], file_type[12], creator[12], created[32], modified[32], revision[48], tail[400];
     FSSpec spec;
     CInfoPBRec pb;
     OSErr err;
@@ -222,8 +222,10 @@ static void file_info(const AgentCall *call, const JsonToken *tokens, char *out,
     } else {
         type_name(pb.hFileInfo.ioFlFndrInfo.fdType, file_type);
         type_name(pb.hFileInfo.ioFlFndrInfo.fdCreator, creator);
+        tools_catalog_revision(&pb, revision, sizeof(revision));
         if (append(out, cap, &at, ",\"kind\":\"file\",\"file_type\":") || quote(out, cap, &at, file_type) ||
-            append(out, cap, &at, ",\"creator\":") || quote(out, cap, &at, creator)) goto limit;
+            append(out, cap, &at, ",\"creator\":") || quote(out, cap, &at, creator) ||
+            append(out, cap, &at, ",\"revision\":") || quote(out, cap, &at, revision)) goto limit;
     }
     snprintf(tail, sizeof(tail), ",\"finder_flags\":\"0x%04lx\",\"alias\":%s,\"custom_icon\":%s,\"bundle\":%s,"
         "\"invisible\":%s,\"locked\":%s,\"label\":%ld,\"data_bytes\":%ld,\"resource_bytes\":%ld,"
@@ -522,38 +524,6 @@ static void measure_text(const AgentCall *call, const JsonToken *tokens, char *o
     }
 }
 /* ------------------------------------------------------------------ */
-/* Find the directory with the wanted ID by bounded depth-first catalog
- * order, filling the parent path in MacRoman bytes. The walk stops at 512
- * entries or depth 8 and reports incompleteness rather than guessing. */
-static int find_dir(const FSSpec *spec, long dir, const char *prefix, long wanted,
-                    char *found, size_t cap, int depth, int *budget, int *complete)
-{
-    int index;
-    for (index = 1; *budget > 0; index++) {
-        CInfoPBRec pb;
-        Str255 name;
-        OSErr err;
-        char child[768];
-        size_t plen = strlen(prefix);
-        memset(&pb, 0, sizeof(pb)); name[0] = 0;
-        pb.hFileInfo.ioNamePtr = name; pb.hFileInfo.ioVRefNum = spec->vRefNum;
-        pb.hFileInfo.ioDirID = dir; pb.hFileInfo.ioFDirIndex = (short)index;
-        err = PBGetCatInfoSync(&pb);
-        if (err == fnfErr) return 0;
-        if (err) { *complete = 0; return 0; }
-        (*budget)--;
-        if (!(pb.hFileInfo.ioFlAttrib & 16)) continue;
-        if (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000) continue;
-        if (name[0] > 31 || plen + (size_t)name[0] + 2 > sizeof(child)) { *complete = 0; continue; }
-        memcpy(child, prefix, plen); memcpy(child + plen, name + 1, name[0]);
-        child[plen + name[0]] = ':'; child[plen + name[0] + 1] = 0;
-        if (pb.dirInfo.ioDrDirID == wanted) { snprintf(found, cap, "%s", child); return 1; }
-        if (depth < 8 && find_dir(spec, pb.dirInfo.ioDrDirID, child, wanted, found, cap, depth + 1, budget, complete))
-            return 1;
-    }
-    *complete = 0;
-    return 0;
-}
 static void resolve_alias(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap)
 {
     static char alias_bytes[ALIAS_BYTES_MAX];
@@ -617,7 +587,7 @@ static void resolve_alias(const AgentCall *call, const JsonToken *tokens, char *
             have_relative = 1;
         } else {
             char parent[768];
-            if (find_dir(&workspace, workspace_pb.dirInfo.ioDrDirID, "", target.parID, parent, sizeof(parent),
+            if (tools_find_dir(&workspace, workspace_pb.dirInfo.ioDrDirID, "", target.parID, parent, sizeof(parent),
                          0, &budget, &complete)) {
                 snprintf(relative, sizeof(relative), "%s%.*s", parent, (int)target.name[0], (const char *)target.name + 1);
                 have_relative = 1;
