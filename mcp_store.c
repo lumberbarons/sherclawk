@@ -2,8 +2,8 @@
 #include <Script.h>
 #include <string.h>
 
-#define SUFFIX_NEW ".new"
-#define SUFFIX_OLD ".old"
+#define SUFFIX_NEW MCP_STORE_SUFFIX_NEW
+#define SUFFIX_OLD MCP_STORE_SUFFIX_OLD
 
 /* Spec for "<target name><suffix>" in the target's folder. FSMakeFSSpec fills
  * the spec even when the file is absent (fnfErr), so callers test the result. */

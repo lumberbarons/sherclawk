@@ -3,6 +3,7 @@
  * files, resource forks and parent traversal are never followed as text. */
 #include "tools.h"
 #include "inspect.h"
+#include "mcp_guard.h"
 #include "json.h"
 #include "text.h"
 #include "config.h"
@@ -32,6 +33,7 @@ void tools_set_workspace(const char *path)
 static int fail(char *out, size_t cap, const char *code, const char *message, int native)
 {
     char q[512];
+    if (native == MCP_GUARD_DENIED) { code = MCP_GUARD_CODE; message = MCP_GUARD_MESSAGE; }
     if (json_quote(message, q, sizeof(q)) < 0) strcpy(q, "\"Tool failed\"");
     snprintf(out, cap, "{\"status\":\"error\",\"code\":\"%s\",\"message\":%s,\"os_error\":%d}", code, q, native);
     return -1;
@@ -140,6 +142,7 @@ static void list(const char *s, const JsonToken *tokens, char *out, size_t cap)
     int cursor = int_arg(s, tokens, "cursor", 0, 0, 30000), limit = int_arg(s, tokens, "limit", 8, 1, 12);
     int count = 0, next, done = 0;
     long dir;
+    McpGuard guard;
     if (valid_keys(s, tokens, "|root||cursor||limit|") || string_arg(s, tokens, "root", root, sizeof(root)) < 0 || cursor < 0 || limit < 0) {
         fail(out, cap, "ARGUMENTS", "Expected root, optional cursor and limit; no other fields.", 0); return;
     }
@@ -147,6 +150,7 @@ static void list(const char *s, const JsonToken *tokens, char *out, size_t cap)
     if (!err) err = catalog(&spec, &pb);
     if (err || !(pb.hFileInfo.ioFlAttrib & 16)) { fail(out, cap, "FOLDER", "Cannot resolve the workspace folder.", err); return; }
     dir = pb.dirInfo.ioDrDirID;
+    if (mcp_guard_open(&guard)) { fail(out, cap, "FOLDER", "", MCP_GUARD_DENIED); return; }
     snprintf(prefix, sizeof(prefix), "%s%s", root, *root && root[strlen(root) - 1] != ':' ? ":" : "");
     append(out, cap, &at, "{\"status\":\"ok\",\"files\":[");
     next = cursor;
@@ -159,6 +163,13 @@ static void list(const char *s, const JsonToken *tokens, char *out, size_t cap)
         err = PBGetCatInfoSync(&pb);
         if (err == fnfErr) { done = 1; break; }
         if (err) { fail(out, cap, "CATALOG", "Folder enumeration failed.", err); return; }
+        {
+            /* Protected entries are not listed; the cursor still moves past them. */
+            FSSpec entry_spec;
+            entry_spec.vRefNum = spec.vRefNum; entry_spec.parID = dir;
+            memcpy(entry_spec.name, native, (size_t)native[0] + 1);
+            if (mcp_guard_protects(&guard, &entry_spec)) { next++; continue; }
+        }
         if (text_to_utf8((char *)native + 1, native[0], name, sizeof(name)) < 0) {
             fail(out, cap, "ENCODING", "Filename conversion failed.", 0); return;
         }
@@ -526,7 +537,11 @@ OSErr tools_resolve(const char *path, FSSpec *spec)
         dir = pb.dirInfo.ioDrDirID; part = colon + 1;
     }
     name[0] = (unsigned char)strlen(part); memcpy(name + 1, part, name[0]);
-    return FSMakeFSSpec(parent.vRefNum, dir, name, spec);
+    err = FSMakeFSSpec(parent.vRefNum, dir, name, spec);
+    /* The leaf is checked by catalog identity before any caller can open, create,
+     * rename or inspect it; an absent protected name is refused too. */
+    if ((!err || err == fnfErr) && mcp_guard_check(spec)) return MCP_GUARD_DENIED;
+    return err;
 }
 /* Bounded depth-first catalog walk for a directory ID, filling its relative
  * MacRoman path with a trailing colon. 512 entries or depth 8, then reports
@@ -575,6 +590,7 @@ static void search_text(const char *s, const JsonToken *tokens, char *out, size_
     CInfoPBRec pb;
     OSErr err;
     int member = json_member(s, tokens, 0, "recursive");
+    McpGuard guard;
     limit = int_arg(s,tokens,"limit",4,1,8);
     if (member >= 0) {
         int n = tokens[member].end - tokens[member].start;
@@ -624,6 +640,7 @@ static void search_text(const char *s, const JsonToken *tokens, char *out, size_
         fail(out,cap,"FOLDER","Cannot resolve a non-alias workspace folder.",err);return;
     }
     dirs[0]=pb.dirInfo.ioDrDirID;
+    if(mcp_guard_open(&guard)){fail(out,cap,"FOLDER","",MCP_GUARD_DENIED);return;}
     snprintf(paths[0],sizeof(paths[0]),"%s%s",local,*local ? ":" : "");
     {int d;for(d=0;d<depth;d++) {
         Str255 name;
@@ -657,6 +674,8 @@ static void search_text(const char *s, const JsonToken *tokens, char *out, size_
         if(name[0]>31 || plen+name[0]>179 || (pb.hFileInfo.ioFlFndrInfo.fdFlags&0x8000)) goto skip;
         memcpy(local,paths[depth],plen);memcpy(local+plen,name+1,name[0]);local[plen+name[0]]=0;
         if(tools_validate_path(local,(pb.hFileInfo.ioFlAttrib&16)!=0))goto skip;
+        file.vRefNum=spec.vRefNum;file.parID=dirs[depth];memcpy(file.name,name,(size_t)name[0]+1);
+        if(mcp_guard_protects(&guard,&file))goto skip;
         if(pb.hFileInfo.ioFlAttrib&16) {
             if(recursive) {
                 if(depth==8) goto skip;
@@ -666,7 +685,6 @@ static void search_text(const char *s, const JsonToken *tokens, char *out, size_
             }
             indices[depth]++;continue;
         }
-        file.vRefNum=spec.vRefNum;file.parID=dirs[depth];memcpy(file.name,name,(size_t)name[0]+1);
         if(!plain_file(&file,&pb)) goto skip;
         if(offset>pb.hFileInfo.ioFlLgLen){fail(out,cap,"CURSOR","File shortened since search page.",0);return;}
         process=budget-(long)qlen+1;if(process>4096)process=4096;
@@ -846,6 +864,7 @@ static int edit_result(char *out, size_t cap, const char *status, const char *co
 {
     char qp[1100], qt[1100], qb[1100];
     int n;
+    if (native == MCP_GUARD_DENIED) code = MCP_GUARD_CODE;
     if (json_quote(path, qp, sizeof(qp)) < 0 || json_quote(temporary, qt, sizeof(qt)) < 0 ||
         json_quote(backup, qb, sizeof(qb)) < 0) return -1;
     n = snprintf(out, cap, "{\"status\":\"%s\",\"code\":\"%s\",\"path\":%s,\"temporary_path\":%s,"
@@ -1243,6 +1262,7 @@ static int revision_matches(const CInfoPBRec *pb, const char *expected)
 static int trash_refuse(char *out, size_t cap, const char *code, const char *message,
                         const char *path, int native)
 {
+    if (native == MCP_GUARD_DENIED) { code = MCP_GUARD_CODE; message = MCP_GUARD_MESSAGE; }
     if (json_quote(path, trash_work.quoted, sizeof(trash_work.quoted)) < 0 ||
         json_quote(message, trash_work.quoted_alt, sizeof(trash_work.quoted_alt)) < 0)
         return fail(out, cap, "LIMIT", "Cannot encode the refusal.", native);

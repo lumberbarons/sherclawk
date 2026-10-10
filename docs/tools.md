@@ -37,6 +37,34 @@ rather than assuming the first page is complete. Small-file whole-file revisions
 can guard edits; larger-file scan revisions are observational. See
 [editing text](#editing-text) for the exact guard requirements.
 
+## Protected MCP configuration
+
+`System Folder:Preferences:Sherclawk MCP Servers.json` and the
+`….json.new` and `….json.old` files a save stages beside it hold MCP
+credentials in clear text. No model-facing tool reads, lists, searches,
+creates, replaces, edits or trashes them, even when the configured workspace
+contains the Preferences folder. See [MCP](mcp.md#configuration-protection).
+
+- **Identity, not spelling.** The guard names the files by the Preferences
+  folder's volume and directory ID (from `FindFolder`) plus the leaf name,
+  compared without case. It runs where a path becomes a catalog entry
+  (`tools_resolve`), so `read_text`, `get_file_info`, `list_resources`,
+  `read_resource`, `view_image`, `write_text`, `edit_text`, `create_folder`,
+  `create_project`, `move_to_trash`, `build_project` inputs and `run_application`
+  all share it. An absent protected name is refused too, so a tool cannot plant
+  a configuration.
+- **Enumeration.** `list_files` omits protected entries and its cursor moves
+  past them. `search_text` skips them (counted in `skipped`) in flat and
+  recursive searches and never reads their bytes.
+- **Aliases.** `resolve_alias` checks the resolved target by identity and
+  refuses a protected one without reporting its name or location.
+- **Failure.** A refusal is `{"status":"error","code":"PROTECTED",…,"os_error":30001}`
+  with fixed text that names no path or content; `30001` is not a File Manager
+  code. If the Preferences folder cannot be located, every guarded call fails the
+  same way, because nothing can then be shown to be unprotected.
+- **Everything else is unchanged.** Other files in the Preferences folder, and a
+  workspace file that merely has the same name elsewhere, are ordinary.
+
 ## Searching text
 
 Text tools v2 adds `search_text(root, query, recursive=false, limit=4, cursor)`.

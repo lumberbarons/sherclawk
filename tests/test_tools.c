@@ -160,11 +160,20 @@ OSErr FSpRename(const FSSpec *s, const unsigned char *name)
     if((editing && renames==2 && swapped_publish) || (!strcmp(call.name,"create_project") && swapped_publish)) files[i].id++;
     return 0;
 }
-/* The volume Trash model: index of the folder FindFolder resolves, or -1 for
- * no volume Trash. trash_vref != 1 models a Trash on another volume. */
+/* The Folder Manager model: the volume Trash (index of the folder FindFolder
+ * resolves, or -1 for none; trash_vref != 1 models another volume) and the
+ * Preferences folder, named by directory ID. prefs_dir defaults to an ID that
+ * holds nothing in the workspace; a test points it at a workspace folder, or
+ * sets prefs_error to model a lookup failure. */
+static long prefs_dir; static int prefs_error, prefs_lookups;
 OSErr FindFolder(short vRefNum, unsigned long folderType, Boolean createFolder, short *found_vol, long *found_dir)
 {
     (void)vRefNum; (void)createFolder;
+    if(folderType==(unsigned long)kPreferencesFolderType) {
+        prefs_lookups++;
+        if(prefs_error)return prefs_error;
+        *found_vol=1; *found_dir=prefs_dir; return 0;
+    }
     if(folderType!=(unsigned long)kTrashFolderType)return paramErr;
     if(trash_can<0 || !files[trash_can].used || !files[trash_can].dir)return fnfErr;
     *found_vol=(short)trash_vref;
@@ -457,6 +466,7 @@ static void reset(void)
     short_write=bad_read=bad_close=rename_race=rename_error=published=flush_error=0;
     journals=fail_journal=creates=0;longest_temporary=0;
     editing=renames=fault_rename=change_after_stage=stage_bad_read=stage_short_read=busy=swapped_publish=0;
+    prefs_dir=5000;prefs_error=0;prefs_lookups=0;
     trash_can=-1;trash_vref=1;trash_moves=trash_intents=trash_commits=0;rename_lost=0;
     io_reads=io_writes=io_closes=io_flushes=io_opens=0;
     fault_read=fault_write=fault_close=fault_flush=fault_open=0;largest_transfer=0;
@@ -1503,6 +1513,197 @@ static void trash_checks(void)
       assert(finished>0 && refused>0); }
     puts("PASS move_to_trash: pinned batches, network Trash and workspace fallback, collisions, refusals, journal barriers, partial failure and result caps");
 }
+/* The MCP configuration and its staging/backup siblings hold credentials. They
+ * are protected by catalog identity (Preferences folder ID + leaf name): every
+ * model-facing tool must refuse them, wherever the workspace puts Preferences. */
+#define SECRET "Bearer SECRET-TOKEN-123"
+#define CONFIG_NAME "Sherclawk MCP Servers.json"
+static struct { int prefs, config, stage, backup, notes; } guarded;
+static void guard_setup(void)
+{
+    static const char body[] = "{\"mcpServers\":{\"t\":{\"headers\":{\"Authorization\":\"" SECRET "\"}}}}";
+    const char *names[3] = { CONFIG_NAME, CONFIG_NAME ".new", CONFIG_NAME ".old" };
+    int *slot[3] = { &guarded.config, &guarded.stage, &guarded.backup }, k;
+    reset();
+    guarded.prefs = add(10, "Preferences", 1);
+    prefs_dir = files[guarded.prefs].id;
+    for (k = 0; k < 3; k++) {
+        *slot[k] = add(files[guarded.prefs].id, names[k], 0);
+        files[*slot[k]].info.fdType = 'TEXT'; files[*slot[k]].info.fdCreator = 'ttxt';
+        memcpy(files[*slot[k]].bytes, body, sizeof(body) - 1); files[*slot[k]].size = (long)sizeof(body) - 1;
+    }
+    guarded.notes = add(files[guarded.prefs].id, "notes.txt", 0);
+    files[guarded.notes].info.fdType = 'TEXT';
+    strcpy(files[guarded.notes].bytes, "needle in notes\r"); files[guarded.notes].size = 16;
+}
+static void guard_call(const char *name, const char *arguments)
+{
+    strcpy(call.name, name); strcpy(call.arguments, arguments);
+    tools_execute(&call, result, sizeof(result));
+}
+/* The call was refused by the guard and revealed nothing of the files. */
+static void guard_refused(void)
+{
+    if (!strstr(result, "\"code\":\"PROTECTED\"")) fprintf(stderr, "guard: %s | %s\n", call.name, result);
+    assert(strstr(result, "\"status\":\"error\"") && strstr(result, "\"code\":\"PROTECTED\""));
+    assert(strstr(result, "\"os_error\":30001"));
+    assert(!strstr(result, "SECRET") && !strstr(result, "Bearer") && !strstr(result, "mcpServers"));
+}
+static void guard_untouched(void)
+{
+    static const char body[] = "{\"mcpServers\":{\"t\":{\"headers\":{\"Authorization\":\"" SECRET "\"}}}}";
+    int k, slot[3] = { guarded.config, guarded.stage, guarded.backup };
+    for (k = 0; k < 3; k++)
+        assert(files[slot[k]].used && files[slot[k]].size == (long)sizeof(body) - 1 &&
+               !memcmp(files[slot[k]].bytes, body, sizeof(body) - 1) && !files[slot[k]].locked);
+    assert(!creates && !published && !trash_moves && !renames);
+}
+static void protection_checks(void)
+{
+    const char *protected_paths[] = {
+        "Preferences:" CONFIG_NAME, "Preferences:" CONFIG_NAME ".new", "Preferences:" CONFIG_NAME ".old",
+        "Preferences:SHERCLAWK mcp servers.JSON", "Preferences:sherclawk MCP servers.json.OLD" };
+    char arguments[AGENT_ARGUMENT_CAP];
+    int k, i;
+
+    /* Reads: file, metadata and resource tools refuse every protected name, in any case. */
+    guard_setup();
+    for (k = 0; k < (int)(sizeof(protected_paths) / sizeof(*protected_paths)); k++) {
+        const char *tools[] = { "read_text", "get_file_info", "list_resources", "resolve_alias" };
+        for (i = 0; i < (int)(sizeof(tools) / sizeof(*tools)); i++) {
+            snprintf(arguments, sizeof(arguments), "{\"path\":\"%s\"}", protected_paths[k]);
+            guard_call(tools[i], arguments);
+            guard_refused();
+        }
+        snprintf(arguments, sizeof(arguments), "{\"path\":\"%s\",\"type\":\"STR \",\"id\":128}", protected_paths[k]);
+        guard_call("read_resource", arguments); guard_refused();
+        snprintf(arguments, sizeof(arguments), "{\"path\":\"%s\"}", protected_paths[k]);
+        view_image_reset(); view_image_set_vision(AGENT_VISION_YES);
+        assert(!view_begin(arguments)); strcpy(call.name, "view_image"); guard_refused();
+        assert(!view_image_held());
+    }
+    guard_untouched();
+
+    /* Listing omits protected entries and still pages through the rest. */
+    guard_call("list_files", "{\"root\":\"Preferences\"}");
+    assert(strstr(result, "Preferences:notes.txt") && !strstr(result, "Servers"));
+    assert(!strstr(result, "SECRET") && strstr(result, "\"truncated\":false"));
+    { int pages = 0, seen = 0; char cursor[16] = "0";
+      while (pages < 10) {
+          char *at;
+          snprintf(arguments, sizeof(arguments), "{\"root\":\"Preferences\",\"limit\":1,\"cursor\":%s}", cursor);
+          guard_call("list_files", arguments); pages++;
+          assert(!strstr(result, "Servers") && !strstr(result, "\"status\":\"error\""));
+          if (strstr(result, "notes.txt")) seen++;
+          if (strstr(result, "\"truncated\":false")) break;
+          at = strstr(result, "\"next_cursor\":"); assert(at);
+          snprintf(cursor, sizeof(cursor), "%ld", strtol(at + 14, NULL, 10));
+      }
+      assert(seen == 1 && pages < 10); }
+    guard_call("list_files", "{\"root\":\"\"}");
+    assert(strstr(result, "Preferences:"));  /* the folder itself is an ordinary entry */
+
+    /* Search, flat and recursive, never reads or reports their bytes. */
+    guard_call("search_text", "{\"root\":\"Preferences\",\"query\":\"SECRET\"}");
+    assert(strstr(result, "\"matches\":[]") && !strstr(result, "SECRET\"") && strstr(result, "\"skipped\":3"));
+    guard_call("search_text", "{\"root\":\"\",\"query\":\"Bearer\",\"recursive\":true,\"limit\":8}");
+    assert(strstr(result, "\"matches\":[]") && !strstr(result, "Bearer\""));
+    guard_call("search_text", "{\"root\":\"\",\"query\":\"mcpServers\",\"recursive\":true}");
+    assert(strstr(result, "\"matches\":[]"));
+    guard_call("search_text", "{\"root\":\"\",\"query\":\"needle\",\"recursive\":true}");
+    assert(strstr(result, "Preferences:notes.txt") && strstr(result, "needle in notes"));
+    guard_untouched();
+
+    /* Mutation: nothing can create, replace, edit, fold or trash a protected name. */
+    for (k = 0; k < (int)(sizeof(protected_paths) / sizeof(*protected_paths)); k++) {
+        snprintf(arguments, sizeof(arguments), "{\"path\":\"%s\",\"text\":\"{}\"}", protected_paths[k]);
+        guard_call("write_text", arguments); guard_refused();
+        snprintf(arguments, sizeof(arguments), "{\"path\":\"%s\"}", protected_paths[k]);
+        guard_call("create_folder", arguments); guard_refused();
+        guard_call("create_project", arguments); guard_refused();
+        snprintf(arguments, sizeof(arguments),
+            "{\"path\":\"%s\",\"expected_revision\":\"full-00000000-00000000-00000000-00000000\",\"old_text\":\"t\",\"new_text\":\"u\"}",
+            protected_paths[k]);
+        strcpy(call.name, "edit_text"); strcpy(call.arguments, arguments);
+        assert(!run() && !journals);
+        guard_refused();
+        snprintf(arguments, sizeof(arguments),
+            "{\"files\":[{\"path\":\"%s\",\"revision\":\"cat-0000000b-000004d2-00000040-00000000\"}]}", protected_paths[k]);
+        strcpy(call.name, "move_to_trash"); strcpy(call.arguments, arguments);
+        assert(!run() && !journals);
+        guard_refused();
+        assert(strstr(result, "\"moved\":0"));
+    }
+    guard_untouched();
+    assert(!journals);
+
+    /* An alias whose target is a protected file is refused and reveals nothing. */
+    { int alias = add(10, "Config Alias", 0);
+      unsigned char record;
+      files[alias].info.fdType = 'alis'; files[alias].info.fdFlags = 0x8000;
+      for (k = 0; k < 3; k++) {
+          record = (unsigned char)((k == 0 ? guarded.config : k == 1 ? guarded.stage : guarded.backup) + 1);
+          memset(resources, 0, sizeof(resources));
+          add_resource(alias, 'alis', 0, "", &record, 1); files[alias].resource = 1;
+          guard_call("resolve_alias", "{\"path\":\"Config Alias\"}");
+          assert(strstr(result, "\"status\":\"error\"") && strstr(result, "\"os_error\":30001"));
+          assert(!strstr(result, "Servers") && !strstr(result, "target_name"));
+      }
+      record = (unsigned char)(guarded.notes + 1);
+      memset(resources, 0, sizeof(resources));
+      add_resource(alias, 'alis', 0, "", &record, 1);
+      guard_call("resolve_alias", "{\"path\":\"Config Alias\"}");
+      assert(strstr(result, "\"relative_path\":\"Preferences:notes.txt\"")); }
+
+    /* Ordinary operations in the same folder, and elsewhere, keep working. */
+    guard_call("read_text", "{\"path\":\"Preferences:notes.txt\"}");
+    assert(strstr(result, "needle in notes") && !strstr(result, "\"status\":\"error\""));
+    guard_call("get_file_info", "{\"path\":\"Preferences:notes.txt\"}");
+    assert(strstr(result, "\"kind\":\"file\""));
+    { char revision[80];
+      guard_call("read_text", "{\"path\":\"Preferences:notes.txt\"}"); field("revision", revision, sizeof(revision));
+      snprintf(arguments, sizeof(arguments),
+          "{\"path\":\"Preferences:notes.txt\",\"expected_revision\":\"%s\",\"old_text\":\"needle\",\"new_text\":\"thread\"}", revision);
+      strcpy(call.name, "edit_text"); strcpy(call.arguments, arguments);
+      editing = 1; journals = creates = published = renames = 0;
+      assert(!run() && strstr(result, "EDITED"));
+      editing = 0; journals = creates = published = renames = 0;
+      guard_call("read_text", "{\"path\":\"Preferences:notes.txt\"}");
+      assert(strstr(result, "thread in notes")); }
+    strcpy(call.name, "write_text"); strcpy(call.arguments, "{\"path\":\"Preferences:other.txt\",\"text\":\"ok\"}");
+    assert(!run() && strstr(result, "CREATED"));
+    journals = creates = published = renames = 0;
+    strcpy(call.name, "create_folder"); strcpy(call.arguments, "{\"path\":\"Preferences:Sub\"}");
+    assert(!run() && strstr(result, "\"status\":\"ok\""));
+    journals = creates = published = renames = 0;
+    strcpy(call.name, "write_text"); strcpy(call.arguments, "{\"path\":\"hello.c\",\"text\":\"ok\"}");
+    assert(!run() && strstr(result, "CREATED"));
+    { int k, slot[3] = { guarded.config, guarded.stage, guarded.backup };
+      for (k = 0; k < 3; k++) assert(files[slot[k]].used && strstr(files[slot[k]].bytes, SECRET)); }
+
+    /* Identity, not spelling: the same leaf name elsewhere is an ordinary file. */
+    reset();
+    i = add(10, CONFIG_NAME, 0); files[i].info.fdType = 'TEXT'; strcpy(files[i].bytes, "plain"); files[i].size = 5;
+    guard_call("read_text", "{\"path\":\"" CONFIG_NAME "\"}");
+    assert(strstr(result, "plain") && !strstr(result, "PROTECTED"));
+    guard_call("search_text", "{\"root\":\"\",\"query\":\"plain\"}");
+    assert(strstr(result, CONFIG_NAME));
+
+    /* Fail closed: an unlocatable Preferences folder protects everything, and a
+     * lookup failure is never confused with "missing" so create tools stay out. */
+    reset(); prefs_error = fnfErr;
+    i = add(10, "hello.c", 0); files[i].info.fdType = 'TEXT'; strcpy(files[i].bytes, "hi"); files[i].size = 2;
+    guard_call("read_text", "{\"path\":\"hello.c\"}"); guard_refused();
+    guard_call("list_files", "{\"root\":\"\"}"); guard_refused();
+    guard_call("search_text", "{\"root\":\"\",\"query\":\"hi\"}"); guard_refused();
+    strcpy(call.name, "write_text"); strcpy(call.arguments, "{\"path\":\"new.c\",\"text\":\"x\"}");
+    assert(!run() && leaf("new.c") < 0 && !creates && !journals); guard_refused();
+    assert(prefs_lookups > 0);
+    reset(); prefs_error = paramErr;
+    strcpy(call.name, "write_text"); strcpy(call.arguments, "{\"path\":\"new.c\",\"text\":\"x\"}");
+    assert(!run() && leaf("new.c") < 0 && !creates); guard_refused();
+    puts("PASS MCP configuration protection: identity guard across reads, listing, search, aliases, mutation and lookup failure");
+}
 int main(void)
 {
     project_checks();
@@ -1564,6 +1765,7 @@ int main(void)
     edit_checks();
     large_text_checks();
     inspect_checks();
+    protection_checks();
     view_checks();
     instruction_checks();
     trash_checks();

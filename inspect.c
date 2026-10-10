@@ -7,6 +7,7 @@
  * ReadPartialResource. */
 #include "inspect.h"
 #include "tools.h"
+#include "mcp_guard.h"
 #include "json.h"
 #include "text.h"
 #include "config.h"
@@ -33,6 +34,7 @@ static int resource_read(Handle resource, long offset, long count, char *buffer)
 static int fail(char *out, size_t cap, const char *code, const char *message, int native)
 {
     char q[512];
+    if (native == MCP_GUARD_DENIED) { code = MCP_GUARD_CODE; message = MCP_GUARD_MESSAGE; }
     if (json_quote(message, q, sizeof(q)) < 0) strcpy(q, "\"Tool failed\"");
     snprintf(out, cap, "{\"status\":\"error\",\"code\":\"%s\",\"message\":%s,\"os_error\":%d}", code, q, native);
     return -1;
@@ -573,6 +575,10 @@ static void resolve_alias(const AgentCall *call, const JsonToken *tokens, char *
     if (!err) err = ResolveAlias(NULL, (AliasHandle)record, &target, &changed);
     if (record) DisposeHandle(record);
     if (err) { fail(out, cap, "ALIAS", "Alias resolution failed; the target volume may not be mounted.", err); return; }
+    /* An alias to the MCP configuration is resolved by identity, so it is refused
+     * before the target is inspected or its name and location are reported. */
+    err = mcp_guard_check(&target);
+    if (err) { fail(out, cap, "ALIAS", "", err); return; }
     workspace_name[0] = (unsigned char)strlen(tools_workspace());
     memcpy(workspace_name + 1, tools_workspace(), workspace_name[0]);
     err = FSMakeFSSpec(0, 0, workspace_name, &workspace);

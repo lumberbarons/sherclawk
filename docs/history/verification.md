@@ -473,3 +473,51 @@ Not measured: guest heap headroom (the main app log has no FreeMem line) and the
 real iMac's network and CPU speed; the guest's network is QEMU user networking.
 The model's context window (about 1M tokens by the status line) was never close
 to the limit, so provider-side context overflow at 1 MiB was not exercised.
+
+## MCP configuration guard, October 10, 2026
+
+Issue #160's identity guard was checked in the OS 9.2.2 UTM guest against the
+real Preferences folder and the owner's saved configuration. The workspace was
+pointed at the boot volume so it contained `System Folder:Preferences`. The
+diagnostic's log carries statuses, codes and identifiers only, never a result
+body, and every hostile call ran without a journal (`move_to_trash`, which
+checks for one first, ran with a journal and a revision that cannot match).
+
+`SherclawkMCPGuardCheck` was Docker-built from source commit
+`f07dd0a2905aaf43afdd0cc3d3588b7f0f25329c`. Local
+`build/SherclawkMCPGuardCheck.APPL` and the published app had the same SHA-256
+prefix, `2315b5db88ae9f5d`; the full local digest is
+`2315b5db88ae9f5db35a9169c8043a7944b3d00d40f58fc52876fbdffacb1ad5`.
+
+```text
+NOTE FindFolder err=0 vref=-1 dir=45
+NOTE spec vref=-1 parID=45
+PASS tool specs and FindFolder agree on volume and directory
+PASS guard recognises the configuration spec
+...
+PASS configuration size and modification date unchanged
+RESULT failures=0
+```
+
+The run had 67 passing checks. Every protected tool answered
+`PROTECTED` with `os_error=30001`, for the configuration, its `.new` and `.old`
+siblings, and upper- and lower-case spellings of both. Those were `read_text`,
+`get_file_info`, `list_resources`, `read_resource`, `resolve_alias`,
+`write_text`, `create_folder`, `create_project`, `edit_text` and
+`move_to_trash`. `list_files` paged over the folder without listing the
+configuration, `search_text` skipped it (non-zero `skipped`), an alias made with
+`NewAlias` to the configuration was refused by `resolve_alias`, and ordinary
+files and alias targets in and around the same folder still worked. The
+configuration's size and modification date were unchanged afterwards. The
+guest confirms the assumption the host fixture cannot: the `vRefNum` and
+`parID` that tool paths resolve to equal what `FindFolder` reports.
+
+The first run showed `move_to_trash` stopping at `JOURNAL` because the
+diagnostic passed no journal; the diagnostic was corrected and rerun. The
+unchanged-tool diagnostics `SherclawkInspectCheck`, `SherclawkSearchCheck` and
+`SherclawkWriteCheck` were rebuilt with the guard and each ended
+`RESULT failures=0` on the `Retro68:` workspace.
+
+Not exercised: `view_image` (host fixtures only), `build_project` inputs and
+`run_application` against the real configuration, and the `Sherclawk
+Preferences` file, which the guard does not cover (#170).
