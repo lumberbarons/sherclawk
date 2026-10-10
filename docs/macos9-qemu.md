@@ -145,9 +145,7 @@ This repository is the cross-compiler setup (Retro68 GCC for PowerPC classic
 Mac OS) and the validated publish workflow: the [README](../README.md) builds
 Sherclawk and `tools/deploy-to-share.sh` publishes an app to the AFP share on
 `$SHARE_HOST`; the guest auto-mounts the share at boot and runs apps straight
-from it. The original workspace also kept small sample projects in
-`hello-world/` and `hello-world2/` and a disk-image fallback,
-`tools/deploy-to-utm.sh`.
+from it.
 
 ## Common tasks
 
