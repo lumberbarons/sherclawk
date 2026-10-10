@@ -1666,7 +1666,8 @@ static void copy_checks(void)
     strcpy(call.name,"copy_file");
     snprintf(call.arguments,sizeof(call.arguments),
         "{\"path\":\"app\",\"revision\":\"%s\",\"destination\":\"out\"}",rev);
-    assert(copy_file_begin(&call,result,sizeof(result),journal,NULL,42)==2);
+    { int r=copy_file_begin(&call,result,sizeof(result),journal,NULL,42);
+      assert(r==2); }
     assert(copy_file_step(result,sizeof(result),42,1)==1 && strstr(result,"STOPPED") &&
         strstr(result,"temporary_path") && leaf("out")<0 && !published);
     handles_closed();
@@ -1677,7 +1678,8 @@ static void copy_checks(void)
     strcpy(call.name,"copy_file");
     snprintf(call.arguments,sizeof(call.arguments),
         "{\"path\":\"app\",\"revision\":\"%s\",\"destination\":\"out\"}",rev);
-    assert(copy_file_begin(&call,result,sizeof(result),journal,NULL,0xfffffff0U)==2);
+    { int r=copy_file_begin(&call,result,sizeof(result),journal,NULL,0xfffffff0U);
+      assert(r==2); }
     assert(copy_file_step(result,sizeof(result),0xfffffff0U+3600U,0)==1 && strstr(result,"DEADLINE"));
     handles_closed();
 
