@@ -21,6 +21,9 @@ typedef enum {
 
 /* Largest file the editor handles; matches MCP_CONFIG_CAP in mcp.h. */
 #define MCP_STORE_CAP 8192
+/* Siblings of the configuration during a save; both carry its credentials. */
+#define MCP_STORE_SUFFIX_NEW ".new"
+#define MCP_STORE_SUFFIX_OLD ".old"
 #define MCP_STORE_CREATOR 0x74747874UL /* 'ttxt' */
 #define MCP_STORE_TYPE 0x54455854UL    /* 'TEXT' */
 

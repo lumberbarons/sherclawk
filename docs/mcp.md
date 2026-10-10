@@ -43,6 +43,23 @@ Command-. cancel and discard.
 The save path is covered by host fault tests (`tests/test_mcp_store.c`) and the
 text and validation rules by `tests/test_mcp_editor.c`.
 
+## Configuration protection
+
+The workspace confines the file tools, but a workspace may contain the
+Preferences folder.
+`mcp_guard.c` therefore protects the configuration and its `….json.new` and
+`….json.old` siblings by catalog identity: the Preferences folder's volume and
+directory ID from `FindFolder`, plus the leaf name compared without case.
+`tools_resolve`, `list_files`, `search_text` and `resolve_alias` consult it, so
+every model-facing read, search, listing, alias, resource, image, create, edit,
+folder and Trash path is refused or skips the file. The editor and the
+diagnostic are not model-facing and use their own paths. A refusal is code
+`PROTECTED` with `os_error` 30001 and fixed text with no path or credential; an
+unlocatable Preferences folder refuses every guarded call. The contract for
+tool callers is in [tools](tools.md#protected-mcp-configuration), following
+[ADR-0003](adr/0003-admit-tools-read-only-first.md); the host fixtures are in
+`tests/test_tools.c`.
+
 ## Protocol diagnostic
 
 `SherclawkMCPCheck` reads the existing UTF-8 configuration from
@@ -135,9 +152,6 @@ servers add a second host with its own chain.
 
 ## Remaining implementation and acceptance
 
-- Protect the configuration file's identity from all model-facing file tools.
-  Tools are confined to the workspace, but a workspace that contains the
-  Preferences folder would expose it.
 - Integrate frozen per-run discovery, schemas and remote calls into the event
   loop, history/journal notices, native-only fallback and Stop.
 - Make JSON parsing, duplicate validation and schema/result processing
