@@ -134,7 +134,9 @@ with that file untouched; a failure after it, or failed verification, is
 record: folders, aliases, locked files, anything under `Worker01:buildjobs`
 (launched-build evidence), anything already inside a Trash, a non-`cat-`
 revision, and a batch whose report cannot fit the 1,536-byte result cap.
-Recover an item by moving it back from the Trash under its reported `moved_as`
+If the report itself cannot be formatted after files moved, the result is
+`uncertain` `REPORT_LIMIT` with only the `moved` count; inspect the Trash before
+retrying. Recover an item by moving it back from the Trash under its reported `moved_as`
 name, or empty the Trash as usual; Stop does not undo a completed rename.
 
 ## Inspecting resources and identity
