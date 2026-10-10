@@ -1615,7 +1615,7 @@ static void protection_checks(void)
             protected_paths[k]);
         strcpy(call.name, "edit_text"); strcpy(call.arguments, arguments);
         assert(!run() && !journals);
-        assert(strstr(result, "\"os_error\":30001") && !strstr(result, "SECRET"));
+        guard_refused();
         snprintf(arguments, sizeof(arguments),
             "{\"files\":[{\"path\":\"%s\",\"revision\":\"cat-0000000b-000004d2-00000040-00000000\"}]}", protected_paths[k]);
         strcpy(call.name, "move_to_trash"); strcpy(call.arguments, arguments);

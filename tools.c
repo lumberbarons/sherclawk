@@ -864,6 +864,7 @@ static int edit_result(char *out, size_t cap, const char *status, const char *co
 {
     char qp[1100], qt[1100], qb[1100];
     int n;
+    if (native == MCP_GUARD_DENIED) code = MCP_GUARD_CODE;
     if (json_quote(path, qp, sizeof(qp)) < 0 || json_quote(temporary, qt, sizeof(qt)) < 0 ||
         json_quote(backup, qb, sizeof(qb)) < 0) return -1;
     n = snprintf(out, cap, "{\"status\":\"%s\",\"code\":\"%s\",\"path\":%s,\"temporary_path\":%s,"

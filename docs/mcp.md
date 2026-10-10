@@ -58,7 +58,8 @@ diagnostic are not model-facing and use their own paths. A refusal is code
 unlocatable Preferences folder refuses every guarded call. The contract for
 tool callers is in [tools](tools.md#protected-mcp-configuration), following
 [ADR-0003](adr/0003-admit-tools-read-only-first.md); the host fixtures are in
-`tests/test_tools.c`.
+`tests/test_tools.c`, and `SherclawkMCPGuardCheck` exercises the real Preferences
+folder in the guest (see [evidence](history/verification.md#mcp-configuration-guard-october-10-2026)).
 
 ## Protocol diagnostic
 
