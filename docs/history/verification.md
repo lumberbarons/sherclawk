@@ -521,3 +521,7 @@ unchanged-tool diagnostics `SherclawkInspectCheck`, `SherclawkSearchCheck` and
 Not exercised: `view_image` (host fixtures only), `build_project` inputs and
 `run_application` against the real configuration, and the `Sherclawk
 Preferences` file, which the guard does not cover (#170).
+
+Recorded October 10, 2026: the `Retro68:Older:` and `Retro68:Spikes:` archives
+named in the October 2 entries no longer exist on the AFP share; those entries
+describe the state on their recorded dates.
