@@ -4,6 +4,36 @@
 #include "agent.h"
 #include <stdint.h>
 #include "text_limits.h"
+
+/* ── Tool registry ───────────────────────────────────────────────────
+ * One row per model-facing tool: the single definition site of its name,
+ * wire schema and classification. The rows are pure data on purpose: the
+ * host suites that link agent.c alone cannot link the tool executors or
+ * the File Manager model, so dispatch stays with the module that owns the
+ * code (tools.c's id switch, main.c's pending states), keyed by id. */
+enum ToolId {
+    TOOL_get_environment, TOOL_list_files, TOOL_read_text, TOOL_search_text,
+    TOOL_write_text, TOOL_edit_text, TOOL_create_folder, TOOL_move_to_trash,
+    TOOL_create_project, TOOL_build_project, TOOL_read_build_log,
+    TOOL_run_application, TOOL_quit_application, TOOL_get_file_info,
+    TOOL_resolve_alias, TOOL_list_processes, TOOL_list_fonts,
+    TOOL_measure_text, TOOL_list_resources, TOOL_read_resource,
+    TOOL_view_image
+};
+typedef struct {
+    enum ToolId id;
+    const char *name;
+    const char *schema_json; /* one {"type":"function","function":{...}} object */
+    unsigned mutates : 1; /* pre-checked: journal + sealed build-evidence paths */
+    unsigned pending : 1; /* finishes over event-loop steps; main.c drives it */
+} ToolDef;
+extern const ToolDef kToolDefs[];
+/* Row by table position (NULL past the end), the table size, and the row a
+ * model call names (NULL when the tool is not installed). */
+const ToolDef *tools_at(size_t i);
+size_t tools_count(void);
+const ToolDef *tools_lookup(const char *name);
+
 int read_text_begin(const AgentCall *, char *, size_t, AgentJournal, void *, uint32_t);
 int read_text_step(char *, size_t, uint32_t, int);
 int edit_text_begin(const AgentCall *, char *, size_t, AgentJournal, void *, uint32_t);

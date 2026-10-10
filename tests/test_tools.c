@@ -1731,8 +1731,77 @@ static void protection_checks(void)
     assert(!run() && leaf("new.c") < 0 && !creates); guard_refused();
     puts("PASS MCP configuration protection: identity guard across reads, listing, search, aliases, mutation and lookup failure");
 }
+/* The registry is the one definition site of every tool contract: its rows
+ * must agree with the two generated model-facing surfaces (the schema array
+ * and get_environment's tools list) and with the numeric caps their text
+ * names. Every check here is a cross-source comparison, so no fourth list of
+ * tool names lives in this file. */
+static void registry_checks(void)
+{
+    static char env[AGENT_RESULT_CAP];
+    JsonToken wire[8192];
+    const char *schemas = agent_tool_schemas();
+    int parsed, at, elements = 0;
+    size_t i, k;
+    /* The joined schemas parse as one array with exactly one object per row. */
+    parsed = json_parse(schemas, strlen(schemas), wire, 8192);
+    assert(parsed > 1 && wire[0].type == JSON_ARRAY);
+    for (at = 1; at < wire[0].next; at = wire[at].next) elements++;
+    assert((size_t)elements == tools_count());
+    at = 1;
+    for (i = 0; i < tools_count(); i++, at = wire[at].next) {
+        const ToolDef *def = tools_at(i);
+        char quoted[80];
+        assert(at < wire[0].next && wire[at].type == JSON_OBJECT);
+        assert(def && def->id == (enum ToolId)i);
+        assert(tools_lookup(def->name) == def);
+        snprintf(quoted, sizeof(quoted), "\"name\":\"%s\"", def->name);
+        for (k = 0; k < tools_count(); k++) {
+            const char *hit = strstr(tools_at(k)->schema_json, quoted);
+            assert((hit != NULL) == (k == i));
+        }
+        assert(json_string(schemas, wire,
+            json_member(schemas, wire, json_member(schemas, wire, at, "function"), "name"),
+            quoted, sizeof(quoted)) > 0 && !strcmp(quoted, def->name));
+    }
+    assert(!tools_lookup("") && !tools_lookup("not_a_tool") && !tools_at(tools_count()));
+    /* get_environment lists exactly the registry names, and nothing else. */
+    strcpy(call.name, "get_environment"); strcpy(call.arguments, "{}");
+    tools_execute(&call, env, sizeof(env));
+    assert(strstr(env, "\"status\":\"ok\""));
+    for (i = 0; i < tools_count(); i++) {
+        char quoted[80];
+        const char *p = env;
+        int seen = 0;
+        snprintf(quoted, sizeof(quoted), "\"%s\"", tools_at(i)->name);
+        while ((p = strstr(p, quoted)) != NULL) { seen++; p++; }
+        assert(seen == 1);
+    }
+    /* Classification the dispatch relies on: the source mutations the queue
+     * guard pre-checks, and the pending tools main.c drives. */
+    assert(tools_lookup("write_text")->mutates && tools_lookup("edit_text")->mutates &&
+           tools_lookup("create_folder")->mutates && tools_lookup("create_project")->mutates &&
+           tools_lookup("move_to_trash")->mutates && tools_lookup("build_project")->mutates &&
+           tools_lookup("run_application")->mutates && tools_lookup("quit_application")->mutates);
+    assert(!tools_lookup("get_environment")->mutates && !tools_lookup("list_files")->mutates &&
+           !tools_lookup("read_text")->mutates && !tools_lookup("search_text")->mutates &&
+           !tools_lookup("read_build_log")->mutates && !tools_lookup("get_file_info")->mutates &&
+           !tools_lookup("view_image")->mutates);
+    assert(tools_lookup("read_text")->pending && tools_lookup("edit_text")->pending &&
+           tools_lookup("build_project")->pending && tools_lookup("run_application")->pending &&
+           tools_lookup("quit_application")->pending && tools_lookup("view_image")->pending);
+    assert(!tools_lookup("write_text")->pending && !tools_lookup("read_build_log")->pending);
+    /* The model-facing cap descriptions never drift from the caps they name. */
+    assert(atol(TOOLS_FILE_CAP_DESCRIPTION) == (long)TOOLS_ACCEPTED_FILE_CAP);
+    assert(atol(TOOLS_STRING_CAP_DESCRIPTION) == (long)TOOLS_STRING_CAP);
+    assert(atol(TOOLS_DESCRIPTOR_CAP_DESCRIPTION) == (long)TOOLS_DESCRIPTOR_CAP);
+    assert(atol(TOOLS_SNAPSHOT_CAP_DESCRIPTION) == (long)TOOLS_SNAPSHOT_CAP);
+    puts("PASS tool registry: schemas and get_environment agree with one contract table");
+}
+
 int main(void)
 {
+    registry_checks();
     project_checks();
     search_checks();
     int i;

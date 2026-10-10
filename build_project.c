@@ -271,7 +271,7 @@ int build_project_begin(const AgentCall *call,char *out,size_t cap,AgentJournal 
     journal_fn=journal; journal_context=ctx; start_ticks=now;
     if(resolve_input(0))return error(out,cap,"DESCRIPTOR_TEXT_OR_SIZE",0);
     sizes[0]=infos[0].hFileInfo.ioFlLgLen;
-    if(sizes[0]>TOOLS_DESCRIPTOR_CAP)return error_message(out,cap,"SNAPSHOT_SIZE_LIMIT","Descriptor limit 4096 bytes; input limit " TOOLS_FILE_CAP_DESCRIPTION " bytes; total snapshot limit 131072 bytes.",0);
+    if(sizes[0]>TOOLS_DESCRIPTOR_CAP)return error_message(out,cap,"SNAPSHOT_SIZE_LIMIT", TOOLS_SNAPSHOT_LIMIT_MESSAGE, 0);
     source_offsets[0]=0;arena_used=(size_t)sizes[0]+1;hashes[0]=2166136261UL;
     native_attempted=native_claimed=not_started=0; diagnostic_size=0; diagnostic[0]=0; phase=0; file_index=0; offset=0; second_pass=0; active=1;
     return 2;
@@ -401,7 +401,7 @@ int build_project_step(char *out,size_t cap,uint32_t now,int stop)
             for(int i=1;i<=descriptor.count;i++) {
                 if(resolve_input(i))return error(out,cap,"INPUT_MISSING_TEXT_OR_SIZE",0);
                 sizes[i]=infos[i].hFileInfo.ioFlLgLen;
-                if(sizes[i]>FILE_BYTES || (size_t)sizes[i]+1>sizeof(arena)-arena_used)return error_message(out,cap,"SNAPSHOT_SIZE_LIMIT","Descriptor limit 4096 bytes; input limit " TOOLS_FILE_CAP_DESCRIPTION " bytes; total snapshot limit 131072 bytes.",0);
+                if(sizes[i]>FILE_BYTES || (size_t)sizes[i]+1>sizeof(arena)-arena_used)return error_message(out,cap,"SNAPSHOT_SIZE_LIMIT", TOOLS_SNAPSHOT_LIMIT_MESSAGE, 0);
                 source_offsets[i]=arena_used;arena_used+=(size_t)sizes[i]+1;hashes[i]=2166136261UL;
             }
             phase=1; file_index=1; return 2;
@@ -419,7 +419,7 @@ int build_project_step(char *out,size_t cap,uint32_t now,int stop)
             }
             if(add(manifest,sizeof(manifest),&at,"]}"))return error(out,cap,"MANIFEST_LIMIT",0);
             if(arena_used-(size_t)(descriptor.count+1)+strlen(recipe)+strlen(manifest)>TOOLS_SNAPSHOT_CAP)
-                return error_message(out,cap,"SNAPSHOT_SIZE_LIMIT","Descriptor limit 4096 bytes; input limit " TOOLS_FILE_CAP_DESCRIPTION " bytes; total snapshot limit 131072 bytes.",0);
+                return error_message(out,cap,"SNAPSHOT_SIZE_LIMIT", TOOLS_SNAPSHOT_LIMIT_MESSAGE, 0);
             if(tools_resolve(QUEUE,&queue)) {
                 if(ensure_queue() || tools_resolve(QUEUE,&queue))return error(out,cap,"QUEUE_MISSING",0);
             }

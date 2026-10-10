@@ -147,6 +147,7 @@ in bss and 8,224 bytes of text and data, mostly the embedded starter.
 | `CHAT_PROMPT_CAP` | `gPending` (three times) and the `SendChat` prompt buffer | 4 |
 | `AGENT_RESULT_CAP` | `gToolResult`, the static record scratch in `tools.c`, and the wire message (`AGENT_RESULT_WIRE_CAP`) | about 15 |
 | `AGENT_IMAGE_CAP` | the `view_image` PNG buffer | 1 |
+| `AGENT_TOOL_SCHEMA_CAP` | the joined registry schemas in `agent.c` (one buffer, built once) | 1 |
 | `AGENT_MAX_TOKENS` | none | 0 |
 
 Linked static size is measured, not estimated, with `powerpc-apple-macos-size`
@@ -197,8 +198,8 @@ bounded.
   `AGENT_TEXT_CAP`; the guard in `agent.c` enforces it. Update `gPending` and the
   [usage limits](usage.md#run-limits).
 - **`AGENT_IMAGE_CAP`:** check invariant 8 against `CHAT_REQUEST_CAP`, update the
-  `view_image` text in `docs/tools.md` and the schema description in `agent.c`
-  (it quotes the value), and re-measure size.
+  `view_image` text in `docs/tools.md` and the schema description in the
+  `view_image` registry row in `registry.c` (it quotes the value), and re-measure size.
 - **Anything:** run `tools/check.sh`, then a Docker `./build.sh`, then launch on
   the guest. Compile-time guards in `agent.c` enforce invariants 1 and 2 and
   the 16 KiB minimum overhead of invariant 3, but only the guest shows the partition is big enough.
@@ -322,6 +323,12 @@ prevents another send. These bounds do not change the model argument/result caps
 | `TOOLS_DESCRIPTOR_CAP` | 4,096 bytes | Project descriptor, unchanged. |
 | `TOOLS_SNAPSHOT_CAP` | 131,072 bytes | Source arena and actual job aggregate, including descriptor, recipe and manifest. |
 | Read/edit deadline | 60 seconds | Wrap-safe tick subtraction; cancellation closes handles and preserves recovery files. |
+
+The `*_DESCRIPTION` macros are the model-facing text of the caps above
+(`TOOLS_FILE_CAP_DESCRIPTION` and its companions); the registry schemas,
+`get_environment` and the one `TOOLS_SNAPSHOT_LIMIT_MESSAGE` refusal quote
+them, so a cap change never strands stale numbers in model-visible text. The
+host registry test fails if a description stops naming its cap.
 
 The two 64 KiB snapshots, 1 KiB verification scratch, 4 KiB strings and KMP
 prefix table replace the small editor buffers. Build inputs share one 128 KiB
