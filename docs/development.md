@@ -65,13 +65,28 @@ Certainly clone above:
 tools/check.sh
 tools/check-transport.sh
 tools/lint.sh
+tools/check-coverage.sh  # LLVM line/branch coverage gate; needs clang
 ```
 
 Set `CERTAINLY_DIR` if the clone is elsewhere. Without Certainly,
 `tools/check.sh` skips its network suite and `tools/check-transport.sh` fails.
 The host checks compile shared code with `cc` and regenerate
 `build/project-template.h`. The lint gate uses shellcheck, cppcheck and Ruff;
-CI installs all three. Full builds also regenerate `build/art.r`, so use
+CI installs all three.
+
+`tools/check-coverage.sh` measures line and branch coverage of the sources the
+host suites compile, using LLVM source-based coverage. It needs `clang` plus
+matching `llvm-profdata`/`llvm-cov` (macOS Command Line Tools, or
+`apt install clang-18 llvm-18`), runs the same `tools/check.sh` suites under
+`CHECK_COVERAGE=1`, and merges every suite into one per-file report. Coverage
+is the union over suites; the gate fails below the checked-in floors (92%
+lines, 67% branches over non-test sources; measured baseline 93.6% / 69.2%).
+Guest-only sources that cannot compile on the host (`main.c`) and staged
+Certainly code are excluded. Branch coverage is the emphasis because the
+suites exist for command and error paths; the report lists the weakest files
+first. Raise the floors deliberately.
+
+Full builds also regenerate `build/art.r`, so use
 `build.sh` rather than configuring CMake by hand in a fresh tree.
 
 ### Deployment
@@ -127,6 +142,7 @@ diagnostic built as its own CMake target; launch it in the guest and read
 | `SherclawkWriteCheck`, `SherclawkEditCheck`, `SherclawkSearchCheck`, `SherclawkInspectCheck` | The matching tool executors against the File Manager |
 | `SherclawkViewImageCheck` | `view_image` against the File Manager: a PNG at the size cap read in bounded steps, refusals and the vision gate |
 | `SherclawkMCPCheck` (`tools/mcp-check.c`) | MCP configuration, TLS initialize, discovery and a Tavily search; see [the MCP guide](mcp.md#protocol-diagnostic) |
+| `SherclawkTrashCheck` | `move_to_trash` against the real volume Trash: what `FindFolder` resolves, a pinned rename, destination identity, recovery and the fallback |
 | `SherclawkProjectCheck` | `create_project` publication, bytes and metadata |
 | `SherclawkBuildCheck`, `SherclawkRunCheck`, `SherclawkSelfBuildCheck`, `SherclawkSelfBuildStopCheck` | `build_project` / `run_application` through the native executor (`tools/build-check.c`) |
 | `SherclawkToolServerCheck`, `SherclawkNativeBuildCheck`, `SherclawkNativeBuildErrorCheck` | ToolServer channel and fixed native build, described below |
@@ -166,6 +182,10 @@ ssh "$SHARE_HOST" 'cat /srv/retro68/SherclawkEditCheck.log'
 APP=SherclawkInspectCheck tools/deploy-to-share.sh
 # Launch SherclawkInspectCheck in OS 9; retains alias/resource fixtures.
 ssh "$SHARE_HOST" 'cat /srv/retro68/SherclawkInspectCheck.log'
+APP=SherclawkTrashCheck tools/deploy-to-share.sh
+# Launch SherclawkTrashCheck in OS 9; retains its fixture folder and leaves the
+# moved item visible in the Trash. Record the resolution NOTES and RESULT line.
+ssh "$SHARE_HOST" 'cat /srv/retro68/SherclawkTrashCheck.log'
 ```
 
 The cursor matcher can mistake highlights in the lobster artwork for the arrow.

@@ -8,6 +8,7 @@
 #include "config.h"
 #include "build/project-template.h"
 #include <Files.h>
+#include <Folders.h>
 #include <Script.h>
 #include <Memory.h>
 #include <Gestalt.h>
@@ -121,7 +122,7 @@ static void environment(char *out, size_t cap)
     length=snprintf(out, cap, "{\"status\":\"ok\",\"os\":\"classic Mac OS\",\"system_version_hex\":\"%04lx\","
         "\"architecture\":\"PowerPC\",\"workspace\":%s,\"paths\":\"relative colon-separated\","
         "\"encoding\":\"MacRoman data fork to UTF-8\",\"read_only\":false,\"free_heap_bytes\":%ld,"
-        "\"tools\":[\"get_environment\",\"list_files\",\"read_text\",\"search_text\",\"write_text\",\"edit_text\",\"create_folder\",\"create_project\",\"build_project\",\"read_build_log\",\"run_application\",\"quit_application\",\"get_file_info\",\"resolve_alias\",\"list_processes\",\"list_fonts\",\"measure_text\",\"list_resources\",\"read_resource\",\"view_image\"],"
+        "\"tools\":[\"get_environment\",\"list_files\",\"read_text\",\"search_text\",\"write_text\",\"edit_text\",\"create_folder\",\"move_to_trash\",\"create_project\",\"build_project\",\"read_build_log\",\"run_application\",\"quit_application\",\"get_file_info\",\"resolve_alias\",\"list_processes\",\"list_fonts\",\"measure_text\",\"list_resources\",\"read_resource\",\"view_image\"],"
         "\"write_policy\":\"create_only_existing_parent\",\"folder_policy\":\"create_only_existing_parent\",\"write_max_bytes\":4096,"
         "\"edit_policy\":\"unique_exact_whole_revision_CR_backup\",\"edit_max_bytes\":%ld,"
         "\"edit_string_max_bytes\":%d,\"build_input_max_bytes\":%ld,\"descriptor_max_bytes\":%d,\"total_snapshot_max_bytes\":%ld,"
@@ -151,7 +152,7 @@ static void list(const char *s, const JsonToken *tokens, char *out, size_t cap)
     next = cursor;
     while (count < limit) {
         size_t pos = 0;
-        char kind[100];
+        char kind[160];
         memset(&pb, 0, sizeof(pb)); native[0] = 0;
         pb.hFileInfo.ioNamePtr = native; pb.hFileInfo.ioVRefNum = spec.vRefNum;
         pb.hFileInfo.ioDirID = dir; pb.hFileInfo.ioFDirIndex = (short)(next + 1);
@@ -163,8 +164,14 @@ static void list(const char *s, const JsonToken *tokens, char *out, size_t cap)
         }
         snprintf(child, sizeof(child), "%s%s%s", prefix, name, pb.hFileInfo.ioFlAttrib & 16 ? ":" : "");
         if (append(entry, sizeof(entry), &pos, "{\"path\":") || quote(entry, sizeof(entry), &pos, child)) break;
-        snprintf(kind, sizeof(kind), ",\"kind\":\"%s\",\"data_bytes\":%ld}",
-            pb.hFileInfo.ioFlAttrib & 16 ? "folder" : "file", pb.hFileInfo.ioFlAttrib & 16 ? 0L : (long)pb.hFileInfo.ioFlLgLen);
+        if (pb.hFileInfo.ioFlAttrib & 16) {
+            snprintf(kind, sizeof(kind), ",\"kind\":\"folder\",\"data_bytes\":0}");
+        } else {
+            char revision[48];
+            tools_catalog_revision(&pb, revision, sizeof(revision));
+            snprintf(kind, sizeof(kind), ",\"kind\":\"file\",\"data_bytes\":%ld,\"revision\":\"%s\"}",
+                (long)pb.hFileInfo.ioFlLgLen, revision);
+        }
         if (append(entry, sizeof(entry), &pos, kind)) break;
         if (at + pos + 150 >= cap) break;
         if (count) append(out, cap, &at, ",");
@@ -201,6 +208,15 @@ static void full_revision(const CInfoPBRec *pb, const char *bytes, long size, ch
 {
     snprintf(out, cap, "full-%08lx-%08lx-%08lx-%08lx", (unsigned long)pb->hFileInfo.ioDirID,
         (unsigned long)pb->hFileInfo.ioFlMdDat, (unsigned long)size, hash_bytes(bytes, size));
+}
+/* Catalog-only pin for destructive calls: a file that changed identity,
+ * modification date or either fork size since it was listed is refused. Never
+ * a content hash and never accepted as an edit revision. */
+void tools_catalog_revision(const CInfoPBRec *pb, char *out, size_t cap)
+{
+    snprintf(out, cap, "cat-%08lx-%08lx-%08lx-%08lx", (unsigned long)pb->hFileInfo.ioDirID,
+        (unsigned long)pb->hFileInfo.ioFlMdDat, (unsigned long)pb->hFileInfo.ioFlLgLen,
+        (unsigned long)pb->hFileInfo.ioFlRLgLen);
 }
 static int same_file(const CInfoPBRec *a, const CInfoPBRec *b)
 {
@@ -496,6 +512,38 @@ OSErr tools_resolve(const char *path, FSSpec *spec)
     }
     name[0] = (unsigned char)strlen(part); memcpy(name + 1, part, name[0]);
     return FSMakeFSSpec(parent.vRefNum, dir, name, spec);
+}
+/* Bounded depth-first catalog walk for a directory ID, filling its relative
+ * MacRoman path with a trailing colon. 512 entries or depth 8, then reports
+ * incompleteness rather than guessing. Shared with alias resolution. */
+int tools_find_dir(const FSSpec *spec, long dir, const char *prefix, long wanted,
+                   char *found, size_t cap, int depth, int *budget, int *complete)
+{
+    int index;
+    for (index = 1; *budget > 0; index++) {
+        CInfoPBRec pb;
+        Str255 name;
+        OSErr err;
+        char child[768];
+        size_t plen = strlen(prefix);
+        memset(&pb, 0, sizeof(pb)); name[0] = 0;
+        pb.hFileInfo.ioNamePtr = name; pb.hFileInfo.ioVRefNum = spec->vRefNum;
+        pb.hFileInfo.ioDirID = dir; pb.hFileInfo.ioFDirIndex = (short)index;
+        err = PBGetCatInfoSync(&pb);
+        if (err == fnfErr) return 0;
+        if (err) { *complete = 0; return 0; }
+        (*budget)--;
+        if (!(pb.hFileInfo.ioFlAttrib & 16)) continue;
+        if (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000) continue;
+        if (name[0] > 31 || plen + (size_t)name[0] + 2 > sizeof(child)) { *complete = 0; continue; }
+        memcpy(child, prefix, plen); memcpy(child + plen, name + 1, name[0]);
+        child[plen + name[0]] = ':'; child[plen + name[0] + 1] = 0;
+        if (pb.dirInfo.ioDrDirID == wanted) { snprintf(found, cap, "%s", child); return 1; }
+        if (depth < 8 && tools_find_dir(spec, pb.dirInfo.ioDrDirID, child, wanted, found, cap, depth + 1, budget, complete))
+            return 1;
+    }
+    *complete = 0;
+    return 0;
 }
 /* Stateless depth-first continuation. Catalog order must stay unchanged between
  * pages. Each call examines at most 64 entries and reads at most 8192 bytes;
@@ -1103,6 +1151,374 @@ static int create_folder(const AgentCall *call, const JsonToken *tokens, char *o
     }
     return 0;
 }
+/* ---------- Reversible delete: a same-volume rename into a Trash folder ----
+ * Sources are plain files pinned to a cat- catalog revision from list_files or
+ * get_file_info. The destination is the volume's Trash when it resolves on the
+ * same volume (on an AFP share, the AppleShare client's Network Trash Folder),
+ * else a journaled Sherclawk Trash folder in the workspace. Nothing is ever
+ * deleted outright and this tool never empties a Trash. */
+#define TRASH_MAX 8
+#define TRASH_FOLDER_NAME "Sherclawk Trash"
+typedef struct {
+    char path[512], revision[48], leaf[64];
+    FSSpec source;
+    long identity, data_size, resource_size;
+    unsigned long file_type, creator;
+} TrashItem;
+/* Worker01:buildjobs and its children are sealed build evidence, like the
+ * text tools' guard. */
+static int evidence_path(const char *path)
+{
+    static const char sealed[] = "worker01:buildjobs";
+    size_t i;
+    for (i = 0; i < sizeof(sealed) - 1 && path[i]; i++) {
+        unsigned char c = (unsigned char)path[i];
+        if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + 'a' - 'A');
+        if (c != (unsigned char)sealed[i]) return 0;
+    }
+    return i == sizeof(sealed) - 1 && (path[i] == 0 || path[i] == ':');
+}
+/* Nothing inside a Trash can be trashed again. Both roots sit at the workspace
+ * (volume) top level on this deployment. */
+static int trash_reserved_path(const char *path)
+{
+    static const char *const reserved[] = { "network trash folder", "sherclawk trash" };
+    size_t k;
+    for (k = 0; k < sizeof(reserved) / sizeof(reserved[0]); k++) {
+        size_t n = strlen(reserved[k]), i;
+        for (i = 0; i < n && path[i]; i++) {
+            unsigned char c = (unsigned char)path[i];
+            if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + 'a' - 'A');
+            if (c != (unsigned char)reserved[k][i]) break;
+        }
+        if (i == n && (path[i] == 0 || path[i] == ':')) return 1;
+    }
+    return 0;
+}
+static int revision_matches(const CInfoPBRec *pb, const char *expected)
+{
+    char actual[48];
+    tools_catalog_revision(pb, actual, sizeof(actual));
+    return !strcmp(actual, expected);
+}
+/* An item refusal names the failing path so a batch error is actionable; no
+ * journal record is written and nothing moved. */
+static int trash_refuse(char *out, size_t cap, const char *code, const char *message,
+                        const char *path, int native)
+{
+    char qp[1100], qm[512];
+    if (json_quote(path, qp, sizeof(qp)) < 0 || json_quote(message, qm, sizeof(qm)) < 0)
+        return fail(out, cap, "LIMIT", "Cannot encode the refusal.", native);
+    snprintf(out, cap, "{\"status\":\"error\",\"code\":\"%s\",\"moved\":0,\"failed\":%s,\"message\":%s,\"os_error\":%d}",
+        code, qp, qm, native);
+    return -1;
+}
+/* Validate one item without changing anything. 1 valid, 0 refused (out set). */
+static int trash_validate(TrashItem *item, char *out, size_t cap)
+{
+    CInfoPBRec pb;
+    OSErr err;
+    if (evidence_path(item->path) || trash_reserved_path(item->path)) {
+        trash_refuse(out, cap, "REFUSED", "Build evidence and Trash contents cannot be trashed.", item->path, 0); return 0;
+    }
+    err = tools_resolve(item->path, &item->source);
+    if (err) { trash_refuse(out, cap, "FILE", "Cannot resolve the workspace path.", item->path, err); return 0; }
+    err = catalog(&item->source, &pb);
+    if (err) { trash_refuse(out, cap, "FILE", "Cannot inspect the source file.", item->path, err); return 0; }
+    if (pb.hFileInfo.ioFlAttrib & 16) {
+        trash_refuse(out, cap, "NOT_FILE", "Only files can be trashed; folders are never moved.", item->path, 0); return 0;
+    }
+    if (pb.hFileInfo.ioFlFndrInfo.fdType == 'alis' || (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000)) {
+        trash_refuse(out, cap, "ALIAS", "Aliases are refused; trash the file itself, not an alias.", item->path, 0); return 0;
+    }
+    if (pb.hFileInfo.ioFlAttrib & 1) {
+        trash_refuse(out, cap, "LOCKED", "Locked files are refused; unlock the file first.", item->path, 0); return 0;
+    }
+    if (!revision_matches(&pb, item->revision)) {
+        trash_refuse(out, cap, "REVISION_MISMATCH", "The file changed since it was listed; list it again and retry.", item->path, 0); return 0;
+    }
+    item->identity = pb.hFileInfo.ioDirID;
+    item->data_size = pb.hFileInfo.ioFlLgLen;
+    item->resource_size = pb.hFileInfo.ioFlRLgLen;
+    item->file_type = pb.hFileInfo.ioFlFndrInfo.fdType;
+    item->creator = pb.hFileInfo.ioFlFndrInfo.fdCreator;
+    if (text_to_utf8((char *)item->source.name + 1, item->source.name[0], item->leaf, sizeof(item->leaf)) < 0) {
+        trash_refuse(out, cap, "ENCODING", "Filename conversion failed.", item->path, 0); return 0;
+    }
+    return 1;
+}
+/* The volume Trash for the source, accepted only when FindFolder reports it on
+ * the same volume; never a cross-volume copy. The classic Folder Manager API
+ * returns the folder's volume and directory ID, not a named FSSpec. */
+static OSErr trash_destination(const FSSpec *source, short *vref, long *dir)
+{
+    short found_vol = 0;
+    long found_dir = 0;
+    OSErr err = FindFolder(source->vRefNum, kTrashFolderType, 0, &found_vol, &found_dir);
+    if (err) return err;
+    if (found_vol != source->vRefNum || !found_dir) return paramErr;
+    *vref = found_vol; *dir = found_dir;
+    return 0;
+}
+/* The workspace fallback Trash, created once with its own journal records.
+ * 0 usable, 1 stop the run, -1 error with nothing moved. */
+static int trash_fallback(short *vref, long *dir, const char *call_id,
+                          AgentJournal journal, void *context, char *out, size_t cap)
+{
+    FSSpec trash;
+    CInfoPBRec pb;
+    OSErr err;
+    long created = 0;
+    char q[128], record[AGENT_RESULT_CAP], envelope[AGENT_RESULT_CAP + 1000];
+    err = tools_resolve(TRASH_FOLDER_NAME, &trash);
+    if (err && err != fnfErr) { fail(out, cap, "TRASH", "Cannot resolve the workspace trash folder.", err); return -1; }
+    err = catalog(&trash, &pb);
+    if (!err) {
+        if (!(pb.hFileInfo.ioFlAttrib & 16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000)) {
+            fail(out, cap, "TRASH", "The workspace trash name is not a folder.", 0); return -1;
+        }
+        *vref = trash.vRefNum; *dir = pb.dirInfo.ioDrDirID; return 0;
+    }
+    if (err != fnfErr) { fail(out, cap, "TRASH", "Cannot inspect the workspace trash folder.", err); return -1; }
+    if (json_quote(TRASH_FOLDER_NAME, q, sizeof(q)) < 0) { fail(out, cap, "JOURNAL", "Cannot encode the trash path.", 0); return 1; }
+    snprintf(record, sizeof(record), "{\"status\":\"pending\",\"code\":\"CREATE_FOLDER\",\"kind\":\"trash_folder\",\"path\":%s,\"os_error\":0}", q);
+    snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
+    if (journal(context, "mutation_intent", envelope)) { fail(out, cap, "JOURNAL", "Cannot record trash folder intent; nothing moved.", 0); return 1; }
+    err = FSpDirCreate(&trash, smSystemScript, &created);
+    if (err && err != dupFNErr) {
+        if (catalog(&trash, &pb)) { fail(out, cap, "TRASH_FAILED", "Trash folder creation failed; nothing moved.", err); return -1; }
+        snprintf(out, cap, "{\"status\":\"uncertain\",\"code\":\"TRASH_FOLDER_UNCERTAIN\",\"kind\":\"trash_folder\",\"path\":%s,\"os_error\":%d}", q, (int)err);
+        return 1;
+    }
+    err = FlushVol(NULL, trash.vRefNum);
+    if (!err) err = catalog(&trash, &pb);
+    if (err || !(pb.hFileInfo.ioFlAttrib & 16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000)) {
+        snprintf(out, cap, "{\"status\":\"uncertain\",\"code\":\"TRASH_FOLDER_UNVERIFIED\",\"kind\":\"trash_folder\",\"path\":%s,\"os_error\":%d}", q, (int)err);
+        return 1;
+    }
+    snprintf(record, sizeof(record), "{\"status\":\"ok\",\"code\":\"CREATED_FOLDER\",\"kind\":\"trash_folder\",\"path\":%s,\"os_error\":0}", q);
+    snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
+    *vref = trash.vRefNum; *dir = pb.dirInfo.ioDrDirID;
+    if (journal(context, "mutation_committed", envelope)) {
+        snprintf(out, cap, "{\"status\":\"uncertain\",\"code\":\"JOURNAL_AFTER_PUBLISH\",\"kind\":\"trash_folder\",\"path\":%s,\"os_error\":0}", q);
+        return 1;
+    }
+    return 0;
+}
+/* Collision-safe destination leaf inside the trash: the original name when
+ * free, else " n" suffixes that keep the 31-byte HFS limit. */
+static OSErr trash_target_name(short vref, long dir, const unsigned char *leaf, unsigned char *dest)
+{
+    FSSpec probe;
+    unsigned char base[32], candidate[32];
+    int n, stem;
+    memcpy(base, leaf, (size_t)leaf[0] + 1);
+    for (n = 0; n < 100; n++) {
+        OSErr err;
+        if (!n) {
+            memcpy(candidate, base, (size_t)base[0] + 1);
+        } else {
+            char suffix[8];
+            int sn = snprintf(suffix, sizeof(suffix), " %d", n + 1);
+            stem = base[0];
+            if (stem > 31 - sn) stem = 31 - sn;
+            candidate[0] = (unsigned char)(stem + sn);
+            memcpy(candidate + 1, base + 1, (size_t)stem);
+            memcpy(candidate + 1 + stem, suffix, (size_t)sn);
+        }
+        err = FSMakeFSSpec(vref, dir, candidate, &probe);
+        if (err == fnfErr) { memcpy(dest, candidate, (size_t)candidate[0] + 1); return 0; }
+        if (err) return err;
+    }
+    return dupFNErr;
+}
+/* Workspace-relative path of the trash folder, or a known fallback leaf when
+ * the bounded walk cannot place it inside the workspace. UTF-8 for results. */
+static void trash_folder_text(long dir, const char *fallback_leaf, char *out, size_t cap)
+{
+    FSSpec workspace;
+    CInfoPBRec pb;
+    char found[768];
+    int budget = 512, complete = 1;
+    if (!tools_workspace_root(&workspace) && !catalog(&workspace, &pb) &&
+        tools_find_dir(&workspace, pb.dirInfo.ioDrDirID, "", dir, found, sizeof(found), 0, &budget, &complete) &&
+        text_to_utf8(found, strlen(found), out, cap) >= 0) return;
+    if (fallback_leaf && text_to_utf8(fallback_leaf, strlen(fallback_leaf), out, cap) >= 0) return;
+    out[0] = 0;
+}
+static int trash_report(char *out, size_t cap, const char *status, const char *code,
+                        const char *folder, const TrashItem *items, int moved,
+                        const char *failed, int native)
+{
+    size_t at = 0;
+    char head[80], tail[64];
+    int i;
+    snprintf(head, sizeof(head), "{\"status\":\"%s\",\"code\":\"%s\",\"moved\":%d,\"trash\":", status, code, moved);
+    if (append(out, cap, &at, head) || quote(out, cap, &at, folder)) goto too_long;
+    if (failed) {
+        if (append(out, cap, &at, ",\"failed\":") || quote(out, cap, &at, failed)) goto too_long;
+    }
+    if (append(out, cap, &at, ",\"files\":[")) goto too_long;
+    for (i = 0; i < moved; i++) {
+        if (i && append(out, cap, &at, ",")) goto too_long;
+        if (append(out, cap, &at, "{\"path\":") || quote(out, cap, &at, items[i].path) ||
+            append(out, cap, &at, ",\"moved_as\":") || quote(out, cap, &at, items[i].leaf) ||
+            append(out, cap, &at, "}")) goto too_long;
+    }
+    snprintf(tail, sizeof(tail), "],\"os_error\":%d}", native);
+    if (append(out, cap, &at, tail)) goto too_long;
+    return 0;
+too_long:
+    fail(out, cap, "LIMIT", "Trash report exceeds the result capacity.", 0);
+    return -1;
+}
+static int move_to_trash(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap,
+                         AgentJournal journal, void *context)
+{
+    static TrashItem items[TRASH_MAX];
+    char call_id[800], qsrc[1100], folder[256], record[AGENT_RESULT_CAP], envelope[AGENT_RESULT_CAP + 1000];
+    char scratch[1100];
+    short trash_vref = 0;
+    long trash_dir = 0, need;
+    int count = 0, i, moved = 0, files_token, r, fallback = 0;
+    OSErr err;
+    if (valid_keys(call->arguments, tokens, "|files|")) {
+        fail(out, cap, "ARGUMENTS", "Expected only a files array of {path, revision} objects.", 0); return 0;
+    }
+    files_token = json_member(call->arguments, tokens, 0, "files");
+    if (files_token < 0 || tokens[files_token].type != JSON_ARRAY || files_token + 1 == tokens[files_token].next) {
+        fail(out, cap, "ARGUMENTS", "files must be a non-empty array of {path, revision} objects.", 0); return 0;
+    }
+    for (i = files_token + 1; i < tokens[files_token].next; i = tokens[i].next) {
+        TrashItem *item;
+        int k, keys = 0, path_token = -1, revision_token = -1;
+        if (tokens[i].type != JSON_OBJECT || count == TRASH_MAX) {
+            fail(out, cap, "ARGUMENTS", "At most 8 {path, revision} items are accepted, with no other fields.", 0); return 0;
+        }
+        item = &items[count];
+        memset(item, 0, sizeof(*item));
+        for (k = i + 1; k < tokens[i].next; k = tokens[k + 1].next) {
+            char key[32];
+            if (json_string(call->arguments, tokens, k, key, sizeof(key)) < 0) goto arguments;
+            keys++;
+            if (!strcmp(key, "path") && path_token < 0) path_token = k + 1;
+            else if (!strcmp(key, "revision") && revision_token < 0) revision_token = k + 1;
+            else goto arguments;
+        }
+        if (keys != 2 || path_token < 0 || revision_token < 0 ||
+            json_string(call->arguments, tokens, path_token, item->path, sizeof(item->path)) < 0 ||
+            json_string(call->arguments, tokens, revision_token, item->revision, sizeof(item->revision)) < 0)
+            goto arguments;
+        if (strncmp(item->revision, "cat-", 4)) goto arguments;
+        count++;
+    }
+    if (!count) { fail(out, cap, "ARGUMENTS", "files must be a non-empty array.", 0); return 0; }
+    if (!journal) { fail(out, cap, "JOURNAL", "Moving files requires a durable session journal.", 0); return 1; }
+    if (json_quote(call->id, call_id, sizeof(call_id)) < 0) {
+        fail(out, cap, "JOURNAL", "Cannot encode call identity.", 0); return 1;
+    }
+    for (i = 0; i < count; i++) {
+        if (!trash_validate(&items[i], out, cap)) return 0;
+        if (items[i].source.vRefNum != items[0].source.vRefNum) {
+            fail(out, cap, "CROSS_VOLUME", "All files in one batch must be on the same volume.", 0); return 0;
+        }
+    }
+    err = trash_destination(&items[0].source, &trash_vref, &trash_dir);
+    if (err) {
+        r = trash_fallback(&trash_vref, &trash_dir, call_id, journal, context, out, cap);
+        if (r > 0) return 1;
+        if (r < 0) return 0;
+        fallback = 1;
+    }
+    trash_folder_text(trash_dir, fallback ? TRASH_FOLDER_NAME : NULL, folder, sizeof(folder));
+    /* Refuse the whole batch before any rename when its report cannot fit. */
+    {
+        int n = json_quote(folder, scratch, sizeof(scratch));
+        if (n < 0) { fail(out, cap, "LIMIT", "Cannot encode the batch; nothing moved.", 0); return 0; }
+        need = 320 + n;
+    }
+    for (i = 0; i < count; i++) {
+        int n = json_quote(items[i].path, scratch, sizeof(scratch));
+        int m = json_quote(items[i].leaf, scratch, sizeof(scratch));
+        if (n < 0 || m < 0) { fail(out, cap, "LIMIT", "Cannot encode the batch; nothing moved.", 0); return 0; }
+        need += n + m + 48;
+    }
+    if (need > (long)cap) {
+        fail(out, cap, "LIMIT", "Batch report cannot fit the result budget; send fewer files.", 0); return 0;
+    }
+    for (i = 0; i < count; i++) {
+        TrashItem *item = &items[i];
+        FSSpec target;
+        CInfoPBRec pb, gone;
+        unsigned char target_name[32];
+        char qtrash[1100];
+        int rn;
+        err = catalog(&item->source, &pb);
+        if (err) {
+            trash_report(out, cap, "error", "FILE", folder, items, moved, item->path, err);
+            return 0;
+        }
+        if (!revision_matches(&pb, item->revision) || pb.hFileInfo.ioDirID != item->identity) {
+            trash_report(out, cap, "error", "REVISION_MISMATCH", folder, items, moved, item->path, 0);
+            return 0;
+        }
+        err = trash_target_name(trash_vref, trash_dir, item->source.name, target_name);
+        if (err) {
+            trash_report(out, cap, "error", "EXISTS", folder, items, moved, item->path, err);
+            return 0;
+        }
+        target = item->source;
+        target.vRefNum = trash_vref; target.parID = trash_dir;
+        memcpy(target.name, target_name, (size_t)target_name[0] + 1);
+        if (text_to_utf8((char *)target_name + 1, target_name[0], item->leaf, sizeof(item->leaf)) < 0) {
+            fail(out, cap, "ENCODING", "Filename conversion failed; nothing moved for this batch.", 0); return 0;
+        }
+        if (json_quote(item->path, qsrc, sizeof(qsrc)) < 0 ||
+            snprintf(scratch, sizeof(scratch), "%s%s", folder, item->leaf) >= (int)sizeof(scratch) ||
+            json_quote(scratch, qtrash, sizeof(qtrash)) < 0) {
+            fail(out, cap, "LIMIT", "Cannot encode the destination; nothing moved for this batch.", 0); return 0;
+        }
+        rn = snprintf(record, sizeof(record), "{\"status\":\"pending\",\"code\":\"MOVE_TO_TRASH\",\"kind\":\"move_to_trash\","
+            "\"path\":%s,\"trash_path\":%s,\"revision\":\"%s\",\"os_error\":0}", qsrc, qtrash, item->revision);
+        if (rn < 0 || rn >= (int)sizeof(record)) { fail(out, cap, "LIMIT", "Cannot encode the move record; nothing moved for this batch.", 0); return 0; }
+        rn = snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
+        if (rn < 0 || rn >= (int)sizeof(envelope)) { fail(out, cap, "LIMIT", "Cannot encode the move record; nothing moved for this batch.", 0); return 0; }
+        if (journal(context, "mutation_intent", envelope)) {
+            fail(out, cap, "JOURNAL", "Cannot record move intent; no more files moved.", 0); return 1;
+        }
+        /* One same-volume rename is the whole mutation. A rename error is only
+           certain when the same file is still at the source path; otherwise the
+           reply may have been lost, so verify the destination below instead of
+           claiming failure. */
+        err = FSpCatMove(&item->source, &target);
+        if (err && !catalog(&item->source, &gone) && gone.hFileInfo.ioDirID == item->identity) {
+            trash_report(out, cap, "error", err == dupFNErr ? "EXISTS" : "MOVE_FAILED", folder, items, moved, item->path, err);
+            return 0;
+        }
+        err = FlushVol(NULL, target.vRefNum);
+        if (!err) err = catalog(&target, &pb);
+        if (!err && (pb.hFileInfo.ioFlLgLen != item->data_size || pb.hFileInfo.ioFlRLgLen != item->resource_size ||
+            pb.hFileInfo.ioFlFndrInfo.fdType != item->file_type || pb.hFileInfo.ioFlFndrInfo.fdCreator != item->creator)) err = ioErr;
+        if (!err && !catalog(&item->source, &gone)) err = ioErr;
+        if (err) {
+            trash_report(out, cap, "uncertain", "MOVE_UNCERTAIN_INSPECT_PATHS", folder, items, moved + 1, NULL, err);
+            return 1;
+        }
+        moved++;
+        snprintf(record, sizeof(record), "{\"status\":\"ok\",\"code\":\"TRASHED\",\"kind\":\"move_to_trash\","
+            "\"path\":%s,\"trash_path\":%s,\"revision\":\"%s\",\"os_error\":0}", qsrc, qtrash, item->revision);
+        snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
+        if (journal(context, "mutation_committed", envelope)) {
+            trash_report(out, cap, "uncertain", "JOURNAL_AFTER_MOVE", folder, items, moved, NULL, 0);
+            return 1;
+        }
+    }
+    if (trash_report(out, cap, "ok", "TRASHED", folder, items, moved, NULL, 0) < 0) return 1;
+    return 0;
+arguments:
+    fail(out, cap, "ARGUMENTS", "Each item must be exactly {path, revision} with a cat- revision.", 0);
+    return 0;
+}
 /* Publish a complete, fixed template by one collision-safe folder rename.
  * Failed stages stay journaled for inspection; never reuse or roll them back. */
 static int project_result(char *out, size_t cap, const char *status, const char *code,
@@ -1247,6 +1663,7 @@ int tools_execute_recorded(const AgentCall *call, char *out, size_t cap, AgentJo
     else if (!strcmp(call->name, "edit_text")) return edit_text_begin(call,out,cap,journal,context,(uint32_t)TickCount());
     else if (!strcmp(call->name, "create_project")) return create_project(call, tokens, out, cap, journal, context);
     else if (!strcmp(call->name, "create_folder")) return create_folder(call, tokens, out, cap, journal, context);
+    else if (!strcmp(call->name, "move_to_trash")) return move_to_trash(call, tokens, out, cap, journal, context);
     else if (!strcmp(call->name, "get_file_info") || !strcmp(call->name, "resolve_alias") ||
              !strcmp(call->name, "list_processes") || !strcmp(call->name, "list_fonts") ||
              !strcmp(call->name, "measure_text") || !strcmp(call->name, "list_resources") ||

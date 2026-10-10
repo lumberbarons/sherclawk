@@ -13,35 +13,59 @@ WARN=(-Wall -Wextra -Werror -DSHERCLAWK_LARGE_TEXT_CHECK=1)
 if ! "${CC:-cc}" -dM -E -x c /dev/null 2>/dev/null | grep -q __clang__; then
     WARN+=(-Wno-format-truncation)
 fi
+SAN=("-fsanitize=address,undefined" -fno-omit-frame-pointer)
+# tools/check-coverage.sh sets CHECK_COVERAGE=1 to build profile-instrumented
+# binaries and keep each suite's raw profile for the aggregated report.
+COV=()
+COV_DIR=
+if [ "${CHECK_COVERAGE:-0}" = 1 ]; then
+    COV=(-fprofile-instr-generate -fcoverage-mapping)
+    COV_DIR="${CHECK_COVERAGE_DIR:-$HERE/build/coverage/profiles}"
+    mkdir -p "$COV_DIR"
+fi
+
+build_test() {
+    local name="$1"
+    shift
+    if [ -n "$COV_DIR" ]; then
+        "${CC:-cc}" -std=c99 -g -O1 "${SAN[@]}" "${COV[@]}" "$@" \
+            -o "$HERE/build/tests/$name"
+    else
+        "${CC:-cc}" -std=c99 -g -O1 "${SAN[@]}" "$@" \
+            -o "$HERE/build/tests/$name"
+    fi
+}
+
+run_test() {
+    local name="$1"
+    if [ -n "$COV_DIR" ]; then
+        LLVM_PROFILE_FILE="$COV_DIR/$name.profraw" "$HERE/build/tests/$name"
+    else
+        "$HERE/build/tests/$name"
+    fi
+}
+
 # Match the app build: SHERCLAWK_APP selects the User-Agent asserted by the test.
-"${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" \
-    -fsanitize=address,undefined -fno-omit-frame-pointer -DSHERCLAWK_APP=1 \
+build_test test-core "${WARN[@]}" -DSHERCLAWK_APP=1 \
     -I"$HERE" -I"$HERE/vendor" \
     "$HERE/tests/test_core.c" "$HERE/chat.c" "$HERE/json.c" "$HERE/text.c" \
-    "$HERE/vendor/http.c" -o "$HERE/build/tests/test-core"
-"$HERE/build/tests/test-core"
+    "$HERE/vendor/http.c"
+run_test test-core
 
-"${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror \
-    -fsanitize=address,undefined -fno-omit-frame-pointer -I"$HERE" \
-    "$HERE/tests/test_timing.c" "$HERE/timing.c" -o "$HERE/build/tests/test-timing"
-"$HERE/build/tests/test-timing"
+build_test test-timing -Wall -Wextra -Werror -I"$HERE" \
+    "$HERE/tests/test_timing.c" "$HERE/timing.c"
+run_test test-timing
 
 # Preferences parser/formatter: pure code, no Toolbox stubs needed.
-"${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror \
-    -fsanitize=address,undefined -fno-omit-frame-pointer -DSHERCLAWK_APP=1 \
-    -I"$HERE" \
-    "$HERE/tests/test_preferences.c" "$HERE/preferences.c" \
-    -o "$HERE/build/tests/test-preferences"
-"$HERE/build/tests/test-preferences"
+build_test test-preferences -Wall -Wextra -Werror -DSHERCLAWK_APP=1 -I"$HERE" \
+    "$HERE/tests/test_preferences.c" "$HERE/preferences.c"
+run_test test-preferences
 
 # MCP pure configuration/protocol/streaming fixtures, independent of keys.
-"${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" \
-    -fsanitize=address,undefined -fno-omit-frame-pointer \
-    -I"$HERE" -I"$HERE/vendor" \
+build_test test-mcp "${WARN[@]}" -I"$HERE" -I"$HERE/vendor" \
     "$HERE/tests/test_mcp.c" "$HERE/mcp_config.c" "$HERE/mcp_protocol.c" \
-    "$HERE/mcp_stream.c" "$HERE/json.c" "$HERE/text.c" "$HERE/vendor/http.c" \
-    -o "$HERE/build/tests/test-mcp"
-"$HERE/build/tests/test-mcp"
+    "$HERE/mcp_stream.c" "$HERE/json.c" "$HERE/text.c" "$HERE/vendor/http.c"
+run_test test-mcp
 
 # MCP editor text rules and the staged-replace store (File Manager fault model).
 "${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" \
@@ -61,94 +85,82 @@ fi
 # The network test needs a Certainly clone (fetch-only, see README).
 CERTAINLY_DIR="${CERTAINLY_DIR:-$HERE/../Certainly}"
 if [ -d "$CERTAINLY_DIR/include" ]; then
-    "${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" \
-        -fsanitize=address,undefined -fno-omit-frame-pointer \
+    build_test test-network "${WARN[@]}" \
         -I"$HERE" -I"$HERE/vendor" -I"$CERTAINLY_DIR/include" \
         -I"$HERE/vendor/host-tls/shim" \
-        "$HERE/tests/test_network.c" "$HERE/network.c" "$HERE/vendor/http.c" \
-        -o "$HERE/build/tests/test-network"
-    "$HERE/build/tests/test-network"
-    "${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" \
-        -fsanitize=address,undefined -fno-omit-frame-pointer \
+        "$HERE/tests/test_network.c" "$HERE/network.c" "$HERE/vendor/http.c"
+    run_test test-network
+    build_test test-mcp-client "${WARN[@]}" \
         -I"$HERE" -I"$HERE/vendor" -I"$CERTAINLY_DIR/include" \
         -I"$HERE/vendor/host-tls/shim" \
         "$HERE/tests/test_mcp_client.c" "$HERE/mcp_client.c" \
         "$HERE/mcp_config.c" "$HERE/mcp_protocol.c" "$HERE/mcp_stream.c" \
-        "$HERE/json.c" "$HERE/vendor/http.c" -o "$HERE/build/tests/test-mcp-client"
-    "$HERE/build/tests/test-mcp-client"
+        "$HERE/json.c" "$HERE/vendor/http.c"
+    run_test test-mcp-client
 else
     echo "skip: network test needs a Certainly clone at $CERTAINLY_DIR" >&2
     echo "      git clone --recursive --depth 1 https://github.com/minorbug/certainly.git Certainly" >&2
 fi
 
-"${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" \
-    -fsanitize=address,undefined -fno-omit-frame-pointer -I"$HERE" \
-    "$HERE/tests/test_base64.c" -o "$HERE/build/tests/test-base64"
-"$HERE/build/tests/test-base64"
+build_test test-base64 "${WARN[@]}" -I"$HERE" \
+    "$HERE/tests/test_base64.c"
+run_test test-base64
 
-"${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" \
-    -fsanitize=address,undefined -fno-omit-frame-pointer -I"$HERE" \
-    "$HERE/tests/test_agent.c" "$HERE/agent.c" "$HERE/json.c" "$HERE/text.c" \
-    -o "$HERE/build/tests/test-agent"
-"$HERE/build/tests/test-agent"
+build_test test-agent "${WARN[@]}" -I"$HERE" \
+    "$HERE/tests/test_agent.c" "$HERE/agent.c" "$HERE/json.c" "$HERE/text.c"
+run_test test-agent
 
-"${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" -Wno-multichar \
-    -fsanitize=address,undefined -fno-omit-frame-pointer \
+build_test test-tools "${WARN[@]}" -Wno-multichar \
     -I"$HERE/tests/toolbox" -I"$HERE" \
-    "$HERE/tests/test_tools.c" "$HERE/tools.c" "$HERE/inspect.c" "$HERE/view_image.c" "$HERE/json.c" "$HERE/text.c" \
-    -o "$HERE/build/tests/test-tools"
-"$HERE/build/tests/test-tools"
+    "$HERE/tests/test_tools.c" "$HERE/tools.c" "$HERE/inspect.c" "$HERE/view_image.c" \
+    "$HERE/json.c" "$HERE/text.c"
+run_test test-tools
 
-"${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" -USHERCLAWK_LARGE_TEXT_CHECK -Wno-multichar \
-    -fsanitize=address,undefined -fno-omit-frame-pointer \
+build_test test-text-gate "${WARN[@]}" -USHERCLAWK_LARGE_TEXT_CHECK -Wno-multichar \
     -I"$HERE/tests/toolbox" -I"$HERE" \
-    "$HERE/tests/test_text_gate.c" "$HERE/tools.c" "$HERE/inspect.c" "$HERE/view_image.c" "$HERE/json.c" "$HERE/text.c" \
-    -o "$HERE/build/tests/test-text-gate"
-"$HERE/build/tests/test-text-gate"
+    "$HERE/tests/test_text_gate.c" "$HERE/tools.c" "$HERE/inspect.c" "$HERE/view_image.c" \
+    "$HERE/json.c" "$HERE/text.c"
+run_test test-text-gate
 
-"${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" -Wno-multichar \
-    -fsanitize=address,undefined -fno-omit-frame-pointer \
+build_test test-jobs "${WARN[@]}" -Wno-multichar \
     -I"$HERE/tests/toolbox" -I"$HERE" \
-    "$HERE/tests/test_jobs.c" "$HERE/jobs.c" -o "$HERE/build/tests/test-jobs"
-"$HERE/build/tests/test-jobs"
+    "$HERE/tests/test_jobs.c" "$HERE/jobs.c"
+run_test test-jobs
 
-"${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" -Wno-multichar \
-    -fsanitize=address,undefined -fno-omit-frame-pointer \
+build_test test-build-project "${WARN[@]}" -Wno-multichar \
     -I"$HERE/tests/toolbox" -I"$HERE" \
-    "$HERE/tests/test_build_project.c" "$HERE/selfbuild.c" "$HERE/build_project.c" "$HERE/run_application.c" "$HERE/application_process.c" "$HERE/ae_dispatch.c" "$HERE/jobs.c" \
-    "$HERE/tools.c" "$HERE/inspect.c" "$HERE/view_image.c" "$HERE/json.c" "$HERE/text.c" -o "$HERE/build/tests/test-build-project"
-"$HERE/build/tests/test-build-project"
+    "$HERE/tests/test_build_project.c" "$HERE/selfbuild.c" "$HERE/build_project.c" \
+    "$HERE/run_application.c" "$HERE/application_process.c" "$HERE/ae_dispatch.c" \
+    "$HERE/jobs.c" "$HERE/tools.c" "$HERE/inspect.c" "$HERE/view_image.c" \
+    "$HERE/json.c" "$HERE/text.c"
+run_test test-build-project
 
-"${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" -Wno-multichar \
-    -fsanitize=address,undefined -fno-omit-frame-pointer \
+build_test test-selfbuild "${WARN[@]}" -Wno-multichar \
     -I"$HERE/tests/toolbox" -I"$HERE" \
     "$HERE/tests/test_selfbuild.c" "$HERE/selfbuild.c" "$HERE/build_project.c" \
-    "$HERE/run_application.c" "$HERE/application_process.c" "$HERE/ae_dispatch.c" "$HERE/jobs.c" "$HERE/tools.c" "$HERE/inspect.c" "$HERE/view_image.c" "$HERE/json.c" "$HERE/text.c" \
-    -o "$HERE/build/tests/test-selfbuild"
-"$HERE/build/tests/test-selfbuild"
+    "$HERE/run_application.c" "$HERE/application_process.c" "$HERE/ae_dispatch.c" \
+    "$HERE/jobs.c" "$HERE/tools.c" "$HERE/inspect.c" "$HERE/view_image.c" \
+    "$HERE/json.c" "$HERE/text.c"
+run_test test-selfbuild
 
-"${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" -Wno-multichar \
-    -fsanitize=address,undefined -fno-omit-frame-pointer \
+build_test test-quit-application "${WARN[@]}" -Wno-multichar \
     -I"$HERE/tests/toolbox" -I"$HERE" \
     "$HERE/tests/test_quit_application.c" "$HERE/selfbuild.c" "$HERE/build_project.c" \
-    "$HERE/run_application.c" "$HERE/application_process.c" "$HERE/ae_dispatch.c" "$HERE/toolserver.c" \
-    "$HERE/jobs.c" "$HERE/tools.c" "$HERE/inspect.c" "$HERE/view_image.c" "$HERE/json.c" "$HERE/text.c" \
-    -o "$HERE/build/tests/test-quit-application"
-"$HERE/build/tests/test-quit-application"
+    "$HERE/run_application.c" "$HERE/application_process.c" "$HERE/ae_dispatch.c" \
+    "$HERE/toolserver.c" "$HERE/jobs.c" "$HERE/tools.c" "$HERE/inspect.c" \
+    "$HERE/view_image.c" "$HERE/json.c" "$HERE/text.c"
+run_test test-quit-application
 
-"${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" -Wno-multichar \
-    -fsanitize=address,undefined -fno-omit-frame-pointer \
+build_test test-session "${WARN[@]}" -Wno-multichar \
     -I"$HERE/tests/toolbox" -I"$HERE" \
-    "$HERE/tests/test_session.c" "$HERE/session.c" "$HERE/agent.c" "$HERE/json.c" "$HERE/text.c" \
-    -o "$HERE/build/tests/test-session"
-"$HERE/build/tests/test-session"
+    "$HERE/tests/test_session.c" "$HERE/session.c" "$HERE/agent.c" \
+    "$HERE/json.c" "$HERE/text.c"
+run_test test-session
 
 # The starter's file output and self-render run against a modelled Toolbox
 # (tests/template); the scene, controls and real GWorld are guest-only.
-"${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" -Wno-multichar -Wno-deprecated-declarations \
-    -fsanitize=address,undefined -fno-omit-frame-pointer \
+build_test test-template "${WARN[@]}" -Wno-multichar -Wno-deprecated-declarations \
     -I"$HERE/tests/template" -I"$HERE/templates/ppc-toolbox" \
     "$HERE/tests/template/test_template.c" "$HERE/templates/ppc-toolbox/io.c" \
-    "$HERE/templates/ppc-toolbox/png.c" "$HERE/templates/ppc-toolbox/selfrender.c" \
-    -o "$HERE/build/tests/test-template"
-"$HERE/build/tests/test-template"
+    "$HERE/templates/ppc-toolbox/png.c" "$HERE/templates/ppc-toolbox/selfrender.c"
+run_test test-template
