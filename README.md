@@ -10,6 +10,10 @@ PowerPC Toolbox projects, compile them with the guest's MrC/PPCLink/Rez tools,
 and launch verified build artifacts. It uses native File Manager, Toolbox and
 Process Manager APIs, with a cooperative event loop and Stop controls.
 
+![Sherclawk running on Mac OS 9.2.2, replying to “Why code on Mac OS 9? Be cheeky.”](art/sherclawk-screenshot.png)
+
+*A real conversation in Sherclawk on Mac OS 9.2.2, cropped to the app window.*
+
 ## Current capabilities and limits
 
 - Sequential model/tool/result conversations with saved session journals and
