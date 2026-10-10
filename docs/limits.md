@@ -251,3 +251,29 @@ with `PROCESS_SNAPSHOT_DEADLINE` and no new authority. Quit observes once per tu
 (1800 ticks). The shared answer dispatcher has two callback slots and allocates
 return IDs 101–32767 without reuse during Sherclawk's lifetime; exhaustion
 prevents another send. These bounds do not change the model argument/result caps.
+
+## Cooperative large text (guest acceptance pending)
+
+| Constant (`text_limits.h`) | Value | Bounds |
+|---|---|---|
+| `TOOLS_FILE_CAP` | 65,536 encoded bytes | Original and edited static snapshots; experimental read/edit/build file maximum. |
+| `TOOLS_ACCEPTED_FILE_CAP` | 4,096 shipping / 65,536 acceptance | Same selected limit for validation, schemas and environment fields. |
+| `TOOLS_STRING_CAP` | 4,096 encoded bytes | Each replacement string and create-only write. |
+| `TOOLS_WORK_CHUNK` | 1,024 bytes/comparisons | Read, verify, splice, KMP prefix and match work per step. |
+| `TOOLS_DESCRIPTOR_CAP` | 4,096 bytes | Project descriptor, unchanged. |
+| `TOOLS_SNAPSHOT_CAP` | 131,072 bytes | Source arena and actual job aggregate, including descriptor, recipe and manifest. |
+| Read/edit deadline | 60 seconds | Wrap-safe tick subtraction; cancellation closes handles and preserves recovery files. |
+
+The two 64 KiB snapshots, 1 KiB verification scratch, 4 KiB strings and KMP
+prefix table replace the small editor buffers. Build inputs share one 128 KiB
+arena plus one terminator per input; no file-sized verification buffers are
+allocated. Sherclawk now requests 6 MiB minimum / 8 MiB preferred. The generated
+starter's partition remains unchanged. Guest heap headroom and timing evidence
+are pending; [the design](large-text.md) specifies the admission gate.
+
+On 2026-10-09 the large-text implementation linked at 561,152 bytes text,
+9,440 data and 2,922,856 bss: 3,493,448 total (3.33 MiB). Both `Sherclawk` and
+`SherclawkLargeTextCheck` had this footprint. This was measured with
+`powerpc-apple-macos-size` in the Retro68 Docker image. It excludes dynamic
+TLS/UI allocation and stack and does not establish guest heap headroom at the
+6 MiB minimum partition.

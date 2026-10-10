@@ -20,6 +20,7 @@
 #include "ae_model.c"
 /* Queued transport model: replies arrive only when explicitly released. */
 #ifndef TEST_REAL_TOOLSERVER
+#include "stepped-tools.h"
 static int ts_busy,ts_ready,ts_sends,ts_abandoned,ts_failure,ts_malformed,ts_send_error,ts_unreachable;
 static char ts_directory[256],ts_command[2048];
 OSErr toolserver_init(ToolServerLog log) { (void)log;return 0; }
@@ -111,6 +112,35 @@ static int record_file(long parent,const char *name,const char *bytes)
 {
     int i=add(parent,name,0);strcpy(files[i].bytes,bytes);files[i].size=(long)strlen(bytes);files[i].info.fdType='TEXT';return i;
 }
+static void large_build_checks(void)
+{
+    const char *one="{\"protocol\":2,\"toolchain\":\"mpw-ppc-v2\",\"sources\":[\"main.c\"],\"output\":\"sample\"}\r";
+    const char *two="{\"protocol\":2,\"toolchain\":\"mpw-ppc-v2\",\"sources\":[\"main.c\",\"other.c\"],\"output\":\"sample\"}\r";
+    int f,r,steps,snapshot;
+    f=fixture(one);files[f].size=65536;memset(files[f].bytes,'x',65536);r=2;
+    for(steps=0;r==2 && !build_journals && steps<300;steps++)r=build_project_step(result,sizeof(result),(uint32_t)steps+2,0);
+    assert(r==2 && build_journals);
+    /* The queue points at immutable arena bytes, even after source mutation. */
+    files[f].bytes[50000]='y';
+    for(;r==2 && entry("ready")<0 && steps<1000;steps++)r=build_project_step(result,sizeof(result),(uint32_t)steps+2,0);
+    snapshot=entry("input0.c");assert(r==2 && snapshot>=0 && files[snapshot].size==65536);
+    for(int k=0;k<65536;k++)assert(files[snapshot].bytes[k]=='x');
+    assert(build_project_step(result,sizeof(result),1001,1)==1);handles_closed();
+    f=fixture(one);files[f].size=65537;memset(files[f].bytes,'x',65537);r=2;
+    for(steps=0;r==2 && steps<300;steps++)r=build_project_step(result,sizeof(result),(uint32_t)steps+2,0);
+    assert(!r && strstr(result,"SNAPSHOT_SIZE_LIMIT") && !creates && !build_journals);
+    /* Both arena capacity and actual descriptor/recipe/manifest aggregate are
+     * refused before queue bootstrap, snapshot journals or job reservation. */
+    for(int other_size=65400;other_size<=65536;other_size+=136) {
+        queue_mode=1;f=fixture(two);files[f].size=65536;memset(files[f].bytes,'x',65536);
+        snapshot=add(files[f].parent,"other.c",0);files[snapshot].info.fdType='TEXT';
+        files[snapshot].size=other_size;memset(files[snapshot].bytes,'x',(size_t)other_size);r=2;
+        for(steps=0;r==2 && steps<500;steps++)r=build_project_step(result,sizeof(result),(uint32_t)steps+2,0);
+        assert(!r && strstr(result,"SNAPSHOT_SIZE_LIMIT") && !creates && !build_journals && entry("Worker01")<0);
+    }
+    queue_mode=0;
+    puts("PASS 64 KiB build inputs, immutable arena and aggregate limits before reservation");
+}
 /* Run a whole build through the native executor with ToolServer replies
  * released by hand: compile and link succeed, the linker's PEF is planted, and
  * the executor publishes success. A PEF without a resource fork is refused by
@@ -139,6 +169,7 @@ static void terminal_check(const char *good,int artifact_ok)
 #endif
 int main(void)
 {
+    large_build_checks();
     const char *good="{\"protocol\":2,\"toolchain\":\"mpw-ppc-v2\",\"sources\":[\"main.c\"],\"output\":\"sample\"}\r";
     char recipe[12288];int i,r,steps;
     assert(!build_project_recipe(good,recipe,sizeof(recipe)));

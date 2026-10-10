@@ -7,7 +7,9 @@ mkdir -p "$HERE/build/tests"
 # The host checks also run under GCC (the Linux CI runner): GCC warns about
 # intentional bounded-snprintf truncation into fixed-size Mac buffers, which
 # clang does not. Keep -Werror for every other diagnostic.
-WARN=(-Wall -Wextra -Werror)
+# Exercise the not-yet-advertised large-file path; shipping builds keep the
+# guest-verified limit until text_limits.h records acceptance.
+WARN=(-Wall -Wextra -Werror -DSHERCLAWK_LARGE_TEXT_CHECK=1)
 if ! "${CC:-cc}" -dM -E -x c /dev/null 2>/dev/null | grep -q __clang__; then
     WARN+=(-Wno-format-truncation)
 fi
@@ -81,6 +83,13 @@ fi
     "$HERE/tests/test_tools.c" "$HERE/tools.c" "$HERE/inspect.c" "$HERE/view_image.c" "$HERE/json.c" "$HERE/text.c" \
     -o "$HERE/build/tests/test-tools"
 "$HERE/build/tests/test-tools"
+
+"${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" -USHERCLAWK_LARGE_TEXT_CHECK -Wno-multichar \
+    -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -I"$HERE/tests/toolbox" -I"$HERE" \
+    "$HERE/tests/test_text_gate.c" "$HERE/tools.c" "$HERE/inspect.c" "$HERE/view_image.c" "$HERE/json.c" "$HERE/text.c" \
+    -o "$HERE/build/tests/test-text-gate"
+"$HERE/build/tests/test-text-gate"
 
 "${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" -Wno-multichar \
     -fsanitize=address,undefined -fno-omit-frame-pointer \

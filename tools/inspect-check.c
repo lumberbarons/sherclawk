@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "diagnostic-tools.h"
 static FILE *logfile;
 static AgentCall call;
 static char result[AGENT_RESULT_CAP];

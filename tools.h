@@ -2,6 +2,12 @@
 #ifndef SHERCLAWK_TOOLS_H
 #define SHERCLAWK_TOOLS_H
 #include "agent.h"
+#include <stdint.h>
+#include "text_limits.h"
+int read_text_begin(const AgentCall *, char *, size_t, AgentJournal, void *, uint32_t);
+int read_text_step(char *, size_t, uint32_t, int);
+int edit_text_begin(const AgentCall *, char *, size_t, AgentJournal, void *, uint32_t);
+int edit_text_step(char *, size_t, uint32_t, int);
 /* Host diagnostics simulate the File Manager and never resolve guest paths. */
 #ifndef SHERCLAWK_HOST
 #include <Files.h>
@@ -10,10 +16,12 @@ OSErr tools_resolve(const char *, FSSpec *);
 /* The configured workspace as a non-alias folder (bootstrap children). */
 OSErr tools_workspace_root(FSSpec *);
 #endif
-void tools_execute(const AgentCall *call, char *result, size_t cap);
-/* Nonzero means stop the run: recording failed or publication is uncertain. */
+int tools_execute(const AgentCall *call, char *result, size_t cap);
+/* 2 pending, 0 completed, 1 stop (recording failed or uncertain outcome). */
 int tools_execute_recorded(const AgentCall *call, char *result, size_t cap,
                            AgentJournal journal, void *context);
+const char *tools_text_phase(void);
+int tools_text_step(char *, size_t, uint32_t, int stop);
 int tools_validate_path(const char *path, int folder);
 /* Runtime workspace root (MacRoman, ends in ':'), compiled default unless the
  * app applies the saved preferences. Shared by tools, inspection and builds. */

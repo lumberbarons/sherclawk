@@ -85,7 +85,7 @@ static int exchange(int length)
 #ifdef SHERCLAWK_HOST
 /* Host transport validation uses an explicitly labeled fixture executor.
  * Guest builds link the actual Toolbox implementation instead. */
-void tools_execute(const AgentCall *call, char *out, size_t cap)
+int tools_execute(const AgentCall *call, char *out, size_t cap)
 {
     if (!strcmp(call->name, "get_environment"))
         snprintf(out, cap, "{\"status\":\"ok\",\"backend\":\"host diagnostic fixture\",\"workspace\":\"Retro68:\",\"read_only\":true}");
@@ -106,8 +106,10 @@ void tools_execute(const AgentCall *call, char *out, size_t cap)
     else if (!strcmp(call->name, "read_resource"))
         snprintf(out, cap, "{\"status\":\"ok\",\"type\":\"SIZE\",\"id\":-1,\"format\":\"hex\",\"hex\":\"0000001000000010\",\"truncated\":false}");
     else snprintf(out, cap, "{\"status\":\"error\",\"code\":\"UNKNOWN_TOOL\"}");
+    return 0;
 }
 #else
+#include "diagnostic-tools.h"
 static int native_checks(void)
 {
     AgentCall call;

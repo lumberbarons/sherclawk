@@ -14,6 +14,7 @@
 #include <Script.h>
 #include <stdio.h>
 #include <string.h>
+#include "diagnostic-tools.h"
 static FILE *logfile;
 static int records, failures;
 static AgentCall call;

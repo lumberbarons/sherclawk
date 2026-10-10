@@ -114,6 +114,8 @@ typedef enum {
     RUN_MODEL_REQUEST,   /* model HTTPS exchange in flight */
     RUN_TOOLS,           /* executing the model's tool calls in order */
     RUN_NEXT_REQUEST,    /* tools done; the next model request starts */
+    RUN_READ_TEXT,
+    RUN_EDIT_TEXT,
     RUN_BUILD,           /* build_project pending */
     RUN_QUIT,           /* quit_application pending */
     RUN_LAUNCH,          /* run_application pending */
@@ -1892,6 +1894,10 @@ typedef struct {
     const char *failure; /* stop reason when the step reports failure */
 } PendingTool;
 static const PendingTool kPendingTools[] = {
+    { RUN_READ_TEXT, "read_text", read_text_begin, read_text_step,
+      "Reading and verifying text...", "Text read stopped; no revision supplied." },
+    { RUN_EDIT_TEXT, "edit_text", edit_text_begin, edit_text_step,
+      "Staging and verifying exact edit...", "Edit stopped. Inspect retained recovery paths before continuing." },
     { RUN_BUILD, "build_project", build_project_begin, build_project_step,
       "Building snapshot with MPW ToolServer...",
       "Build observation stopped. Inspect retained snapshot and logs before another build." },
@@ -2285,6 +2291,8 @@ static void DriveChatStep(void)
     case RUN_IDLE: break;
     case RUN_CONTEXT_LOOKUP: StepContextLookup(); break;
     case RUN_NEXT_REQUEST: StartModelRequest(); break;
+    case RUN_READ_TEXT:
+    case RUN_EDIT_TEXT:
     case RUN_BUILD:
     case RUN_QUIT:
     case RUN_LAUNCH:

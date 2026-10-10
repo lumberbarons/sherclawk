@@ -4,6 +4,7 @@
 #include "tools.h"
 #include "view_image.h"
 #include "json.h"
+#include "text.h"
 #include "build/project-template.h"
 /* One folder plus every embedded project file. */
 #define PROJECT_FILES ((int)(sizeof(project_inputs)/sizeof(project_inputs[0])))
@@ -19,7 +20,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-static struct File { int used, dir; long parent, id; char name[32], bytes[20000]; long size, resource; FInfo info;
+#include "stepped-tools.h"
+static struct File { int used, dir; long parent, id; char name[32], bytes[65538]; long size, resource; FInfo info;
     unsigned long crdat, mddat; } files[64];
 static long positions[64];
 static int dir_error, dir_leftover, dir_race, touch_on_read;
@@ -27,6 +29,9 @@ static int short_write, bad_read, bad_close, rename_race, rename_error, publishe
 static int journals, fail_journal, creates;
 static int editing, renames, fault_rename, change_after_stage, stage_bad_read, stage_short_read, busy, swapped_publish;
 static int opens[64];
+static int io_reads,io_writes,io_closes,io_flushes,io_opens;
+static int fault_read,fault_write,fault_close,fault_flush,fault_open;
+static long largest_transfer;
 static size_t longest_temporary;
 static AgentCall call;
 static char result[AGENT_RESULT_CAP], args[AGENT_ARGUMENT_CAP];
@@ -109,11 +114,14 @@ OSErr FSpDirCreate(const FSSpec *s, short script, long *id)
 OSErr FSpOpenDF(const FSSpec *s, short mode, short *ref)
 {
     int i=find(s->parID,s->name); if(i<0)return fnfErr;
+    if(++io_opens==fault_open)return ioErr;
     if((mode==fsRdWrPerm && (busy || opens[i])) || opens[i]==fsRdWrPerm)return ioErr;
     opens[i]=mode; *ref=(short)i; positions[i]=0; return 0;
 }
 OSErr FSRead(short ref, long *n, void *out)
 {
+    if(*n>largest_transfer)largest_transfer=*n;
+    if(++io_reads==fault_read)return ioErr;
     if(*n>files[ref].size-positions[ref]) *n=files[ref].size-positions[ref];
     if(stage_short_read && *n && !strncmp(files[ref].name,"Sherclawk tmp",13)) --*n;
     memcpy(out,files[ref].bytes+positions[ref],(size_t)*n); positions[ref]+=*n;
@@ -123,12 +131,14 @@ OSErr FSRead(short ref, long *n, void *out)
 }
 OSErr FSWrite(short ref, long *n, const void *in)
 {
+    if(*n>largest_transfer)largest_transfer=*n;
+    if(++io_writes==fault_write)return ioErr;
     if(short_write && *n) --*n;
     assert(positions[ref]+*n<=(long)sizeof(files[ref].bytes)); memcpy(files[ref].bytes+positions[ref],in,(size_t)*n); positions[ref]+=*n; if(positions[ref]>files[ref].size)files[ref].size=positions[ref]; return 0;
 }
-OSErr FSClose(short ref) { opens[ref]=0; return bad_close ? ioErr : 0; }
+OSErr FSClose(short ref) { opens[ref]=0; return bad_close || ++io_closes==fault_close ? ioErr : 0; }
 OSErr SetFPos(short ref, short mode, long pos) { (void)mode; positions[ref]=pos; return 0; }
-OSErr FlushVol(const unsigned char *name, short vol) { (void)name;(void)vol;return published && flush_error ? ioErr : 0; }
+OSErr FlushVol(const unsigned char *name, short vol) { (void)name;(void)vol;return (published && flush_error) || ++io_flushes==fault_flush ? ioErr : 0; }
 OSErr FSpRename(const FSSpec *s, const unsigned char *name)
 {
     int i=find(s->parID,s->name); char dest[32]; assert(i>=0);
@@ -390,6 +400,8 @@ static void reset(void)
     short_write=bad_read=bad_close=rename_race=rename_error=published=flush_error=0;
     journals=fail_journal=creates=0;longest_temporary=0;
     editing=renames=fault_rename=change_after_stage=stage_bad_read=stage_short_read=busy=swapped_publish=0;
+    io_reads=io_writes=io_closes=io_flushes=io_opens=0;
+    fault_read=fault_write=fault_close=fault_flush=fault_open=0;largest_transfer=0;
     memset(opens,0,sizeof(opens));
     memset(&call,0,sizeof(call));strcpy(call.id,"write1");strcpy(call.name,"write_text");
     strcpy(call.arguments,"{\"path\":\"hello.c\",\"text\":\"caf\\u00e9\\r\\nline\\n\"}");
@@ -406,13 +418,14 @@ static void field(const char *name, char *out, size_t cap)
 }
 static void page_checks(void)
 {
-    static char decoded[AGENT_RESULT_CAP], rebuilt[4097];
+    static char decoded[AGENT_RESULT_CAP], rebuilt[16385],expected[16385];
     const unsigned char kinds[] = {'x', '"', '\\', '\t', '\r', 0xdb};
     int k;
     for (k=0;k<(int)sizeof(kinds);k++) {
-        long cursor=0; int pages=0, f;
+        long cursor=0; int pages=0, f;size_t reconstructed=0;
         reset();f=add(10,"hello.c",0);files[f].info.fdType='TEXT';
         memset(files[f].bytes,kinds[k],4096);files[f].size=4096;
+        if(k==0)for(int line_end=127;line_end<4096;line_end+=128)files[f].bytes[line_end]='\r';
         while(cursor<4096) {
             JsonToken t[128];int n;long next;
             strcpy(call.name,"read_text");
@@ -422,10 +435,13 @@ static void page_checks(void)
             n=json_string(result,t,json_member(result,t,0,"text"),decoded,sizeof(decoded));assert(n>0);
             next=strtol(result+t[json_member(result,t,0,"next_byte")].start,NULL,10);
             assert(next>cursor && next<=4096);
-            if(k==0) { assert(n==next-cursor);memcpy(rebuilt+cursor,decoded,(size_t)n); }
+            if(k==0)assert(n==next-cursor);
+            assert(reconstructed+(size_t)n<sizeof(rebuilt));memcpy(rebuilt+reconstructed,decoded,(size_t)n);reconstructed+=(size_t)n;
             cursor=next;assert(++pages<200);
         }
-        if(k==0) { assert(pages==4);assert(!memcmp(rebuilt,files[f].bytes,4096)); }
+        if(k==0)assert(pages==4);
+        assert(text_to_utf8(files[f].bytes,4096,expected,sizeof(expected))==(int)reconstructed);
+        assert(!memcmp(rebuilt,expected,reconstructed));
     }
     /* Page endings never divide CRLF, including when max_lines is reached. */
     reset();k=add(10,"hello.c",0);files[k].info.fdType='TEXT';
@@ -447,7 +463,8 @@ static int edit_setup(const char *source, const char *old, const char *replaceme
 }
 static void edit_checks(void)
 {
-    char backup[768], revision[80], updated[80], saved[AGENT_ARGUMENT_CAP], large[4098];
+    char backup[768], revision[80], updated[80], saved[AGENT_ARGUMENT_CAP];
+    static char large[65538];
     int i, b, j;
     i=edit_setup("caf\x8e\rreturn 0;\r","return 0;","return 1;\n/* caf\xc3\xa9 */\r\n");
     field("revision",revision,sizeof(revision)); /* read result still present */
@@ -491,14 +508,14 @@ static void edit_checks(void)
     }
     i=edit_setup("one\r","one","two");flush_error=1;assert(run() && strstr(result,"uncertain") && !strcmp(files[i].bytes,"one\r"));
     i=edit_setup("one\r","one","two");swapped_publish=1;assert(run() && strstr(result,"uncertain") && !strcmp(files[i].bytes,"one\r"));
-    memset(large,'x',4096);large[4095]='z';large[4096]=0;
+    memset(large,'x',65536);large[65535]='z';large[65536]=0;
     i=edit_setup(large,"z","y");field("revision",revision,sizeof(revision));strcpy(saved,call.arguments);
     strcpy(call.name,"read_text");strcpy(call.arguments,"{\"path\":\"hello.c\",\"start_byte\":3500}");tools_execute(&call,result,sizeof(result));assert(strstr(result,revision));
-    strcpy(call.name,"edit_text");strcpy(call.arguments,saved);assert(!run() && files[leaf("hello.c")].size==4096 && files[leaf("hello.c")].bytes[4095]=='y');
+    strcpy(call.name,"edit_text");strcpy(call.arguments,saved);assert(!run() && files[leaf("hello.c")].size==65536 && files[leaf("hello.c")].bytes[65535]=='y');
     edit_setup(large,"z","yy");assert(!run() && strstr(result,"LIMIT") && !creates);
-    i=edit_setup(large,"z","y");files[i].bytes[4096]='z';files[i].size=4097;assert(!run() && strstr(result,"LIMIT") && !creates);
+    i=edit_setup(large,"z","y");files[i].bytes[65536]='z';files[i].size=65537;assert(!run() && strstr(result,"LIMIT") && !creates);
     /* Guard includes bytes outside the displayed page, even at same size/date. */
-    large[4096]=0;i=edit_setup(large,"z","y");files[i].bytes[3500]='a';assert(!run() && strstr(result,"REVISION_MISMATCH") && !creates);
+    large[65536]=0;i=edit_setup(large,"z","y");files[i].bytes[3500]='a';assert(!run() && strstr(result,"REVISION_MISMATCH") && !creates);
     edit_setup("one\r","one","two");strcpy(call.arguments,"{\"path\":\"hello.c\",\"expected_revision\":\"scan-stale\",\"old_text\":\"one\",\"new_text\":\"two\"}");assert(!run() && strstr(result,"ARGUMENTS") && !creates);
     edit_setup("one\r","one","two");strcpy(call.arguments,"{\"path\":\"hello.c\",\"expected_revision\":\"full-x\",\"old_text\":\"one\",\"old_text\":\"two\",\"new_text\":\"x\"}");assert(!run() && strstr(result,"ARGUMENTS") && !creates);
     /* All three recovery paths must fit a result before creating any file. */
@@ -515,6 +532,125 @@ static void edit_checks(void)
       assert(!run() && strstr(result,"LIMIT") && !creates && !journals && !strcmp(files[i].bytes,"one\r"));
     }
     puts("PASS exact edit: whole-file/page guards, unique matches, backups, locks, encoding, limits, journal barriers and publication faults");
+}
+static void handles_closed(void)
+{ int k;for(k=0;k<64;k++)assert(!opens[k]); }
+static void large_text_checks(void)
+{
+    static char source[65538],pattern[4097];
+    const long sizes[]={0,4096,4097,16384,65536,65537};
+    int k,f,r,step,limit;char revision[80];
+    for(k=0;k<6;k++) {
+        reset();f=add(10,"hello.c",0);files[f].info.fdType='TEXT';files[f].size=sizes[k];
+        memset(files[f].bytes,'x',(size_t)sizes[k]);
+        strcpy(call.name,"read_text");strcpy(call.arguments,"{\"path\":\"hello.c\"}");
+        r=read_text_begin(&call,result,sizeof(result),NULL,NULL,0xfffffff0U);assert(r==2);
+        { int busy_result=edit_text_begin(&call,result,sizeof(result),journal,NULL,0xfffffff0U);
+          assert(busy_result==1 && strstr(result,"TEXT_BUSY")); }
+        for(step=0;r==2;step++) { assert(step<200);r=read_text_step(result,sizeof(result),16U,0); }
+        assert(!r && strstr(result,sizes[k]<=65536 ? "whole_file" : "scan"));
+        handles_closed();
+    }
+    /* A change outside the page with unchanged size/date during verification. */
+    reset();f=add(10,"hello.c",0);files[f].size=16384;files[f].info.fdType='TEXT';memset(files[f].bytes,'x',16384);
+    strcpy(call.arguments,"{\"path\":\"hello.c\"}");
+    assert(read_text_begin(&call,result,sizeof(result),NULL,NULL,1)==2);
+    for(k=0;k<16;k++)assert(read_text_step(result,sizeof(result),2,0)==2);
+    files[f].bytes[15000]='y';r=2;
+    while(r==2)r=read_text_step(result,sizeof(result),2,0);
+    assert(!r && strstr(result,"CHANGED"));handles_closed();
+    for(k=1;k<=32;k++) {
+        reset();f=add(10,"hello.c",0);files[f].info.fdType='TEXT';files[f].size=16384;memset(files[f].bytes,'x',16384);
+        fault_read=k;strcpy(call.name,"read_text");strcpy(call.arguments,"{\"path\":\"hello.c\"}");
+        assert(!run() && strstr(result,"\"code\":\"READ\""));handles_closed();
+    }
+    reset();f=add(10,"hello.c",0);files[f].info.fdType='TEXT';files[f].size=16384;memset(files[f].bytes,'x',16384);
+    fault_close=1;strcpy(call.name,"read_text");strcpy(call.arguments,"{\"path\":\"hello.c\"}");
+    assert(run()==1 && strstr(result,"CLOSE"));handles_closed();
+    /* Whole-snapshot line navigation beyond the old 8192-byte scan. */
+    memset(source,'x',16384);source[12000]='\r';source[16383]='z';source[16384]=0;
+    f=edit_setup(source,"z","y");strcpy(call.name,"read_text");strcpy(call.arguments,"{\"path\":\"hello.c\",\"start_line\":2}");
+    tools_execute(&call,result,sizeof(result));assert(strstr(result,"\"start_byte\":12001"));
+    /* A maximum pattern and long repetitive fallback chains. */
+    memset(pattern,'a',4096);pattern[4095]='b';pattern[4096]=0;
+    memset(source,'a',16384);source[16383]='b';source[16384]=0;
+    f=edit_setup(source,pattern,"z");assert(!run() && strstr(result,"EDITED"));
+    assert(files[leaf("hello.c")].size==12289 && files[leaf("hello.c")].bytes[12288]=='z');handles_closed();
+    /* Match straddles both the input and output chunk boundaries. */
+    memset(source,'x',4097);memcpy(source+1022,"unique",6);source[4097]=0;
+    f=edit_setup(source,"unique","");assert(!run() && files[leaf("hello.c")].size==4091);
+    assert(!memcmp(files[f].bytes,source,4097));handles_closed();
+    memset(source,'x',65536);memcpy(source,"unique",6);memcpy(source+65000,"unique",6);source[65536]=0;
+    edit_setup(source,"unique","y");assert(!run() && strstr(result,"AMBIGUOUS_MATCH") && !creates);
+    /* Stop and deadline at every observable phase, including tick wrap. */
+    memset(source,'x',4097);source[1023]='z';source[4097]=0;
+    edit_setup(source,"z","y");r=edit_text_begin(&call,result,sizeof(result),journal,NULL,0xfffffff0U);assert(r==2);
+    r=2;limit=0;while(r==2) { r=edit_text_step(result,sizeof(result),16U,0);assert(++limit<100); }
+    assert(!r);handles_closed();
+    for(k=0;k<limit;k++)for(int timeout=0;timeout<2;timeout++) {
+        f=edit_setup(source,"z","y");
+        r=edit_text_begin(&call,result,sizeof(result),journal,NULL,0xfffffff0U);assert(r==2);
+        for(step=0;step<k;step++)assert(edit_text_step(result,sizeof(result),16U,0)==2);
+        assert(edit_text_step(result,sizeof(result),timeout ? 0xfffffff0U+3600U : 16U,!timeout)==1);
+        assert(strstr(result,renames ? "uncertain" : "error"));
+        assert(!memcmp(files[f].bytes,source,4097));
+        if(!renames)assert(leaf("hello.c")==f);
+        handles_closed();assert(edit_text_step(result,sizeof(result),16U,1)==1);
+    }
+    for(k=0;k<35;k++) {
+        reset();f=add(10,"hello.c",0);files[f].info.fdType='TEXT';files[f].size=16384;memset(files[f].bytes,'x',16384);
+        strcpy(call.arguments,"{\"path\":\"hello.c\"}");assert(read_text_begin(&call,result,sizeof(result),NULL,NULL,42)==2);
+        for(step=0;step<k;step++)assert(read_text_step(result,sizeof(result),43,0)==2);
+        assert(read_text_step(result,sizeof(result),3642,0)==1);handles_closed();
+    }
+    /* Pending entry points themselves enforce the execution-evidence guard. */
+    reset();strcpy(call.arguments,"{\"path\":\"wOrKeR01:bUiLdJoBs:fake\"}");
+    r=edit_text_begin(&call,result,sizeof(result),journal,NULL,42);
+    assert(!r && strstr(result,"EXECUTION_EVIDENCE_READ_ONLY"));
+    /* Fail every transfer/open/close/flush, including later chunks. */
+    edit_setup(source,"z","y");io_reads=io_writes=io_closes=io_flushes=io_opens=0;largest_transfer=0;
+    assert(!run() && largest_transfer<=TOOLS_WORK_CHUNK);
+    { int counts[]={io_reads,io_writes,io_closes,io_flushes,io_opens};
+      for(int operation=0;operation<5;operation++)for(int failure=1;failure<=counts[operation];failure++) {
+          f=edit_setup(source,"z","y");io_reads=io_writes=io_closes=io_flushes=io_opens=0;
+          if(operation==0)fault_read=failure;
+          if(operation==1)fault_write=failure;
+          if(operation==2)fault_close=failure;
+          if(operation==3)fault_flush=failure;
+          if(operation==4)fault_open=failure;
+          r=run();assert(!strstr(result,"\"status\":\"ok\""));
+          if(renames)assert(r==1 && strstr(result,"uncertain"));
+          assert(!memcmp(files[f].bytes,source,4097));handles_closed();
+      }
+    }
+    /* Search continuations remain observational beyond the former 8 KiB
+     * prefix and at a scan boundary. */
+    reset();f=add(10,"hello.c",0);files[f].info.fdType='TEXT';files[f].size=65536;
+    memset(files[f].bytes,'x',65536);memcpy(files[f].bytes+8190,"needle",6);memcpy(files[f].bytes+50000,"needle",6);
+    { char cursor[160]="";int seen=0,pages=0;
+      do {
+          strcpy(call.name,"search_text");snprintf(call.arguments,sizeof(call.arguments),"{\"root\":\"\",\"query\":\"needle\",\"cursor\":\"%s\"}",cursor);
+          tools_execute(&call,result,sizeof(result));
+          assert(!strstr(result,"revision"));
+          if(strstr(result,"\"byte\":8190"))seen|=1;
+          if(strstr(result,"\"byte\":50000"))seen|=2;
+          assert(++pages<20);
+          if(strstr(result,"\"truncated\":false"))break;
+          field("next_cursor",cursor,sizeof(cursor));
+      } while(1);
+      assert(seen==3);
+    }
+    /* Invalid result capacity still closes an owned pending handle. */
+    reset();f=add(10,"hello.c",0);files[f].info.fdType='TEXT';files[f].size=1;files[f].bytes[0]='x';
+    strcpy(call.arguments,"{\"path\":\"hello.c\"}");assert(read_text_begin(&call,result,sizeof(result),NULL,NULL,42)==2);
+    assert(read_text_step(result,1,43,0)==1);handles_closed();
+    edit_setup("one\r","one","two");r=edit_text_begin(&call,result,sizeof(result),journal,NULL,42);assert(r==2);
+    assert(edit_text_step(result,1,43,0)==1);handles_closed();
+    /* Fresh readback tokens remain independent of a byte cursor. */
+    edit_setup("one\r","one","two");field("revision",revision,sizeof(revision));
+    assert(!run());strcpy(call.name,"read_text");strcpy(call.arguments,"{\"path\":\"hello.c\",\"start_byte\":2}");
+    tools_execute(&call,result,sizeof(result));assert(!strstr(result,revision));handles_closed();
+    puts("PASS large text: caps, verified snapshots, whole-file navigation, KMP boundaries, cancellation phases, wraparound and recovery handles");
 }
 static void search_checks(void)
 {
@@ -1122,6 +1258,7 @@ int main(void)
     puts("PASS native executor: create/read/collision, encoding, bounds, journal barriers, I/O faults, rename races and uncertain outcomes");
     page_checks();
     edit_checks();
+    large_text_checks();
     inspect_checks();
     view_checks();
     instruction_checks();
