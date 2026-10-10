@@ -4,6 +4,18 @@ Dated acceptance evidence for the OS 9 guest, host checks and live model runs,
 retained from earlier development. Entries describe the state on their recorded
 dates. Use the [current guides](../../README.md#documentation) for present behavior.
 
+Recorded October 10, 2026: `move_to_trash` was exercised in OS 9.2.2 against
+the AFP `Retro68` volume. Real sessions had failed every move with `-43` because
+`FSpCatMove` was given a file-named destination instead of the Trash directory
+(the host stub had modelled a move-and-rename). After the fix,
+`SherclawkTrashCheck` reported zero failures: `FindFolder(kTrashFolderType)`
+resolved on the same volume, a pinned fixture moved with `mutation_intent` and
+`mutation_committed` records, the source path was gone, the destination kept its
+data size, type/creator and empty resource fork, and the item moved back out of
+the Trash with its original bytes. A name already in the Trash is refused
+`EXISTS` (`-48`). Not exercised: the workspace fallback Trash and a batch of
+eight in the main app.
+
 Recorded October 9, 2026 (large text, **host/build evidence only; guest pending**):
 Clang and GCC 13 ASan/UBSan checks passed the 64 KiB read/edit and immutable
 build-arena fixtures, all transfer/open/close/flush fault positions in a
