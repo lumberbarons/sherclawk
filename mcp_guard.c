@@ -1,6 +1,7 @@
 #include "mcp_guard.h"
 #include "mcp.h"
 #include "mcp_store.h"
+#include "preferences.h"
 #include <Folders.h>
 #include <string.h>
 
@@ -36,7 +37,8 @@ static int named(const unsigned char *leaf_name, const char *base, const char *s
 int mcp_guard_protects(const McpGuard *guard, const FSSpec *spec)
 {
     if (spec->vRefNum != guard->vRefNum || spec->parID != guard->dirID) return 0;
-    return named(spec->name, MCP_CONFIG_FILENAME, "") ||
+    return named(spec->name, PREFS_FILENAME, "") ||
+           named(spec->name, MCP_CONFIG_FILENAME, "") ||
            named(spec->name, MCP_CONFIG_FILENAME, MCP_STORE_SUFFIX_NEW) ||
            named(spec->name, MCP_CONFIG_FILENAME, MCP_STORE_SUFFIX_OLD);
 }

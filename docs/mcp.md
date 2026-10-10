@@ -47,8 +47,9 @@ text and validation rules by `tests/test_mcp_editor.c`.
 
 The workspace confines the file tools, but a workspace may contain the
 Preferences folder.
-`mcp_guard.c` therefore protects the configuration and its `….json.new` and
-`….json.old` siblings by catalog identity: the Preferences folder's volume and
+`mcp_guard.c` therefore protects `Sherclawk Preferences`, which holds the
+OpenRouter key, and the configuration with its `….json.new` and `….json.old`
+siblings by catalog identity: the Preferences folder's volume and
 directory ID from `FindFolder`, plus the leaf name compared without case.
 `tools_resolve`, `list_files`, `search_text` and `resolve_alias` consult it, so
 every model-facing read, search, listing, alias, resource, image, create, edit,
@@ -56,7 +57,7 @@ folder and Trash path is refused or skips the file. The editor and the
 diagnostic are not model-facing and use their own paths. A refusal is code
 `PROTECTED` with `os_error` 30001 and fixed text with no path or credential; an
 unlocatable Preferences folder refuses every guarded call. The contract for
-tool callers is in [tools](tools.md#protected-mcp-configuration), following
+tool callers is in [tools](tools.md#protected-credential-files), following
 [ADR-0003](adr/0003-admit-tools-read-only-first.md); the host fixtures are in
 `tests/test_tools.c`, and `SherclawkMCPGuardCheck` exercises the real Preferences
 folder in the guest (see [evidence](history/verification.md#mcp-configuration-guard-october-10-2026)).

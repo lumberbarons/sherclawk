@@ -9,6 +9,10 @@
 #include "chat.h"
 #include "config.h"
 
+/* Leaf name in System Folder:Preferences. The save rewrites it in place and
+ * stages no sibling file. The model-facing file tools never reach it
+ * (mcp_guard.c). */
+#define PREFS_FILENAME "Sherclawk Preferences"
 #define PREFS_KEY_CAP 256
 #define PREFS_WORKSPACE_CAP 256
 #define PREFS_MAX_BYTES 4096
