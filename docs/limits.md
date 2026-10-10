@@ -255,7 +255,7 @@ by the same 8 KiB configuration cap.
 | Call deadline | 120 s | One sequential call, no retry. |
 | Cancellation grace | 5 s | Best-effort notification; never claims server work stopped. |
 | Network work | 4 × 2 KiB reads / step | Only one exchange is read per step. |
-| Processing work | 8 KiB units / step (`MCP_WORK_BUDGET`) | One received message is parsed, key-checked, classified and then initialized, discovered or call-checked. A step either reads or processes. |
+| Processing work | 8 KiB units / step (`MCP_WORK_BUDGET`) | One received message is parsed, key-checked, classified and then initialized, discovered or call-checked and redacted. A step either reads or processes. |
 
 Stop/deadline cleanup drains an outstanding OT connect before freeing its
 context, to avoid the known #34 early-abort crash. This cleanup may outlast the
@@ -279,7 +279,16 @@ work is linear in key bytes for any key set a server cannot target: each message
 seeds the hash from the tick count, so colliding keys cannot be precomputed. Descriptions are decoded, redacted
 (`McpRedact`, one comparison per unit) and quoted, and schemas are copied
 256 bytes per atom after their size is checked, so a schema that cannot fit
-is refused unread. The SSE decoder keeps no line buffer: each byte is O(1)
+is refused unread. Each copied schema, each tool name and the `result` or
+`error` of a call response are then redacted (see
+[credential redaction](mcp.md#credential-redaction)). Redaction never changes
+a length, so it adds nothing to the schema, result or message caps; its work is
+about the text length times the credentials (the session, each header value
+and its payload, each long query value) times the spellings searched (two in
+raw JSON, two in decoded text), so a 64 KiB result with one `Authorization`
+header costs a few hundred thousand units, and the cost grows linearly with the
+number of headers. A step still ends within 8 KiB; a configuration so large
+that the call deadline passes first fails the call and clears the message. The SSE decoder keeps no line buffer: each byte is O(1)
 and a `data` value goes straight into the 64 KiB message, which is handed back
 unprocessed. The matching response stays in that message buffer until the next
 exchange (`mcp_client_response`), replacing the former 64 KiB copy, the 64 KiB

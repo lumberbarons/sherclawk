@@ -15,7 +15,7 @@ static McpClient client;
 static McpConfig config;
 static int creates, closes, lists, calls, cancels, ping_replies, reads_in_step;
 static int connecting, stalled, bad_version, bad_status, tool_error, disconnect, with_ping, close_after_reply;
-static int big_reply, connect_aux, read_chunk = 3, processing_steps;
+static int big_reply, connect_aux, reflect, read_chunk = 3, processing_steps;
 static size_t max_work;
 static char error[256];
 MacTLS_Context *MacTLS_Create(const char *host, uint16_t port)
@@ -92,7 +92,8 @@ static void respond(MacTLS_Context *c)
         assert(scanned == 1);
         assert(strstr(body, "\"name\":\"tavily_search\""));
         assert(strstr(body, "\"arguments\":{\"query\":\"fixture\"}"));
-        snprintf(reply, sizeof(reply), "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"fixture\"}],\"isError\":%s}}", id, tool_error ? "true" : "false");
+        snprintf(reply, sizeof(reply), "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"%s\"}],\"isError\":%s}}", id,
+            reflect ? "echo Bearer client-secret-key and client-secret-key in opaque-session; kept \\u00e9" : "fixture", tool_error ? "true" : "false");
     }
     snprintf(c->response, sizeof(c->response), "HTTP/1.1 %s\r\nContent-Type: text/event-stream\r\n\r\n%sdata: %s\n\n", bad_status ? "500 Error" : "200 OK", with_ping && lists == 1 ? "data: {\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":\"ping-fixture\"}\n\n" : "", reply);
 }
@@ -131,9 +132,9 @@ static void reset(void)
     memset(&client, 0, sizeof(client)); memset(contexts, 0, sizeof(contexts));
     creates = closes = lists = calls = cancels = ping_replies = 0;
     connecting = stalled = bad_version = bad_status = tool_error = disconnect = with_ping = close_after_reply = 0;
-    big_reply = connect_aux = processing_steps = 0; read_chunk = 3; max_work = 0;
+    big_reply = connect_aux = reflect = processing_steps = 0; read_chunk = 3; max_work = 0;
     {
-        const char *s = "{\"mcpServers\":{\"tavily\":{\"url\":\"https://mcp.tavily.com/mcp/\"}}}";
+        const char *s = "{\"mcpServers\":{\"tavily\":{\"url\":\"https://mcp.tavily.com/mcp/\",\"headers\":{\"Authorization\":\"Bearer client-secret-key\"}}}}";
         assert(!mcp_config_parse(s, strlen(s), &config, error, sizeof(error)));
     }
 }
@@ -199,6 +200,13 @@ int main(void)
     assert(!mcp_client_call(&client, "mcp_tavily_tavily_search", "{\"query\":\"fixture\"}", 2000));
     for (i = 2000; i < 3000 && !step((unsigned long)i); i++) {}
     assert(client.state == MCP_COMPLETE && !client.call_error && calls == 1);
+    /* The response a caller can read has neither the credential nor the session ID. */
+    reset(); reflect = 1; ready();
+    assert(!mcp_client_call(&client, "mcp_tavily_tavily_search", "{\"query\":\"fixture\"}", 2000));
+    for (i = 2000; i < 3000 && !step((unsigned long)i); i++) {}
+    assert(client.state == MCP_COMPLETE && !client.call_error && calls == 1);
+    assert(!strstr(mcp_client_response(&client), "client-secret-key") && !strstr(mcp_client_response(&client), "opaque-session"));
+    assert(strstr(mcp_client_response(&client), "echo ************************ and ***************** in **************; kept \\u00e9"));
     /* A page near the message cap is parsed and key-checked in bounded steps. */
     reset(); big_reply = 1; read_chunk = 2048; ready();
     assert(max_work > 0 && max_work <= MCP_WORK_BUDGET && processing_steps >= 7);

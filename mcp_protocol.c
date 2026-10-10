@@ -9,8 +9,9 @@ enum {
     I_RESULT, I_PICKED, I_VERSION_DECODED, I_INFO_PICKED, I_NAME_DECODED, I_REVISION_DECODED, I_CAPS_PICKED,
     D_START, D_PICKED, D_CURSOR_DECODED, D_TOOL, D_FINISH,
     T_PICKED, T_NAME_DECODED, T_NAME_LONG, T_DUP, T_CHECK, T_ANNOTATION_PICKED, T_ELIGIBLE,
-    T_DESCRIPTION_BAD, T_DESCRIPTION_DECODED, T_REDACT, T_QUOTE, T_COMPOSE, T_COPY,
-    C_RESULT, C_HINT
+    T_NAME_REDACT, T_DESCRIPTION_BAD, T_DESCRIPTION_DECODED, T_REDACT, T_QUOTE, T_COMPOSE, T_COPY,
+    T_SCHEMA_REDACT,
+    C_RESULT, C_HINT, C_REDACT
 };
 static const char *const root_keys[] = {"jsonrpc", "id", "method", "result", "error"};
 static const char *const error_keys[] = {"code", "message"};
@@ -55,6 +56,9 @@ static void discard(McpRegistry *r, const char *reason)
     snprintf(r->notice, sizeof(r->notice), "MCP unavailable: %s.", reason);
 }
 static size_t room(size_t work, size_t budget) { return work >= budget ? 0 : budget - work; }
+/* The redactor spends its whole allowance and the transition after it costs a
+ * unit more, so keep one back (a step always makes progress, even at budget 1). */
+static size_t redact_room(size_t work, size_t budget) { return room(work, budget) > 1 ? room(work, budget) - 1 : 1; }
 /* Room for an atom of `need` units and the unit every transition costs. */
 static int fits(size_t work, size_t budget, size_t need) { return !work || work + need + 1 <= budget; }
 
@@ -120,6 +124,18 @@ static int skip(McpWork *w, const char *notice)
     if (notice) strcpy(w->registry->notice, notice);
     w->tool = w->tokens[w->tool].next;
     w->phase = D_TOOL;
+    return 0;
+}
+/* The result or error is the part of a call response the model can see. It is
+ * redacted in place, as raw JSON, when the caller supplied the writable
+ * message; everything outside it (the id, the version) is left alone. */
+static int begin_rewrite(McpWork *w)
+{
+    int body = w->root[ROOT_RESULT] >= 0 ? w->root[ROOT_RESULT] : w->root[ROOT_ERROR];
+    if (!w->rewrite || !w->config || body < 0) { w->phase = W_DONE; return 0; }
+    mcp_redact_init_text(&w->redact, w->config, w->session, w->rewrite + w->tokens[body].start,
+        (size_t)(w->tokens[body].end - w->tokens[body].start), 1);
+    w->phase = C_REDACT;
     return 0;
 }
 static const char *copy_piece(McpWork *w, int piece, size_t *length)
@@ -257,11 +273,16 @@ static int advance_phase(McpWork *w, size_t *work, size_t budget)
 
     case C_RESULT:
         w->call_error = root[ROOT_ERROR] >= 0;
-        if (!object_at(w, root[ROOT_RESULT])) { w->phase = W_DONE; return 0; }
+        if (!object_at(w, root[ROOT_RESULT])) return begin_rewrite(w);
         begin_pick(w, root[ROOT_RESULT], call_keys, 1, C_HINT);
         return 0;
     case C_HINT:
         if (true_at(w, w->pick.found[0])) w->call_error = 1;
+        return begin_rewrite(w);
+    case C_REDACT:
+        i = mcp_redact_step(&w->redact, redact_room(*work, budget));
+        *work += w->redact.work;
+        if (!i) return 1;
         w->phase = W_DONE;
         return 0;
 
@@ -321,12 +342,23 @@ static int advance_phase(McpWork *w, size_t *work, size_t budget)
         if (n < 0 || (size_t)n >= sizeof(w->mapped)) return skip(w, "Skipped MCP tool: mapped name exceeds 63 bytes.");
         for (i = 0; i < c->selected_count; i++) if (!strcmp(c->selected[i], w->name)) selected = 1;
         if (!selected) return skip(w, NULL);
+        /* A name that carries a credential cannot be shown, and cannot be
+         * rewritten either: the call must use it verbatim. */
+        strcpy(w->scratch, w->name);
+        mcp_redact_init_text(&w->redact, c, w->session, w->scratch, strlen(w->scratch), 0);
+        w->phase = T_NAME_REDACT;
+        return 0;
+    }
+    case T_NAME_REDACT:
+        i = mcp_redact_step(&w->redact, redact_room(*work, budget));
+        *work += w->redact.work;
+        if (!i) return 1;
+        if (strcmp(w->scratch, w->name)) return skip(w, "Skipped MCP tool: name contains a configured credential.");
         w->read_only = 0;
         if (w->held[1] < 0) { w->phase = T_ELIGIBLE; return 0; }
         if (!object_at(w, w->held[1])) return reject(w, "invalid annotations");
         begin_pick(w, w->held[1], annotation_keys, 1, T_ANNOTATION_PICKED);
         return 0;
-    }
     case T_ANNOTATION_PICKED:
         w->read_only = true_at(w, w->pick.found[0]);
         w->phase = T_ELIGIBLE;
@@ -339,18 +371,18 @@ static int advance_phase(McpWork *w, size_t *work, size_t budget)
         if (w->held[2] < 0 || t[w->held[2]].type != JSON_OBJECT) return skip(w, "Skipped MCP tool: unsupported input schema.");
         w->description[0] = 0;
         w->desc_len = 0;
-        if (w->held[3] < 0) { mcp_redact_init(&w->redact, c, NULL, w->description); w->phase = T_REDACT; return 0; }
+        if (w->held[3] < 0) { mcp_redact_init_text(&w->redact, c, w->session, w->description, 0, 0); w->phase = T_REDACT; return 0; }
         begin_decode(w, w->held[3], w->description, sizeof(w->description), T_DESCRIPTION_DECODED, T_DESCRIPTION_BAD, NULL);
         return 0;
     case T_DESCRIPTION_BAD:
         return skip(w, "Skipped MCP tool: unsupported description.");
     case T_DESCRIPTION_DECODED:
         w->desc_len = w->decode.used;
-        mcp_redact_init(&w->redact, c, NULL, w->description);
+        mcp_redact_init_text(&w->redact, c, w->session, w->description, w->desc_len, 0);
         w->phase = T_REDACT;
         return 0;
     case T_REDACT:
-        i = mcp_redact_step(&w->redact, room(*work, budget));
+        i = mcp_redact_step(&w->redact, redact_room(*work, budget));
         *work += w->redact.work;
         if (!i) return 1;
         w->quoted[0] = '"'; w->quoted_used = 1; w->quoted_at = 0;
@@ -397,12 +429,14 @@ static int advance_phase(McpWork *w, size_t *work, size_t budget)
         size_t length;
         const char *piece;
         if (w->piece == 5) {
-            r->schemas[r->schema_len + w->total] = 0;
-            r->schema_len += w->total;
-            strcpy(r->tools[r->count].name, w->mapped);
-            strcpy(r->tools[r->count].original, w->name);
-            r->count++;
-            return skip(w, NULL);
+            /* The input schema is the server's text, copied verbatim: its own
+             * descriptions, defaults, enums and keys are redacted as raw JSON
+             * before the schema is published (before schema_len moves). */
+            size_t offset = w->prefix_len + w->quoted_used + 14;
+            mcp_redact_init_text(&w->redact, c, w->session, r->schemas + r->schema_len + offset,
+                (size_t)(t[w->held[2]].end - t[w->held[2]].start), 1);
+            w->phase = T_SCHEMA_REDACT;
+            return 0;
         }
         if (!fits(*work, budget, COPY_CHUNK)) return 1;
         piece = copy_piece(w, w->piece, &length);
@@ -412,6 +446,16 @@ static int advance_phase(McpWork *w, size_t *work, size_t budget)
         if (w->piece_at == length) { w->piece++; w->piece_at = 0; }
         return 0;
     }
+    case T_SCHEMA_REDACT:
+        i = mcp_redact_step(&w->redact, redact_room(*work, budget));
+        *work += w->redact.work;
+        if (!i) return 1;
+        r->schemas[r->schema_len + w->total] = 0;
+        r->schema_len += w->total;
+        strcpy(r->tools[r->count].name, w->mapped);
+        strcpy(r->tools[r->count].original, w->name);
+        r->count++;
+        return skip(w, NULL);
     case D_FINISH:
         if (r->cursor[0] && (r->pages == MCP_PAGE_MAX || r->entries == MCP_ENTRY_MAX))
             return reject(w, "discovery budget exhausted");

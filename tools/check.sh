@@ -82,6 +82,13 @@ build_test test-mcp-work "${WARN[@]}" -I"$HERE" -I"$HERE/vendor" \
     "$HERE/json.c" "$HERE/text.c" "$HERE/vendor/http.c"
 run_test test-mcp-work
 
+# Credential redaction (decoded and JSON-escaped reflections) in schemas, names
+# and call results, against an independent reference.
+build_test test-mcp-redact "${WARN[@]}" -I"$HERE" -I"$HERE/vendor" \
+    "$HERE/tests/test_mcp_redact.c" "$HERE/mcp_config.c" "$HERE/mcp_protocol.c" \
+    "$HERE/json.c" "$HERE/text.c" "$HERE/vendor/http.c"
+run_test test-mcp-redact
+
 # MCP editor text rules and the staged-replace store (File Manager fault model).
 "${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" \
     -fsanitize=address,undefined -fno-omit-frame-pointer \

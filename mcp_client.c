@@ -232,6 +232,8 @@ int mcp_client_step(McpClient *c, unsigned long ticks)
             }
             mcp_work_init(&c->work, stages, &c->config, &c->registry, c->exchange.stream.message,
                 c->exchange.stream.message_len, c->id, c->reply, sizeof(c->reply), c->version, sizeof(c->version));
+            c->work.session = c->session;
+            c->work.rewrite = c->state == MCP_CALL ? c->exchange.stream.message : NULL;
             c->work.seed = (uint32_t)ticks * 2654435761u + (uint32_t)c->exchange.stream.message_len;
             c->working = 1;
             return 0;

@@ -30,18 +30,29 @@ typedef struct {
 int mcp_config_parse(const char *bytes, size_t len, McpConfig *out,
                      char *error, size_t error_cap);
 /* In-place, length-preserving credential redaction, including auth payloads.
- * mcp_redact runs to completion; McpRedact is the same search as resumable
- * steps of at most `budget` units (one text/needle comparison each), and
- * mcp_redact_step returns 1 once finished. */
+ * Each credential (and the session ID) is replaced by '*' wherever it appears
+ * in plain text and wherever it appears JSON-escaped (\" \\ \/ or \u00XX for
+ * any character), so decoded text that holds a copy of a JSON document is
+ * covered too. mcp_redact runs to completion on a NUL-terminated string.
+ * McpRedact is the same search as resumable steps of at most `budget` units
+ * (one text/needle comparison each); mcp_redact_step returns 1 once finished.
+ * mcp_redact_init_text takes a length, and with `json` set treats the text as
+ * raw JSON: only the inside of strings is searched, for the credential spelled
+ * as a JSON string spells it and as a JSON document inside that string spells
+ * it (two rounds of escaping). Matches never reach a quote, so the result
+ * parses to the same tokens. Deeper nesting and other encodings (URL, base64)
+ * are not matched. */
 void mcp_redact(const McpConfig *config, const char *session, char *text);
 typedef struct {
     const McpConfig *config;
     char *text;
     const char *needle;
-    int state, stage;
-    size_t at, scan, space, pos, k, work;
+    int state, stage, form, last, json, instr;
+    size_t at, scan, space, pos, k, tl, len, work;
 } McpRedact;
 void mcp_redact_init(McpRedact *r, const McpConfig *config, const char *session, char *text);
+void mcp_redact_init_text(McpRedact *r, const McpConfig *config, const char *session,
+                          char *text, size_t len, int json);
 int mcp_redact_step(McpRedact *r, size_t budget);
 typedef struct {
     char name[64], original[64];
@@ -66,7 +77,7 @@ enum {
     MCP_STAGE_CLASSIFY = 1,   /* strict RPC classification (rpc below) */
     MCP_STAGE_INITIALIZE = 2, /* initialize result: version and capabilities */
     MCP_STAGE_DISCOVER = 4,   /* one tools/list page into the registry */
-    MCP_STAGE_CALL = 8        /* tool-call result flags */
+    MCP_STAGE_CALL = 8        /* tool-call result flags; redacts `rewrite` */
 };
 typedef struct {
     int stages, active, phase, next, fail_phase, tool, list;
@@ -94,7 +105,15 @@ typedef struct {
     size_t work, peak, units;
     unsigned long steps;
     char name[64], mapped[64], prefix[160], scratch[1024];
-    uint32_t seed; /* set after mcp_work_init, before the first step; tests leave it 0 */
+    /* Set after mcp_work_init, before the first step; NULL/0 when unset.
+     * session: redacted like a credential from schemas, names and results.
+     * rewrite: the writable message `text` points to. The CALL stage replaces
+     * every credential in the result or error with '*' in place, so what
+     * remains is safe to retain; the caller must not keep a pre-redaction
+     * copy. seed: tests leave it 0. */
+    const char *session;
+    char *rewrite;
+    uint32_t seed;
     /* Everything above is cleared by mcp_work_init; the buffers below are
      * written before they are read. */
     char description[8192], quoted[16384];

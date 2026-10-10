@@ -191,24 +191,47 @@ int mcp_config_parse(const char *s, size_t len, McpConfig *c, char *err, size_t 
 }
 /* Resumable redaction: a naive search per needle, one text/needle comparison
  * per unit, so a long description cannot stall the event loop. Needles run in
- * the original order: the session, then each secret and its payload. */
+ * the original order: the session, then each secret and its payload. Each
+ * needle is searched in several forms, each a different number of rounds of
+ * JSON string escaping applied to it:
+ *   plain   decoded text as it is                          (decoded text only)
+ *   once    every character may be \" \\ \/ or \u00XX     (a JSON document
+ *           inside decoded text; the credential inside a string of raw JSON)
+ *   twice   the same applied to the once spelling          (a JSON document
+ *           inside a string of raw JSON)
+ * Raw JSON (r->json) is searched only inside strings, so quotes and structure
+ * are never touched. */
 enum { RED_SECRET, RED_MEASURE, RED_MATCH, RED_DONE };
 enum { STAGE_SESSION, STAGE_WHOLE, STAGE_PAYLOAD };
+enum { FORM_PLAIN, FORM_ONCE, FORM_TWICE };
+static void redact_restart(McpRedact *r)
+{
+    r->pos = 0; r->k = 0; r->tl = 0; r->instr = 0;
+}
 static void redact_begin(McpRedact *r, const char *needle, int stage)
 {
-    r->needle = needle; r->stage = stage; r->pos = 0; r->k = 0; r->state = RED_MATCH;
+    r->needle = needle; r->stage = stage; r->state = RED_MATCH;
+    r->form = r->json ? FORM_ONCE : FORM_PLAIN;
+    redact_restart(r);
 }
-void mcp_redact_init(McpRedact *r, const McpConfig *config, const char *session, char *text)
+void mcp_redact_init_text(McpRedact *r, const McpConfig *config, const char *session,
+                          char *text, size_t len, int json)
 {
     memset(r, 0, sizeof(*r));
-    r->config = config; r->text = text;
+    r->config = config; r->text = text; r->len = len; r->json = json;
+    r->last = json ? FORM_TWICE : FORM_ONCE;
     if (session) redact_begin(r, session, STAGE_SESSION);
     else r->state = RED_SECRET;
 }
-/* The current needle is exhausted: move on to the next one. */
+void mcp_redact_init(McpRedact *r, const McpConfig *config, const char *session, char *text)
+{
+    mcp_redact_init_text(r, config, session, text, strlen(text), 0);
+}
+/* The current needle is exhausted: its next form, else the next needle. */
 static void redact_next(McpRedact *r)
 {
     const char *value = r->config->secrets + r->at;
+    if (r->form < r->last) { r->form++; redact_restart(r); return; }
     if (r->stage == STAGE_SESSION) { r->state = RED_SECRET; return; }
     if (r->stage == STAGE_WHOLE && r->space && value[r->space]) {
         redact_begin(r, value + r->space, STAGE_PAYLOAD);
@@ -217,9 +240,70 @@ static void redact_next(McpRedact *r)
     r->at += r->scan + 1;
     r->state = RED_SECRET;
 }
+static int hex_value(char c)
+{
+    return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 :
+        c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+}
+/* Text consumed by `c` after one round of JSON string escaping, else 0. A
+ * quote or backslash only matches its escape; any ASCII character also
+ * matches its \u00XX spelling in either case of hex digit. */
+static size_t spell_once(const char *t, size_t left, char c)
+{
+    if (!left) return 0;
+    if (t[0] == c && c != '"' && c != '\\') return 1;
+    if (t[0] != '\\' || left < 2) return 0;
+    if (t[1] == c && (c == '"' || c == '\\' || c == '/')) return 2;
+    if (left >= 6 && (unsigned char)c < 0x80 && t[1] == 'u' && t[2] == '0' && t[3] == '0' &&
+        hex_value(t[4]) == ((unsigned char)c >> 4) && hex_value(t[5]) == (c & 15)) return 6;
+    return 0;
+}
+/* The same after two rounds: each character of a once spelling is escaped. */
+static size_t spell_hex(const char *t, size_t left, int value)
+{
+    size_t n;
+    if (value < 10) return spell_once(t, left, (char)('0' + value));
+    n = spell_once(t, left, (char)('a' + value - 10));
+    return n ? n : spell_once(t, left, (char)('A' + value - 10));
+}
+static size_t spell_twice(const char *t, size_t left, char c)
+{
+    size_t a, b, at;
+    if (c != '"' && c != '\\' && (a = spell_once(t, left, c)) != 0) return a;
+    if ((a = spell_once(t, left, '\\')) == 0) return 0;
+    if ((c == '"' || c == '\\' || c == '/') && (b = spell_once(t + a, left - a, c)) != 0) return a + b;
+    if ((unsigned char)c >= 0x80) return 0;
+    at = a;
+    if (!(b = spell_once(t + at, left - at, 'u'))) return 0;
+    at += b;
+    if (!(b = spell_once(t + at, left - at, '0'))) return 0;
+    at += b;
+    if (!(b = spell_once(t + at, left - at, '0'))) return 0;
+    at += b;
+    if (!(b = spell_hex(t + at, left - at, (unsigned char)c >> 4))) return 0;
+    at += b;
+    if (!(b = spell_hex(t + at, left - at, c & 15))) return 0;
+    return at + b;
+}
+static size_t spelled(const McpRedact *r, char c, size_t at)
+{
+    size_t left = at < r->len ? r->len - at : 0;
+    const char *t = r->text + at;
+    if (!left) return 0;
+    return r->form == FORM_PLAIN ? t[0] == c : r->form == FORM_ONCE ? spell_once(t, left, c) : spell_twice(t, left, c);
+}
+/* No match starts here: move to the next start, a whole escape at a time in
+ * raw JSON, and keep track of whether that is inside a string. */
+static void redact_slide(McpRedact *r)
+{
+    char c = r->text[r->pos];
+    if (r->json && r->instr && c == '\\') r->pos += 2;
+    else { if (r->json && c == '"') r->instr = !r->instr; r->pos++; }
+    r->k = 0; r->tl = 0;
+}
 int mcp_redact_step(McpRedact *r, size_t budget)
 {
-    size_t work = 0;
+    size_t work = 0, used;
     while (r->state != RED_DONE && work < budget) {
         const char *value = r->config->secrets + r->at;
         work++;
@@ -234,10 +318,15 @@ int mcp_redact_step(McpRedact *r, size_t budget)
             else { if (value[r->scan] == ' ' && !r->space) r->space = r->scan + 1; r->scan++; }
             break;
         default:
-            if (!r->needle[0] || !r->text[r->pos]) redact_next(r);
-            else if (!r->needle[r->k]) { memset(r->text + r->pos, '*', r->k); r->pos += r->k; r->k = 0; }
-            else if (r->text[r->pos + r->k] == r->needle[r->k]) r->k++;
-            else { r->pos++; r->k = 0; }
+            if (!r->needle[0] || r->pos >= r->len) redact_next(r);
+            else if (!r->needle[r->k]) {
+                memset(r->text + r->pos, '*', r->tl);
+                r->pos += r->tl; r->k = 0; r->tl = 0;
+            }
+            else if ((!r->json || r->instr) && (used = spelled(r, r->needle[r->k], r->pos + r->tl)) != 0) {
+                r->tl += used; r->k++;
+            }
+            else redact_slide(r);
         }
     }
     r->work = work;
