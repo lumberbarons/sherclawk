@@ -306,19 +306,30 @@ Each model round (and the handoff request) ends with one line of tick offsets
 since the request began, `-` for a phase never reached: `round=3 init=2
 connect=10 handshake=100 sent=104 first_byte=500 done=620 close=740 up=4096
 down=812 out=240/6000 reasoning=180 end=ok`. `close` includes the Open Transport
-teardown yields, `up` and `down` are request and response bytes, `out` is the
-provider-reported completion tokens against the request cap and `reasoning` the
-part of them spent reasoning (each omitted when the provider does not report it),
-`end=abort` marks a round that stopped early and `end=truncated` one cut off at
-the output limit and retried; `end=discarded` is a complete reply dropped for an
-oversized or excess tool call and retried. Each tool call logs `tool=<n> name=<tool> ticks=<elapsed>`; for
-`build_project` and `run_application` that spans the whole stepped operation.
+teardown yields on a completed round (an aborted round logs the abort instant;
+its drain and teardown follow), `up` and `down` are request and response bytes,
+`out` is the provider-reported completion tokens against the request cap and
+`reasoning` the part of them spent reasoning (each omitted when the provider
+does not report it), `end=abort` marks a round that stopped early and
+`end=truncated` one cut off at the output limit and retried; `end=discarded` is
+a complete reply dropped for an oversized or excess tool call and retried. Each
+tool call logs `tool=<n> name=<tool> ticks=<elapsed>`; for `build_project` and
+`run_application` that spans the whole stepped operation.
 
 The Open Transport teardown that dominates `close` is tunable at build time for
 guest soaks: `SHERCLAWK_OT_YIELD_TICKS` (default 10; it was 60) sets the yield on each side
 of `CloseOpenTransport`, and `SHERCLAWK_OT_KEEP_OPEN_AFTER_CLEAN=1` leaves OT
 open after a cleanly completed round (errors, aborts and quit still cycle it).
 Set either in `config.local.h`; the defaults keep the long-standing policy.
+
+Abort-mid-connect regression path: with `Sherclawk` running in the guest, send
+with Command-Return and issue Command-Period a fraction of a second later — the
+tightest reproducible stop is two QMP `send-key` chords about 15 ms apart. The
+abort line should carry `end=abort` with no `sent` tick (`connect=-` when the
+stop landed before the first TCP connect mark), the app must stay running, and
+a later request must still complete. Save Handoff and Command-Q during a
+request take the same drain. The recorded guest outcome is in the
+[verification history](history/verification.md#abort-mid-connect-drain-october-10-2026).
 
 ### Owned application Quit diagnostic
 

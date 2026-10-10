@@ -525,3 +525,49 @@ Preferences` file, which the guard does not cover (#170).
 Recorded October 10, 2026: the `Retro68:Older:` and `Retro68:Spikes:` archives
 named in the October 2 entries no longer exist on the AFP share; those entries
 describe the state on their recorded dates.
+
+## Abort mid-connect drain, October 10, 2026
+
+Issue #34's gate: an abort that fires while a request is still connecting must
+not tear the TLS context down mid-connect, because classic OT can fault on an
+outstanding async connect. Every abort branch (lookup, send, handoff) and quit
+now hand a live exchange to one bounded drain that closes it only once
+`network_step` reaches a terminal state; Send, Save Handoff, Preferences and
+MCP Servers report that the stopped request is still closing until it does.
+
+`Sherclawk` was Docker-built from the branch carrying the shared drain and
+published to the AFP share; local `build/Sherclawk.APPL` and the published app
+had the same SHA-256,
+`19e18d6178829ee1e454e55fa2cfafeae189d62ddcd3b4ee3dde3e766db714c4`.
+The OS 9.2.2 UTM guest ran `openai/gpt-6-luna` with the owner's saved
+Preferences. Command-Return sends and Command-Period stops; the tightest stops
+were two QMP `send-key` chords 15 ms apart, so the abort could land at tick 1,
+before the first TCP connect mark.
+
+The session log's abort lines show Stop landing at tick 17, 4, 1 and 2 after a
+send, the handoff stop at tick 4, and quit at tick 1. The `connect=-` lines are
+the pre-fix crash window — the close was deferred while the DNS/TCP connect was
+still outstanding:
+
+```text
+round=1 init=0 connect=3 handshake=- sent=- first_byte=- done=- close=4 up=0 down=0 end=abort
+round=1 init=0 connect=- handshake=- sent=- first_byte=- done=- close=1 up=0 down=0 end=abort
+round=1 init=0 connect=- handshake=- sent=- first_byte=- done=- close=2 up=0 down=0 end=abort
+handoff init=0 connect=- handshake=- sent=- first_byte=- done=- close=4 up=0 down=0 end=abort
+round=1 init=0 connect=- handshake=- sent=- first_byte=- done=- close=1 up=0 down=0 end=abort
+Agent stopped; completed records retained. Reason: Application quit.
+Sherclawk session ended.
+```
+
+Every abort left the app running with the `Stopped.` transcript entry; a send
+attempt during the drain was refused with `The stopped request is still
+closing; send again in a moment.`; after the drain a later request completed
+(`end=ok up=23093 down=5551`), and the handoff stop showed `Handoff stopped;
+conversation retained.` with a following `end=ok` round. Quitting while a
+request was still connecting drained and exited with `Sherclawk session ended.`
+and no crash. `tools/check.sh`, `tools/check-transport.sh` and `tools/lint.sh`
+passed on the branch.
+
+Not exercised: the send-time lookup's own 30 s deadline can still close before
+the transport timeout (filed as #182), and the pre-fix crash was not re-run as
+a control — #34 records it at three type-3 failures.

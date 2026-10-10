@@ -113,8 +113,11 @@ and leave these alone unless the contract and its tests change with it.
   Stop granularity. Model-visible page sizes are also a product decision: they
   change what the model sees per result and how many rounds a task takes.
 - Open Transport is fully cycled around every model request, because a failed
-  connection can wedge it for all later attempts. The yields around that cycle
-  are tunable and soaked; see the comment on `CloseChatContext` in `main.c` and
+  connection can wedge it for all later attempts. A live exchange is never
+  torn down mid-connect: aborts and quit drain it to a terminal network state
+  first (bounded at 30 seconds), because an outstanding async connect can
+  fault the classic OT stack. The yields around that cycle are tunable and
+  soaked; see the comment on `CloseChatContext` in `main.c` and
   [development](development.md).
 
 ## Preferences implementation notes
