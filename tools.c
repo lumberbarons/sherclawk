@@ -1338,32 +1338,14 @@ static int trash_fallback(short *vref, long *dir, AgentJournal journal, void *co
     }
     return 0;
 }
-/* Collision-safe destination leaf inside the trash: the original name when
- * free, else " n" suffixes that keep the 31-byte HFS limit. */
-static OSErr trash_target_name(short vref, long dir, const unsigned char *leaf, unsigned char *dest)
+/* FSpCatMove keeps the leaf and never renames, so a Trash that already holds
+ * the name is a refusal (dupFNErr) rather than a suffixed move. */
+static OSErr trash_leaf_free(short vref, long dir, const unsigned char *leaf)
 {
     FSSpec probe;
-    unsigned char base[32], candidate[32];
-    int n, stem;
-    memcpy(base, leaf, (size_t)leaf[0] + 1);
-    for (n = 0; n < 100; n++) {
-        OSErr err;
-        if (!n) {
-            memcpy(candidate, base, (size_t)base[0] + 1);
-        } else {
-            char suffix[8];
-            int sn = snprintf(suffix, sizeof(suffix), " %d", n + 1);
-            stem = base[0];
-            if (stem > 31 - sn) stem = 31 - sn;
-            candidate[0] = (unsigned char)(stem + sn);
-            memcpy(candidate + 1, base + 1, (size_t)stem);
-            memcpy(candidate + 1 + stem, suffix, (size_t)sn);
-        }
-        err = FSMakeFSSpec(vref, dir, candidate, &probe);
-        if (err == fnfErr) { memcpy(dest, candidate, (size_t)candidate[0] + 1); return 0; }
-        if (err) return err;
-    }
-    return dupFNErr;
+    OSErr err = FSMakeFSSpec(vref, dir, leaf, &probe);
+    if (!err) return dupFNErr;
+    return err == fnfErr ? 0 : err;
 }
 /* Workspace-relative path of the trash folder, or a known fallback leaf when
  * the bounded walk cannot place it inside the workspace. UTF-8 for results. */
@@ -1418,13 +1400,13 @@ static int trash_report(char *out, size_t cap, const char *status, const char *c
 }
 /* Refuse before any rename when any report this batch can produce would not
  * fit. The largest report formats every item with its longest possible trashed
- * name (the source name plus a " 100" collision suffix) under the longest
+ * name (the source name, which a move keeps) under the longest
  * status and code. */
 static int trash_report_fits(char *out, size_t cap, const char *folder, TrashItem *items, int count)
 {
     int i;
     for (i = 0; i < count; i++)
-        snprintf(items[i].moved_as, sizeof(items[i].moved_as), "%s 100", items[i].leaf);
+        snprintf(items[i].moved_as, sizeof(items[i].moved_as), "%s", items[i].leaf);
     if (trash_format(out, cap, "uncertain", "MOVE_UNCERTAIN_INSPECT_PATHS", folder, items, count, NULL, 0)) {
         fail(out, cap, "LIMIT", "Batch report cannot fit the result budget; send fewer files.", 0);
         return 0;
@@ -1446,21 +1428,24 @@ static int trash_stopped(TrashOutcome *o, const char *status, const char *code, 
 static int trash_commit_one(TrashItem *item, short trash_vref, long trash_dir, const char *folder,
                             AgentJournal journal, void *context, TrashOutcome *o)
 {
-    FSSpec target;
+    FSSpec target, trash_spec;
     CInfoPBRec pb, gone;
-    unsigned char target_name[32];
+    static const unsigned char no_name[1] = { 0 };
     OSErr err;
     int rn;
     err = catalog(&item->source, &pb);
     if (err) return trash_stopped(o, "error", "FILE", err, 0, 0);
     if (!revision_matches(&pb, item->revision) || pb.hFileInfo.ioDirID != item->identity)
         return trash_stopped(o, "error", "REVISION_MISMATCH", 0, 0, 0);
-    err = trash_target_name(trash_vref, trash_dir, item->source.name, target_name);
+    err = trash_leaf_free(trash_vref, trash_dir, item->source.name);
     if (err) return trash_stopped(o, "error", "EXISTS", err, 0, 0);
+    /* FSpCatMove takes the destination directory; an empty name with the
+       directory ID makes the Trash folder's own spec. */
+    err = FSMakeFSSpec(trash_vref, trash_dir, no_name, &trash_spec);
+    if (err) return trash_stopped(o, "error", "TRASH", err, 0, 0);
     target = item->source;
     target.vRefNum = trash_vref; target.parID = trash_dir;
-    memcpy(target.name, target_name, (size_t)target_name[0] + 1);
-    if (text_to_utf8((char *)target_name + 1, target_name[0], item->moved_as, sizeof(item->moved_as)) < 0)
+    if (text_to_utf8((char *)item->source.name + 1, item->source.name[0], item->moved_as, sizeof(item->moved_as)) < 0)
         return trash_stopped(o, "error", "ENCODING", 0, 0, 0);
     if (json_quote(item->path, trash_work.quoted, sizeof(trash_work.quoted)) < 0 ||
         snprintf(trash_work.path, sizeof(trash_work.path), "%s%s", folder, item->moved_as) >= (int)sizeof(trash_work.path) ||
@@ -1477,7 +1462,7 @@ static int trash_commit_one(TrashItem *item, short trash_vref, long trash_dir, c
        certain when the same file is still at the source path; otherwise the
        reply may have been lost, so verify the destination below instead of
        claiming failure. */
-    err = FSpCatMove(&item->source, &target);
+    err = FSpCatMove(&item->source, &trash_spec);
     if (err && !catalog(&item->source, &gone) && gone.hFileInfo.ioDirID == item->identity)
         return trash_stopped(o, "error", err == dupFNErr ? "EXISTS" : "MOVE_FAILED", err, 0, 0);
     err = FlushVol(NULL, target.vRefNum);

@@ -83,7 +83,8 @@ int main(void)
     logfile=fopen(SHERCLAWK_WORKSPACE "SherclawkTrashCheck.log","w");if(!logfile)return 1;
     memset(&call,0,sizeof(call));strcpy(call.id,"native-trash");
     snprintf(folder,sizeof(folder),"Sherclawk Trash Check %08lx",(unsigned long)TickCount());
-    snprintf(path,sizeof(path),"%s:fixture.c",folder);
+    /* A unique leaf: the Trash refuses a name it already holds. */
+    snprintf(path,sizeof(path),"%s:fx%08lx.c",folder,(unsigned long)TickCount());
     snprintf(arguments,sizeof(arguments),"{\"path\":\"%s\"}",folder);
     tool_call("create_folder",arguments);
     check(strstr(result,"CREATED_FOLDER")!=NULL,"fixture folder created");
@@ -141,12 +142,13 @@ int main(void)
                 after.hFileInfo.ioFlFndrInfo.fdCreator==creator_before,
                 "data size, type/creator and empty resource fork preserved");
             if(!err) {
-                FSSpec restored;
-                err=FSMakeFSSpec(ws.vRefNum,parent_id,(const unsigned char *)"\012restored.c",&restored);
-                if(!err)err=FSpCatMove(&moved,&restored);
+                FSSpec fixture_dir;
+                /* FSpCatMove takes the destination directory and keeps the name. */
+                err=FSMakeFSSpec(ws.vRefNum,parent_id,(const unsigned char *)"\p",&fixture_dir);
+                if(!err)err=FSpCatMove(&moved,&fixture_dir);
                 check(!err,"Trash item moved back to the fixture folder");
                 check(!catalog_at(folder,&after),"fixture folder still readable");
-                snprintf(dest,sizeof(dest),"%s:restored.c",folder);
+                snprintf(dest,sizeof(dest),"%s:%s",folder,leaf);
                 check(!catalog_at(dest,&after) && after.hFileInfo.ioFlLgLen==bytes_before,
                     "restored file reads back with the original bytes");
             }
