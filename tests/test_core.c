@@ -119,6 +119,9 @@ static void history(void)
     assert(strstr(error, "401") && strstr(error, "Invalid key") && !memcmp(&c, &snapshot, sizeof(c)));
     assert(chat_reply(err, strlen(err), 200, out, sizeof(out), &limited, error, sizeof(error)) == -1);
     assert(chat_reply("{\"choices\":[]}", 14, 200, out, sizeof(out), &limited, error, sizeof(error)) == -1);
+    /* A well-formed completion is still rejected on a non-2xx status. */
+    assert(chat_reply(ok, strlen(ok), 503, out, sizeof(out), &limited, error, sizeof(error)) == -1);
+    assert(strstr(error, "503") && !out[0] && !limited);
     assert(chat_reply("{}", 2, 503, out, sizeof(out), &limited, error, sizeof(error)) == -1);
     assert(chat_reply(ok, strlen(ok), 200, out, 3, &limited, error, sizeof(error)) == -1);
     strcpy(text, ok); { char *p = strstr(text, "stop"); memcpy(p, "xxxx", 4); }

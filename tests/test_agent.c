@@ -613,6 +613,14 @@ int main(void)
     assert(strstr(a.history, "Inspected."));
     used = a.used;
     assert(agent_response(&a, "{}", 2, 503, error, sizeof(error)) == -1 && a.used == used);
+    /* A well-formed completion is still rejected on a non-2xx status... */
+    assert(agent_response(&a, final, strlen(final), 503, error, sizeof(error)) == -1);
+    assert(strstr(error, "503") && a.used == used);
+    /* ...and an "error" object is rejected on a 2xx status, message preserved. */
+    assert(agent_response(&a, "{\"error\":{\"code\":429,\"message\":\"Upstream rate limited\"}}",
+                          strlen("{\"error\":{\"code\":429,\"message\":\"Upstream rate limited\"}}"),
+                          200, error, sizeof(error)) == -1);
+    assert(strstr(error, "200") && strstr(error, "Upstream rate limited") && a.used == used);
     assert(!agent_stop(&a, "network failed") && a.used == used);
     truncation();
     begin(); call("stop");
