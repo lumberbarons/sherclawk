@@ -100,6 +100,35 @@ static void encoding(void)
         assert(text_to_macroman(out, text, sizeof(text)) == 1 && (unsigned char)text[0] == i);
     }}
 }
+/* Parse a chat_request body and return its messages array, after pinning the
+ * literal model and the fixed request fields. */
+static int request_messages(int length, const char *model)
+{
+    char field[256];
+    int messages;
+    assert(length > 0 && json_parse(req, (size_t)length, tokens, 2048) > 0 && tokens[0].type == JSON_OBJECT);
+    assert(json_string(req, tokens, json_member(req, tokens, 0, "model"), field, sizeof(field)) >= 0 && !strcmp(field, model));
+    assert(json_member(req, tokens, 0, "stream") > 0 && !strncmp(req + tokens[json_member(req, tokens, 0, "stream")].start, "false", 5));
+    messages = json_member(req, tokens, 0, "messages");
+    assert(messages > 0 && tokens[messages].type == JSON_ARRAY);
+    return messages;
+}
+static int message_count(int messages)
+{
+    int at, n = 0;
+    for (at = messages + 1; at < tokens[messages].next; at = tokens[at].next) n++;
+    return n;
+}
+/* Message n of the array must carry exactly this role and content. */
+static void expect_message(int messages, int n, const char *role, const char *content)
+{
+    char field[256];
+    int at = messages + 1;
+    while (n-- > 0) at = tokens[at].next;
+    assert(at < tokens[messages].next && tokens[at].type == JSON_OBJECT);
+    assert(json_string(req, tokens, json_member(req, tokens, at, "role"), field, sizeof(field)) >= 0 && !strcmp(field, role));
+    assert(json_string(req, tokens, json_member(req, tokens, at, "content"), field, sizeof(field)) >= 0 && !strcmp(field, content));
+}
 static void history(void)
 {
     const char *ok = "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"marmalade\"}}]}";
@@ -107,13 +136,18 @@ static void history(void)
     int limited, i;
     char error[256];
     chat_reset(&c);
-    assert(chat_request(&c, "openai/gpt-6-luna", "Remember marmalade", req, sizeof(req)) > 0);
-    assert(json_parse(req, strlen(req), tokens, 2048) > 0);
+    i = request_messages(chat_request(&c, "openai/gpt-6-luna", "Remember marmalade", req, sizeof(req)), "openai/gpt-6-luna");
+    assert(message_count(i) == 1);
+    expect_message(i, 0, "user", "Remember marmalade");
     assert(chat_reply(ok, strlen(ok), 200, out, sizeof(out), &limited, error, sizeof(error)) == 0);
     assert(!limited && !strcmp(out, "marmalade"));
     assert(chat_commit(&c, "Remember marmalade", out, 0) == 0);
-    assert(c.messages == 2 && chat_request(&c, "other/model", "What word?", req, sizeof(req)) > 0);
-    assert(strstr(req, "Remember marmalade") && strstr(req, "assistant") && strstr(req, "What word?"));
+    assert(c.messages == 2);
+    i = request_messages(chat_request(&c, "other/model", "What word?", req, sizeof(req)), "other/model");
+    assert(message_count(i) == 3);
+    expect_message(i, 0, "user", "Remember marmalade");
+    expect_message(i, 1, "assistant", "marmalade");
+    expect_message(i, 2, "user", "What word?");
     snapshot = c;
     assert(chat_reply(err, strlen(err), 401, out, sizeof(out), &limited, error, sizeof(error)) == -1);
     assert(strstr(error, "401") && strstr(error, "Invalid key") && !memcmp(&c, &snapshot, sizeof(c)));
