@@ -99,9 +99,9 @@ int chat_commit(Chat *c, const char *prompt, const char *reply, int limited)
 {
     static char display[CHAT_TRANSCRIPT_CAP];
     static char user[CHAT_TRANSCRIPT_CAP], assistant[CHAT_TRANSCRIPT_CAP];
-    size_t at = 0, pn = strlen(prompt) + 1, rn = strlen(reply) + 1;
+    size_t at = 0, pn = strlen(prompt) + 1, rn = strlen(reply) + 1, old = strlen(c->transcript);
     int messages = c->messages;
-    if (messages + 2 > CHAT_MESSAGE_MAX || pn > sizeof(c->history) - c->used ||
+    if (messages + 2 > CHAT_MESSAGE_MAX || c->entries + 2 > CHAT_ENTRY_MAX || pn > sizeof(c->history) - c->used ||
         rn > sizeof(c->history) - c->used - pn ||
         text_to_macroman(prompt, user, sizeof(user)) < 0 ||
         text_to_macroman(reply, assistant, sizeof(assistant)) < 0) return -1;
@@ -120,12 +120,44 @@ int chat_commit(Chat *c, const char *prompt, const char *reply, int limited)
     }
     /* Every possible failure has been checked before mutating the history. */
     memcpy(c->transcript, display, at + 1);
+    c->entry_at[c->entries++] = old;
+    c->entry_at[c->entries++] = old + 5 + strlen(user) + 2;
     c->tool_end = 0;
     c->offsets[messages] = c->used;
     memcpy(c->history + c->used, prompt, pn); c->used += pn;
     c->offsets[messages + 1] = c->used;
     memcpy(c->history + c->used, reply, rn); c->used += rn;
     c->messages += 2; return 0;
+}
+
+#define TRANSCRIPT_MAX_LINES 1400
+static const char kEarlier[] = "[Earlier conversation is saved in the session file.]\r\r";
+
+/* Make room for an entry of `need` bytes and `lines` total lines by dropping
+ * whole leading entries behind one session-file notice. The fewest bytes go;
+ * if no cut is enough, only the notice remains. Entry starts move with the
+ * text. Returns the new transcript length. */
+static size_t transcript_make_room(Chat *c, size_t at, size_t lines, size_t need)
+{
+    char *t = c->transcript;
+    size_t notice = sizeof(kEarlier) - 1, start = 0, cut, keep, crs = 0, i;
+    int k = 0, kept = 0;
+    if (at >= notice && !memcmp(t, kEarlier, notice)) start = notice;
+    for (i = 0; i < start; i++) if (t[i] == 13) crs++;
+    for (cut = start;;) {
+        while (k < c->entries && c->entry_at[k] < cut) k++;
+        if (notice + (at - cut) + need < sizeof(c->transcript) &&
+            lines + 2 - crs <= TRANSCRIPT_MAX_LINES && c->entries - k < CHAT_ENTRY_MAX) { keep = cut; break; }
+        if (cut >= at) { keep = at; break; }
+        while (k < c->entries && c->entry_at[k] <= cut) k++;
+        for (i = k < c->entries ? c->entry_at[k] : at; cut < i; cut++) if (t[cut] == 13) crs++;
+    }
+    for (k = 0; k < c->entries; k++)
+        if (c->entry_at[k] >= keep) c->entry_at[kept++] = c->entry_at[k] - keep + notice;
+    c->entries = kept;
+    memmove(t + notice, t + keep, at - keep + 1);
+    memcpy(t, kEarlier, notice);
+    return notice + at - keep;
 }
 
 /* Bounded transcript display; UTF-8 input, MacRoman/CR output. */
@@ -147,12 +179,12 @@ long chat_append_message(Chat *chat, const char *label, const char *text)
         }
         lines += own_lines;
     }
-    if (at + len + prefix + 8 >= sizeof(chat->transcript) || lines > 1400) {
-        strcpy(chat->transcript, "[Earlier conversation is saved in the session file.]\r\r");
-        at = strlen(chat->transcript);
-    }
+    if (at + len + prefix + 8 >= sizeof(chat->transcript) || lines > TRANSCRIPT_MAX_LINES ||
+        chat->entries >= CHAT_ENTRY_MAX)
+        at = transcript_make_room(chat, at, lines, len + prefix + 8);
     if (prefix + len + 5 >= sizeof(chat->transcript) - at) return -1;
     if (prefix) { strcpy(chat->transcript + at, label); strcat(chat->transcript, ":\r"); }
     strcat(chat->transcript, display); strcat(chat->transcript, "\r\r");
+    chat->entry_at[chat->entries++] = at;
     return (long)at;
 }

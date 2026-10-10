@@ -751,7 +751,8 @@ static int write_text(const AgentCall *call, const JsonToken *tokens, char *out,
                       AgentJournal journal, void *context)
 {
     static char utf8[AGENT_ARGUMENT_CAP], bytes[TOOLS_STRING_CAP+1], observed[4097];
-    char path[512], temporary[768], tempname[32], revision[80] = "", record[AGENT_RESULT_CAP];
+    static char record[AGENT_RESULT_CAP]; /* static: the application stack is small */
+    char path[512], temporary[768], tempname[32], revision[80] = "";
     char call_id[800];
     FSSpec target, stage;
     CInfoPBRec pb;
@@ -1158,7 +1159,8 @@ static int create_verified_folder(FSSpec *target, int accept_existing, long *dir
 static int create_folder(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap,
                          AgentJournal journal, void *context)
 {
-    char path[512], q[1100], record[AGENT_RESULT_CAP], call_id[800];
+    static char record[AGENT_RESULT_CAP]; /* static: the application stack is small */
+    char path[512], q[1100], call_id[800];
     FSSpec target;
     OSErr err;
     long dir = 0;
@@ -1605,8 +1607,9 @@ static OSErr project_file(FSSpec *file, const char *bytes, int create)
 static int create_project(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap,
                           AgentJournal journal, void *context)
 {
+    static char record[AGENT_RESULT_CAP]; /* static: the application stack is small */
     char path[512], temporary[768], local[256], child[800], tempname[32];
-    char record[AGENT_RESULT_CAP], call_id[800];
+    char call_id[800];
     FSSpec target, stage, file;
     CInfoPBRec pb;
     OSErr err;

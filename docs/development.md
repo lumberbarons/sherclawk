@@ -339,7 +339,7 @@ experimental 64 KiB file/input cap; shipping `Sherclawk_APPL` remains gated at
 4 KiB. `SherclawkEditCheck` writes 16/64 KiB native fixtures and logs step/phase
 ticks, heap headroom, exact backups/replacements and fresh revisions.
 `SherclawkBuildCheck` repairs an exactly 64 KiB input and builds a new immutable
-snapshot with ToolServer. Set the diagnostic's partition to the 6 MiB minimum
+snapshot with ToolServer. Set the diagnostic's partition to the 10 MiB minimum
 before measuring. Preserve logs, journals and backups. See
 [the complete acceptance procedure](large-text.md); do not set
 `SHERCLAWK_LARGE_TEXT_VERIFIED` until guest evidence is recorded.

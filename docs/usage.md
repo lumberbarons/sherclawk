@@ -158,13 +158,15 @@ new chat to read the saved Markdown path displayed when it was created.
 
 Limits are explicit: by default 32 model rounds and 64 executed calls per run,
 each adjustable 1–128 in Preferences; four calls per
-response, 8 KiB arguments per call, 384 KiB history, 416 KiB JSON request, 64 KiB
+response, 8 KiB arguments per call, 1 MiB history, 1,056 KiB JSON request, 64 KiB
 raw HTTP response, 40 KiB of reply text, and 6,000 output tokens per model request (`AGENT_MAX_TOKENS`
 in `agent.h`; the handoff request has its own `AGENT_HANDOFF_MAX_TOKENS`). Reasoning
-tokens count against that budget. The [limits reference](limits.md) explains how
-these bounds relate. Each HTTPS request has a 120-second
+tokens count against that budget. A message you type may be up to 8,192 characters.
+The transcript pane is limited by TextEdit; when it fills, the oldest text is
+dropped from the window (not from history or the session file). The
+[limits reference](limits.md) explains how these bounds relate. Each HTTPS request has a 120-second
 deadline. A PNG attached with `view_image` is limited to 128 KiB and rides in one
-request on top of the history. Tool output is below 1,536 bytes; folder listings have cursors and
+request on top of the history. Tool output is below 4,096 bytes; folder listings have cursors and
 text reads provide `next_byte` continuation when a line is partial. Reads scan
 at most 8 KiB per invocation. Whole-file revisions guard small-file edits;
 larger-file scan revisions are observational.
@@ -212,7 +214,7 @@ outcome, and the agent must report it without retrying.
 For a source repair, search for the relevant location, read nearby text to get a
 whole-file revision, submit a small unique exact replacement, reread to verify,
 and request a fresh build. Search cursors are observations and never authorize
-an edit. Read pages fill the 1536-byte JSON budget; use `next_byte` for partial
+an edit. Read pages fill the 4096-byte JSON budget; use `next_byte` for partial
 lines and `next_line` when available. Both read and edit advance cooperatively
 and have 60-second deadlines. Stop before an edit's first rename preserves the
 original path and reports any stage; interruption after a rename attempt is
@@ -221,4 +223,4 @@ uncertain. Inspect retained recovery paths before continuing.
 The 64 KiB workflow is currently available in acceptance targets only. Shipping
 Sherclawk retains its verified 4 KiB file/input cap until OS 9.2.2 acceptance is
 recorded. Replacement strings and create-only writes remain 4 KiB, arguments
-8 KiB, results 1536 bytes, descriptors 4 KiB and total build snapshots 128 KiB.
+8 KiB, results 4096 bytes, descriptors 4 KiB and total build snapshots 128 KiB.

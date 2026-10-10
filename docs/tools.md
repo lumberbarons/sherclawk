@@ -27,7 +27,7 @@ lossy UI conversion.
 same plain-text rules (see [project instructions](usage.md#project-instructions-agentsmd)).
 The model may update an existing one with `edit_text` like any other text file.
 
-Tool results fit a fixed JSON envelope below 1,536 bytes. Folder listings have
+Tool results fit a fixed JSON envelope below 4,096 bytes. Folder listings have
 cursors; `list_files` and `get_file_info` report a catalog revision (`cat-…`:
 catalog identity, modification date and both fork sizes) for files.
 `move_to_trash` requires that revision; it is not a content hash and `edit_text`
@@ -133,7 +133,7 @@ with that file untouched; a failure after it, or failed verification, is
 `uncertain`, stops the run and reports both paths. Refused without a journal
 record: folders, aliases, locked files, anything under `Worker01:buildjobs`
 (launched-build evidence), anything already inside a Trash, a non-`cat-`
-revision, and a batch whose report cannot fit the 1,536-byte result cap.
+revision, and a batch whose report cannot fit the 4,096-byte result cap.
 If the report itself cannot be formatted after files moved, the result is
 `uncertain` `REPORT_LIMIT` with only the `moved` count; inspect the Trash before
 retrying. Recover an item by moving it back from the Trash under its reported `moved_as`
@@ -315,7 +315,7 @@ send is attempted, its run ID cannot send another Quit, including after an
 uncertain outcome or refusal. Late and wrong-sender replies cannot advance
 later operations. A tool result of `uncertain` must be reported without retry.
 
-Text read pages use the actual UTF-8/JSON envelope size, bounded to 1536 bytes,
+Text read pages use the actual UTF-8/JSON envelope size, bounded to 4096 bytes,
 rather than a fixed raw-byte allowance. The default is 20 lines (maximum 30).
 Escaping and MacRoman conversion reduce page payloads. Use `next_byte` for
 partial lines; CRLF pairs are never divided between pages.

@@ -1,9 +1,10 @@
 /*
  * hello.r — resources for "Sherclawk", compiled by Rez at build time.
  *
- * 'SIZE' asks for 8 MB preferred / 6 MB minimum — the Certainly TLS
- * stack, BearSSL tables, tool history and response buffers need more than
- * Retro68's 1 MB default. 'MBAR' and the 'MENU' resources define the
+ * 'SIZE' asks for 16 MB preferred / 10 MB minimum — the Certainly TLS
+ * stack, BearSSL tables, the static copies of the model history and the
+ * response buffers need far more than Retro68's 1 MB default (see
+ * docs/limits.md). 'MBAR' and the 'MENU' resources define the
  * menu bar; the app uses SetMenuBar(GetNewMBar(128)). Retro68 adds
  * 'cfrg' and the rest of the application resources automatically.
  */
@@ -29,8 +30,8 @@ resource 'SIZE' (-1) {
     reserved,
     reserved,
     reserved,
-    8 * 1024 * 1024,   /* preferred */
-    6 * 1024 * 1024    /* minimum   */
+    16 * 1024 * 1024,  /* preferred */
+    10 * 1024 * 1024   /* minimum   */
 };
 
 resource 'MBAR' (128, "Menu bar") {

@@ -30,7 +30,7 @@ guarantees the existing file tools provide are easy to erode one tool at a time.
   explicit uncertain outcomes. A new mutating tool that skips any of this
   creates an unrecorded path to data loss.
 - The guest has no memory protection or undo; the user is at a real machine.
-- A tool result is recorded into history with `AGENT_RESULT_CAP` (1536 bytes), and
+- A tool result is recorded into history with `AGENT_RESULT_CAP` (4096 bytes at the time of writing; the header wins), and
   the model pages through larger data with continuations. A tool whose output
   does not fit cannot be used reliably.
 - Built artifacts are persisted evidence authorizing `run_application`. Editing

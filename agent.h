@@ -3,12 +3,12 @@
 #define SHERCLAWK_AGENT_H
 #include <stddef.h>
 #include "chat.h"
-#define AGENT_HISTORY_CAP 393216
-#define AGENT_RESULT_CAP 1536
+#define AGENT_HISTORY_CAP 1048576
+#define AGENT_RESULT_CAP 4096
 #define AGENT_RESULT_WIRE_CAP (AGENT_RESULT_CAP * 6 + 256)
 #define AGENT_CALL_MAX 4
 #define AGENT_ARGUMENT_CAP 8192
-#define AGENT_TEXT_CAP 16384
+#define AGENT_TEXT_CAP 32768
 /* Visible text of one model reply: AGENT_MAX_TOKENS of text at up to ~6 bytes
  * per token, kept separate from the user-prompt and handoff buffers. */
 #define AGENT_REPLY_CAP 40960

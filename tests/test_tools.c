@@ -497,7 +497,7 @@ static void page_checks(void)
             assert(reconstructed+(size_t)n<sizeof(rebuilt));memcpy(rebuilt+reconstructed,decoded,(size_t)n);reconstructed+=(size_t)n;
             cursor=next;assert(++pages<200);
         }
-        if(k==0)assert(pages==4);
+        if(k==0)assert(pages==2);
         assert(text_to_utf8(files[f].bytes,4096,expected,sizeof(expected))==(int)reconstructed);
         assert(!memcmp(rebuilt,expected,reconstructed));
     }
@@ -578,6 +578,8 @@ static void edit_checks(void)
     edit_setup("one\r","one","two");strcpy(call.arguments,"{\"path\":\"hello.c\",\"expected_revision\":\"full-x\",\"old_text\":\"one\",\"old_text\":\"two\",\"new_text\":\"x\"}");assert(!run() && strstr(result,"ARGUMENTS") && !creates);
     /* All three recovery paths must fit a result before creating any file. */
     i=edit_setup("one\r","one","two");field("revision",revision,sizeof(revision));
+    /* The longest legal path (UTF-8 argument bound) no longer overflows the recovery
+       record, which repeats it, now that a result holds AGENT_RESULT_CAP bytes. */
     { char path[512]="", name[32], quoted[1100];long parent=10;int d,k;
       for(d=0;d<6;d++) {
           int n=d==5 ? 7 : 31;
@@ -587,7 +589,9 @@ static void edit_checks(void)
       }
       files[i].parent=parent;strcat(path,"hello.c");assert(json_quote(path,quoted,sizeof(quoted))>0);
       snprintf(call.arguments,sizeof(call.arguments),"{\"path\":%s,\"expected_revision\":\"%s\",\"old_text\":\"one\",\"new_text\":\"two\"}",quoted,revision);
-      assert(!run() && strstr(result,"LIMIT") && !creates && !journals && !strcmp(files[i].bytes,"one\r"));
+      assert(!run() && strstr(result,"\"status\":\"ok\"") && !strstr(result,"LIMIT"));
+      { unsigned char hello[8]={7,'h','e','l','l','o','.','c'};int e=find(parent,hello);
+        assert(e>=0 && !strcmp(files[e].bytes,"two\r")); }
     }
     puts("PASS exact edit: whole-file/page guards, unique matches, backups, locks, encoding, limits, journal barriers and publication faults");
 }
@@ -1455,9 +1459,9 @@ static void trash_checks(void)
 
     /* A report that cannot fit the result budget is refused untouched. */
     reset();
-    { char longpath[220]="", leafname[32], p2[8][220], rb[8][48], args2[AGENT_ARGUMENT_CAP];
-      size_t at=0; long parent=10; int d;
-      for(d=0;d<5;d++){ memset(leafname,'a',31); leafname[31]=0; i=add(parent,leafname,1); parent=files[i].id; strcat(longpath,leafname); strcat(longpath,":"); }
+    { char longpath[520]="", leafname[32], p2[8][520], rb[8][48], args2[AGENT_ARGUMENT_CAP];
+      size_t at=0; long parent=10; int d,e;
+      for(d=0;d<5;d++){ memset(leafname,0xdb,31); leafname[31]=0; i=add(parent,leafname,1); parent=files[i].id; for(e=0;e<31;e++)strcat(longpath,"\xe2\x82\xac"); strcat(longpath,":"); }
       for(n=0;n<8;n++){ snprintf(leafname,sizeof(leafname),"f%d.c",n); trash_file(parent,leafname,"x");
         snprintf(p2[n],sizeof(p2[n]),"%s%s",longpath,leafname); info_revision(p2[n],rb[n],sizeof(rb[n])); }
       (void)trash_can_model();
@@ -1471,10 +1475,10 @@ static void trash_checks(void)
        (never a partial move that then cannot report). */
     { int k, finished=0, refused=0;
       for(k=1;k<=8;k++) {
-        char longpath[220]="", leafname[32], p2[8][220], rb[8][48], args2[AGENT_ARGUMENT_CAP];
-        size_t at=0; long parent=10; int d;
+        char longpath[520]="", leafname[32], p2[8][520], rb[8][48], args2[AGENT_ARGUMENT_CAP];
+        size_t at=0; long parent=10; int d,e;
         reset();
-        for(d=0;d<5;d++){ memset(leafname,'a',31); leafname[31]=0; i=add(parent,leafname,1); parent=files[i].id; strcat(longpath,leafname); strcat(longpath,":"); }
+        for(d=0;d<5;d++){ memset(leafname,0xdb,31); leafname[31]=0; i=add(parent,leafname,1); parent=files[i].id; for(e=0;e<31;e++)strcat(longpath,"\xe2\x82\xac"); strcat(longpath,":"); }
         trash_can_model();
         for(n=0;n<k;n++){ snprintf(leafname,sizeof(leafname),"f%d.c",n); trash_file(parent,leafname,"x");
           snprintf(p2[n],sizeof(p2[n]),"%s%s",longpath,leafname); info_revision(p2[n],rb[n],sizeof(rb[n])); }
