@@ -371,10 +371,10 @@ int json_pick_step(JsonPick *p, size_t budget)
 #define KEY_BUFFER 8192
 #define KEY_MAX 4096
 enum { U_SCAN, U_COUNT, U_CLEAR, U_HASH, U_PROBE, U_COMPARE, U_DONE, U_FAIL };
-void json_unique_init(JsonUnique *u, const char *s, const JsonToken *t, int count, uint16_t *slots)
+void json_unique_init(JsonUnique *u, const char *s, const JsonToken *t, int count, uint16_t *slots, uint32_t seed)
 {
     memset(u, 0, sizeof(*u));
-    u->s = s; u->t = t; u->count = count; u->slots = slots;
+    u->s = s; u->t = t; u->count = count; u->slots = slots; u->seed = seed;
     u->state = count < 0 || count > 65534 ? U_FAIL : U_SCAN;
 }
 static int code_point_bytes(unsigned long cp)
@@ -384,7 +384,7 @@ static int code_point_bytes(unsigned long cp)
 static void unique_key(JsonUnique *u)
 {
     cursor_init(&u->a, u->s, u->t, u->key);
-    u->hash = 2166136261u; u->length = 0; u->probe = 0;
+    u->hash = 2166136261u ^ u->seed; u->length = 0; u->probe = 0;
     u->state = U_HASH;
 }
 static void unique_advance(JsonUnique *u, size_t *work)
@@ -427,7 +427,8 @@ static void unique_advance(JsonUnique *u, size_t *work)
         u->hash = (u->hash ^ (uint32_t)cp) * 16777619u;
         break;
     case U_PROBE: {
-        int at = (int)((u->hash + (uint32_t)u->probe) & (uint32_t)(u->size - 1));
+        uint32_t mixed = (u->hash ^ (u->hash >> 15)) * 2246822519u;
+        int at = (int)(((mixed >> 16) + (uint32_t)u->probe) & (uint32_t)(u->size - 1));
         *work += 1;
         if (u->probe >= u->size) { u->state = U_FAIL; break; }
         if (!u->slots[at]) {
@@ -467,7 +468,7 @@ int json_keys_unique(const char *s, const JsonToken *t, int count)
 {
     static uint16_t slots[JSON_UNIQUE_SLOTS];
     JsonUnique u;
-    json_unique_init(&u, s, t, count, slots);
+    json_unique_init(&u, s, t, count, slots, 0); /* configuration is the owner's own file */
     return json_unique_step(&u, JSON_UNLIMITED) == 1 ? 0 : -1;
 }
 int json_member(const char *s, const JsonToken *t, int object, const char *key)

@@ -94,6 +94,7 @@ typedef struct {
     size_t work, peak, units;
     unsigned long steps;
     char name[64], mapped[64], prefix[160], scratch[1024];
+    uint32_t seed; /* set after mcp_work_init, before the first step; tests leave it 0 */
     /* Everything above is cleared by mcp_work_init; the buffers below are
      * written before they are read. */
     char description[8192], quoted[16384];

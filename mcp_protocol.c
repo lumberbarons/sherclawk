@@ -151,7 +151,7 @@ static int advance_phase(McpWork *w, size_t *work, size_t budget)
         if (w->len > MCP_MESSAGE_CAP || i < 0 || (i > 0 && (w->parser.used < 1 || t[0].type != JSON_OBJECT)))
             return reject(w, "malformed discovery");
         if (!i) return 1;
-        json_unique_init(&w->unique, s, t, w->parser.used, w->slots);
+        json_unique_init(&w->unique, s, t, w->parser.used, w->slots, w->seed);
         w->phase = W_UNIQUE;
         return 0;
     case W_UNIQUE:

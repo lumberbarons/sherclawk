@@ -299,7 +299,7 @@ static void unique_agrees(const char *s, size_t len)
     for (b = 0; b < BUDGETS; b++) {
         JsonUnique u;
         int r, steps = 0;
-        json_unique_init(&u, s, new_tokens, n, slots);
+        json_unique_init(&u, s, new_tokens, n, slots, (uint32_t)b * 7919u);
         while (!(r = json_unique_step(&u, budgets[b]))) {
             assert(budgets[b] < JSON_ATOM_MAX || u.work <= budgets[b]);
             assert(++steps < 4000000);

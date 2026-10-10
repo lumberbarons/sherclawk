@@ -23,6 +23,7 @@ int mcp_client_close(McpClient *c)
     memset(c->session, 0, sizeof(c->session));
     memset(&c->config, 0, sizeof(c->config));
     memset(c->replies, 0, sizeof(c->replies)); c->reply_count = 0;
+    c->exchange.stream.message_len = 0; c->exchange.stream.message[0] = 0;
     return 0;
 }
 static int fail(McpClient *c, const char *message)
@@ -231,6 +232,7 @@ int mcp_client_step(McpClient *c, unsigned long ticks)
             }
             mcp_work_init(&c->work, stages, &c->config, &c->registry, c->exchange.stream.message,
                 c->exchange.stream.message_len, c->id, c->reply, sizeof(c->reply), c->version, sizeof(c->version));
+            c->work.seed = (uint32_t)ticks * 2654435761u + (uint32_t)c->exchange.stream.message_len;
             c->working = 1;
             return 0;
         }

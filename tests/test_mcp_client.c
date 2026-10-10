@@ -156,7 +156,8 @@ int main(void)
     assert(!mcp_client_call(&client, "mcp_tavily_tavily_search", "{\"query\":\"fixture\"}", 3000));
     for (i = 3000; i < 4000 && !step((unsigned long)i); i++) {}
     assert(client.state == MCP_COMPLETE && client.call_error && calls == 2);
-    mcp_client_close(&client); assert(creates == closes && !client.session[0]);
+    assert(mcp_client_response(&client)[0]);
+    mcp_client_close(&client); assert(creates == closes && !client.session[0] && !mcp_client_response(&client)[0]);
     reset(); stalled = 1; assert(!mcp_client_discover(&client, &config, 0));
     expect_step(1799, 0); expect_step(1800, -1);
     assert(client.state == MCP_FAILED && !lists);

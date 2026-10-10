@@ -274,14 +274,15 @@ an atom that would overrun the budget (atoms are at most 24 units; a member
 scan reserves `JSON_PICK_NEED`, 1536) but always completes one, so no step
 exceeds 8 KiB. Duplicate keys are found with one hash table per object
 (`JSON_UNIQUE_SLOTS`, 16 KiB of `uint16_t`, owned by the `McpWork`), so the
-work is linear in key bytes. Descriptions are decoded, redacted
+work is linear in key bytes for any key set a server cannot target: each message
+seeds the hash from the tick count, so colliding keys cannot be precomputed. Descriptions are decoded, redacted
 (`McpRedact`, one comparison per unit) and quoted, and schemas are copied
 256 bytes per atom after their size is checked, so a schema that cannot fit
 is refused unread. The SSE decoder keeps no line buffer: each byte is O(1)
 and a `data` value goes straight into the 64 KiB message, which is handed back
 unprocessed. The matching response stays in that message buffer until the next
 exchange (`mcp_client_response`), replacing the former 64 KiB copy, the 64 KiB
-line buffer and two static token arrays. Stop abandons the work between steps
+line buffer and the static token arrays. Stop abandons the work between steps
 and clears a half-built registry; pending OT connects drain exactly as before.
 Request construction still touches at most the 8 KiB of arguments and the 8 KiB
 header block once per exchange, and the diagnostic's own final summary of a

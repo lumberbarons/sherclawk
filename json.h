@@ -48,11 +48,13 @@ typedef struct {
     const JsonToken *t;
     uint16_t *slots;
     int count, state, object, key, keys, size, cleared, probe;
-    uint32_t hash;
+    uint32_t hash, seed;
     size_t length, work;
     JsonCursor a, b;
 } JsonUnique;
-void json_unique_init(JsonUnique *u, const char *s, const JsonToken *t, int count, uint16_t *slots);
+/* `seed` starts every key hash, so a server that cannot predict it cannot
+ * choose keys that share a probe chain. */
+void json_unique_init(JsonUnique *u, const char *s, const JsonToken *t, int count, uint16_t *slots, uint32_t seed);
 int json_unique_step(JsonUnique *u, size_t budget);
 
 /* Resumable json_member for up to JSON_PICK_MAX keys at once: one pass over
