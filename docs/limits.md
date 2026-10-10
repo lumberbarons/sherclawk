@@ -178,7 +178,9 @@ the old pair did. The app launched and filled its history to 99% in the OS 9.2.2
 guest (see `history/verification.md`); guest heap headroom is not measured. History capacity
 also increases per-round upload and input-token costs and is not a guarantee
 of provider context capacity. The TextEdit transcript remains independently
-bounded.
+bounded. With `copy_file` linked (the 8 KiB fork chunk, result record and
+state are static), text plus data plus bss measured 606,208 + 10,176 + 6,032,256
+= 6,648,640 bytes (6.34 MiB) on 2026-10-10, still within the same partition.
 
 ## Changing a limit
 
@@ -218,6 +220,20 @@ cannot be formatted after files moved, the result is an `uncertain`
 costs one `mutation_intent` and one `mutation_committed` record; the first
 fallback use also journals the `Sherclawk Trash` folder creation. The call's
 scratch buffers are static, not stack.
+
+## Copy bounds
+
+`copy_file` streams both forks through one `TOOLS_COPY_CHUNK` buffer with
+incremental FNV hashes and re-reads the stage to verify it, so no buffer is
+file-sized; `TOOLS_COPY_CAP` therefore bounds disk use and wall-clock work,
+not memory. The cap is checked against both fork sizes together before the
+journal is touched, and the pinned source is re-checked before staging
+completes, so a source that grew past the cap mid-copy is refused rather than
+truncated. Every outcome envelope carries the source, destination and
+temporary paths plus both fork sizes, and the largest one is pre-formatted
+against `AGENT_RESULT_CAP` before anything is created, the same way the trash
+report is. Each call costs one `mutation_intent`, `mutation_staged` and
+`mutation_committed` record; scratch is static, not stack.
 
 ## Reading the evidence
 
@@ -322,6 +338,8 @@ prevents another send. These bounds do not change the model argument/result caps
 | `TOOLS_WORK_CHUNK` | 1,024 bytes/comparisons | Read, verify, splice, KMP prefix and match work per step. |
 | `TOOLS_DESCRIPTOR_CAP` | 4,096 bytes | Project descriptor, unchanged. |
 | `TOOLS_SNAPSHOT_CAP` | 131,072 bytes | Source arena and actual job aggregate, including descriptor, recipe and manifest. |
+| `TOOLS_COPY_CAP` | 1,048,576 bytes | Both forks of one `copy_file` source together. Bounds disk use and copy time, not memory: a copy streams through the chunk buffer with incremental hashes and never holds a file. |
+| `TOOLS_COPY_CHUNK` | 8,192 bytes/fork | Data and resource fork bytes moved per event-loop step; the 60-second deadline covers roughly 2 MiB of both forks at null-event speed. |
 | Read/edit deadline | 60 seconds | Wrap-safe tick subtraction; cancellation closes handles and preserves recovery files. |
 
 The `*_DESCRIPTION` macros are the model-facing text of the caps above

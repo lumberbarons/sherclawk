@@ -6,6 +6,11 @@
 #define TOOLS_WORK_CHUNK 1024
 #define TOOLS_DESCRIPTOR_CAP 4096
 #define TOOLS_SNAPSHOT_CAP 131072L
+/* copy_file: both forks of one source together, and the bytes moved per
+ * event-loop step. The cap bounds disk use and copy time, never memory:
+ * a copy streams through the chunk buffer and no buffer is file-sized. */
+#define TOOLS_COPY_CAP 1048576L
+#define TOOLS_COPY_CHUNK 8192
 /* Stringify a cap for model-facing text. The snapshot cap carries an L suffix
  * in code, so its description is hand-written here; the host registry test
  * fails when any description stops naming its cap. */
@@ -14,6 +19,7 @@
 #define TOOLS_STRING_CAP_DESCRIPTION TOOLS_LIMIT_STRINGIFY(TOOLS_STRING_CAP)
 #define TOOLS_DESCRIPTOR_CAP_DESCRIPTION TOOLS_LIMIT_STRINGIFY(TOOLS_DESCRIPTOR_CAP)
 #define TOOLS_SNAPSHOT_CAP_DESCRIPTION "131072"
+#define TOOLS_COPY_CAP_DESCRIPTION "1048576"
 /* The one refusal message for a descriptor, input or total-snapshot limit. */
 #define TOOLS_SNAPSHOT_LIMIT_MESSAGE \
     "Descriptor limit " TOOLS_DESCRIPTOR_CAP_DESCRIPTION " bytes; input limit " \

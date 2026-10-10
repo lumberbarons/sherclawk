@@ -140,10 +140,11 @@ static void environment(char *out, size_t cap)
     }
     n = snprintf(tail, sizeof(tail),
         "],\"write_policy\":\"create_only_existing_parent\",\"folder_policy\":\"create_only_existing_parent\",\"write_max_bytes\":%d,"
+        "\"copy_policy\":\"create_only_pinned_source\",\"copy_max_bytes\":%ld,"
         "\"edit_policy\":\"unique_exact_whole_revision_CR_backup\",\"edit_max_bytes\":%ld,"
         "\"edit_string_max_bytes\":%d,\"build_input_max_bytes\":%ld,\"descriptor_max_bytes\":%d,\"total_snapshot_max_bytes\":%ld,"
         "\"build_supported\":true,\"launch_supported\":true}",
-        TOOLS_STRING_CAP, TOOLS_ACCEPTED_FILE_CAP, TOOLS_STRING_CAP, TOOLS_ACCEPTED_FILE_CAP, TOOLS_DESCRIPTOR_CAP, TOOLS_SNAPSHOT_CAP);
+        TOOLS_STRING_CAP, TOOLS_COPY_CAP, TOOLS_ACCEPTED_FILE_CAP, TOOLS_STRING_CAP, TOOLS_ACCEPTED_FILE_CAP, TOOLS_DESCRIPTOR_CAP, TOOLS_SNAPSHOT_CAP);
     if (n < 0 || (size_t)n >= sizeof(tail) || append(out, cap, &at, tail))
         fail(out, cap, "LIMIT", "Environment report exceeds result capacity.", 0);
 }
@@ -1597,6 +1598,290 @@ static int move_to_trash(const AgentCall *call, const JsonToken *tokens, char *o
     }
     return trash_report(out, cap, "ok", "TRASHED", folder, items, moved, NULL, 0);
 }
+
+/* ── copy_file: publish a workspace file under a new name ────────── */
+
+/* One copy at a time; the state survives event-loop steps. Both forks stream
+ * through one chunk buffer with incremental FNV hashes, so nothing is
+ * file-sized and the cap bounds disk use and time, not memory. */
+enum { COPY_DATA, COPY_DATA_VERIFY, COPY_RESOURCE, COPY_RESOURCE_VERIFY,
+       COPY_META, COPY_PUBLISH };
+static struct {
+    AgentJournal journal; void *context;
+    char call_id[800], path[512], destination[512], temporary[768], revision[48];
+    char record[AGENT_RESULT_CAP]; /* static: the application stack is small */
+    char scratch[TOOLS_COPY_CHUNK];
+    FSSpec source, target, stage;
+    CInfoPBRec original;
+    unsigned long data_hash, resource_hash, verify_hash;
+    long data_size, resource_size, offset;
+    short read_ref, write_ref;
+    int phase, active;
+    uint32_t started;
+} copy_work;
+
+/* The one envelope for every copy outcome: status, code, both fork sizes, the
+ * pinned revision and all three recovery paths, so recovery never depends on
+ * a second call. -1 when it cannot fit the result budget. */
+static int copy_result(char *out, size_t cap, const char *status, const char *code, int native)
+{
+    size_t at = 0;
+    char head[96], tail[112];
+    snprintf(head, sizeof(head), "{\"status\":\"%s\",\"code\":\"%s\",\"kind\":\"copy_file\",\"path\":", status, code);
+    if (append(out, cap, &at, head) || quote(out, cap, &at, copy_work.path) ||
+        append(out, cap, &at, ",\"destination\":") || quote(out, cap, &at, copy_work.destination) ||
+        append(out, cap, &at, ",\"temporary_path\":") || quote(out, cap, &at, copy_work.temporary))
+        return -1;
+    snprintf(tail, sizeof(tail), ",\"data_bytes\":%ld,\"resource_bytes\":%ld,\"revision\":\"%s\",\"os_error\":%d}",
+        copy_work.data_size, copy_work.resource_size, copy_work.revision, native);
+    return append(out, cap, &at, tail) ? -1 : 0;
+}
+/* Close any open forks and report a failure before the publication rename:
+ * the staged file is retained for inspection, the destination was never
+ * touched and the journaled intent says where the stage is. Returns `stop`,
+ * because a stopped or deadlined copy also stops the run. */
+static int copy_failed(char *out, size_t cap, const char *code, int native, int stop)
+{
+    int closed = 0;
+    if (copy_work.read_ref >= 0) { closed = FSClose(copy_work.read_ref); copy_work.read_ref = -1; }
+    if (copy_work.write_ref >= 0) {
+        if (!closed) closed = FSClose(copy_work.write_ref);
+        copy_work.write_ref = -1;
+    }
+    copy_work.active = 0;
+    if (!native && closed) native = closed;
+    if (copy_result(out, cap, "error", code, native) < 0)
+        fail(out, cap, "LIMIT", "Copy report exceeds the result capacity.", 0);
+    return stop;
+}
+int copy_file_begin(const AgentCall *call, char *out, size_t cap, AgentJournal journal, void *context, uint32_t now)
+{
+    JsonToken tokens[128];
+    CInfoPBRec pb;
+    char tempname[32];
+    OSErr err;
+    long total;
+    int attempt;
+    size_t prefix;
+    if (cap < AGENT_RESULT_CAP) { if (cap) out[0] = 0; return 1; }
+    cap = AGENT_RESULT_CAP;
+    if (copy_work.active) { fail(out, cap, "COPY_BUSY", "A copy is already active.", 0); return 1; }
+    if (text_arguments(call, tokens, out, cap, 0)) return 0;
+    if (valid_keys(call->arguments, tokens, "|path||revision||destination|") ||
+        string_arg(call->arguments, tokens, "path", copy_work.path, sizeof(copy_work.path)) < 0 ||
+        string_arg(call->arguments, tokens, "revision", copy_work.revision, sizeof(copy_work.revision)) < 0 ||
+        string_arg(call->arguments, tokens, "destination", copy_work.destination, sizeof(copy_work.destination)) < 0) {
+        fail(out, cap, "ARGUMENTS", "Expected only path, revision and destination strings.", 0); return 0;
+    }
+    if (strncmp(copy_work.revision, "cat-", 4)) {
+        fail(out, cap, "ARGUMENTS", "revision must be the cat- token from list_files or get_file_info.", 0); return 0;
+    }
+    /* The mutation is the destination. A sealed build artifact is a legal
+     * source (copying only reads it); the queue never accepts a copy. */
+    if (evidence_path(copy_work.destination)) {
+        fail(out, cap, "EXECUTION_EVIDENCE_READ_ONLY", "Worker queue and snapshots are read-only to source tools.", 0); return 0;
+    }
+    err = tools_resolve(copy_work.path, &copy_work.source);
+    if (err) { fail(out, cap, "FILE", "Cannot resolve the source path.", err); return 0; }
+    err = catalog(&copy_work.source, &copy_work.original);
+    if (err) { fail(out, cap, "FILE", "Cannot inspect the source file.", err); return 0; }
+    if (copy_work.original.hFileInfo.ioFlAttrib & 16) {
+        fail(out, cap, "NOT_FILE", "Only files can be copied; folders are never copied.", 0); return 0;
+    }
+    if (copy_work.original.hFileInfo.ioFlFndrInfo.fdType == 'alis' ||
+        (copy_work.original.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000)) {
+        fail(out, cap, "ALIAS", "Aliases are refused; copy the file itself, not an alias.", 0); return 0;
+    }
+    if (!revision_matches(&copy_work.original, copy_work.revision)) {
+        fail(out, cap, "REVISION_MISMATCH", "The file changed since it was listed; list it again and retry.", 0); return 0;
+    }
+    total = copy_work.original.hFileInfo.ioFlLgLen + copy_work.original.hFileInfo.ioFlRLgLen;
+    if (total > TOOLS_COPY_CAP) {
+        fail(out, cap, "LIMIT", "Both forks together exceed the copy limit of " TOOLS_COPY_CAP_DESCRIPTION " bytes.", 0); return 0;
+    }
+    err = tools_resolve(copy_work.destination, &copy_work.target);
+    if (!err) { fail(out, cap, "EXISTS", "Destination exists; copy_file never overwrites.", 0); return 0; }
+    if (err != fnfErr) { fail(out, cap, "PATH", "Use a relative workspace file path with existing non-alias parent folders.", err); return 0; }
+    if (!journal) { fail(out, cap, "JOURNAL", "Copying requires a durable session journal.", 0); return 1; }
+    if (json_quote(call->id, copy_work.call_id, sizeof(copy_work.call_id)) < 0) {
+        fail(out, cap, "JOURNAL", "Cannot encode call identity.", 0); return 1;
+    }
+    copy_work.data_size = copy_work.original.hFileInfo.ioFlLgLen;
+    copy_work.resource_size = copy_work.original.hFileInfo.ioFlRLgLen;
+    /* Every recovery path must fit one result before anything is created. */
+    prefix = strrchr(copy_work.destination, ':') ?
+        (size_t)(strrchr(copy_work.destination, ':') - copy_work.destination + 1) : 0;
+    snprintf(copy_work.temporary, sizeof(copy_work.temporary), "%.*sSherclawk tmp 00000000 00",
+        (int)prefix, copy_work.destination);
+    if (copy_result(copy_work.record, sizeof(copy_work.record), "uncertain", "COPY_UNCERTAIN_INSPECT_PATHS", 0)) {
+        fail(out, cap, "LIMIT", "Copy recovery paths exceed the result budget; no file created.", 0); return 0;
+    }
+    for (attempt = 0; attempt < 100; attempt++) {
+        snprintf(tempname, sizeof(tempname), "Sherclawk tmp %08lx %02x",
+            (unsigned long)TickCount() & 0xffffffffUL, attempt);
+        copy_work.stage = copy_work.target;
+        copy_work.stage.name[0] = (unsigned char)strlen(tempname);
+        memcpy(copy_work.stage.name + 1, tempname, copy_work.stage.name[0]);
+        err = catalog(&copy_work.stage, &pb);
+        if (!err) continue;
+        if (err != fnfErr) { fail(out, cap, "STAGE", "Cannot inspect temporary destination.", err); return 0; }
+        snprintf(copy_work.temporary, sizeof(copy_work.temporary), "%.*s%s", (int)prefix, copy_work.destination, tempname);
+        if (copy_result(copy_work.record, sizeof(copy_work.record), "pending", "COPY_FILE", 0)) {
+            fail(out, cap, "LIMIT", "Cannot encode recovery paths; no file created.", 0); return 0;
+        }
+        if (journal_mutation(journal, context, "mutation_intent", copy_work.call_id, copy_work.record)) {
+            fail(out, cap, "JOURNAL", "Cannot record mutation intent; no file created.", 0); return 1;
+        }
+        err = FSpCreate(&copy_work.stage, copy_work.original.hFileInfo.ioFlFndrInfo.fdCreator,
+            copy_work.original.hFileInfo.ioFlFndrInfo.fdType, smSystemScript);
+        if (err == dupFNErr) continue;
+        break;
+    }
+    if (attempt == 100) { fail(out, cap, "STAGE", "Temporary name collisions; no destination created.", 0); return 0; }
+    if (err) return copy_failed(out, cap, "STAGE_FAILED_INSPECT_TEMP", err, 0);
+    copy_work.journal = journal; copy_work.context = context;
+    copy_work.data_hash = copy_work.resource_hash = 2166136261UL;
+    copy_work.phase = COPY_DATA; copy_work.offset = 0;
+    copy_work.read_ref = copy_work.write_ref = -1;
+    copy_work.started = now; copy_work.active = 1;
+    return 2;
+}
+/* One bounded unit per call: at most TOOLS_COPY_CHUNK bytes through one fork,
+ * or one boundary step (fork change, Finder identity, publication rename). No
+ * step blocks; Stop before the publication rename leaves the staged file and
+ * its journal record for inspection, never an uncertain publish. */
+int copy_file_step(char *out, size_t cap, uint32_t now, int stop)
+{
+    CInfoPBRec pb;
+    FInfo info;
+    OSErr err, closed;
+    char revision[48];
+    long count;
+    int n;
+    if (!copy_work.active) { fail(out, cap, "NO_ACTIVE_COPY", "No active copy operation.", 0); return 1; }
+    if (cap < AGENT_RESULT_CAP) return copy_failed(out, cap, "LIMIT", 0, 1);
+    cap = AGENT_RESULT_CAP;
+    if (stop || (uint32_t)(now - copy_work.started) >= 60UL * 60UL)
+        return copy_failed(out, cap, stop ? "STOPPED" : "DEADLINE", 0, 1);
+    if (copy_work.phase == COPY_DATA || copy_work.phase == COPY_RESOURCE) {
+        long size = copy_work.phase == COPY_DATA ? copy_work.data_size : copy_work.resource_size;
+        unsigned long *hash = copy_work.phase == COPY_DATA ? &copy_work.data_hash : &copy_work.resource_hash;
+        if (copy_work.read_ref < 0) {
+            err = copy_work.phase == COPY_DATA ? FSpOpenDF(&copy_work.source, fsRdPerm, &copy_work.read_ref)
+                                               : FSpOpenRF(&copy_work.source, fsRdPerm, &copy_work.read_ref);
+            if (!err) err = copy_work.phase == COPY_DATA ? FSpOpenDF(&copy_work.stage, fsWrPerm, &copy_work.write_ref)
+                                                         : FSpOpenRF(&copy_work.stage, fsWrPerm, &copy_work.write_ref);
+            if (err) return copy_failed(out, cap, "OPEN", err, 0);
+        }
+        n = (int)(size - copy_work.offset);
+        if (n > TOOLS_COPY_CHUNK) n = TOOLS_COPY_CHUNK;
+        if (!n) {
+            /* Fork complete: close both ends and reopen the stage for the
+             * read-back verification of exactly the bytes written. */
+            err = FSClose(copy_work.read_ref); copy_work.read_ref = -1;
+            closed = FSClose(copy_work.write_ref); copy_work.write_ref = -1;
+            if (err || closed) return copy_failed(out, cap, "CLOSE", err ? err : closed, 0);
+            err = copy_work.phase == COPY_DATA ? FSpOpenDF(&copy_work.stage, fsRdPerm, &copy_work.read_ref)
+                                              : FSpOpenRF(&copy_work.stage, fsRdPerm, &copy_work.read_ref);
+            if (!err) err = SetFPos(copy_work.read_ref, fsFromStart, 0);
+            if (err) return copy_failed(out, cap, "OPEN", err, 0);
+            copy_work.verify_hash = 2166136261UL;
+            copy_work.offset = 0;
+            copy_work.phase += 1;
+            return 2;
+        }
+        count = n;
+        err = FSRead(copy_work.read_ref, &count, copy_work.scratch);
+        if (err || count != n) return copy_failed(out, cap, "READ", err ? err : ioErr, 0);
+        *hash = hash_more(*hash, copy_work.scratch, n);
+        err = FSWrite(copy_work.write_ref, &count, copy_work.scratch);
+        if (err || count != n) return copy_failed(out, cap, "WRITE", err ? err : ioErr, 0);
+        copy_work.offset += n;
+        return 2;
+    }
+    if (copy_work.phase == COPY_DATA_VERIFY || copy_work.phase == COPY_RESOURCE_VERIFY) {
+        long size = copy_work.phase == COPY_DATA_VERIFY ? copy_work.data_size : copy_work.resource_size;
+        unsigned long expected = copy_work.phase == COPY_DATA_VERIFY ? copy_work.data_hash : copy_work.resource_hash;
+        n = (int)(size - copy_work.offset);
+        if (n > TOOLS_COPY_CHUNK) n = TOOLS_COPY_CHUNK;
+        if (!n) {
+            err = FSClose(copy_work.read_ref); copy_work.read_ref = -1;
+            if (err) return copy_failed(out, cap, "CLOSE", err, 0);
+            if (copy_work.verify_hash != expected) return copy_failed(out, cap, "VERIFY", 0, 0);
+            copy_work.offset = 0;
+            copy_work.phase = copy_work.phase == COPY_DATA_VERIFY ? COPY_RESOURCE : COPY_META;
+            return 2;
+        }
+        count = n;
+        err = FSRead(copy_work.read_ref, &count, copy_work.scratch);
+        if (err || count != n) return copy_failed(out, cap, "READ", err ? err : ioErr, 0);
+        copy_work.verify_hash = hash_more(copy_work.verify_hash, copy_work.scratch, n);
+        copy_work.offset += n;
+        return 2;
+    }
+    if (copy_work.phase == COPY_META) {
+        /* The pinned source must be unchanged since the copy began. */
+        err = catalog(&copy_work.source, &pb);
+        if (err) return copy_failed(out, cap, "FILE", err, 0);
+        if (!revision_matches(&pb, copy_work.revision) ||
+            pb.hFileInfo.ioFlLgLen != copy_work.data_size || pb.hFileInfo.ioFlRLgLen != copy_work.resource_size)
+            return copy_failed(out, cap, "SOURCE_CHANGED", 0, 0);
+        /* Finder identity from the source, without the lock and alias bits. */
+        info = copy_work.original.hFileInfo.ioFlFndrInfo;
+        info.fdFlags = (unsigned short)(info.fdFlags & ~0x8001u);
+        err = FSpSetFInfo(&copy_work.stage, &info);
+        if (err) return copy_failed(out, cap, "INFO", err, 0);
+        err = FlushVol(NULL, copy_work.stage.vRefNum);
+        if (err) return copy_failed(out, cap, "FLUSH", err, 0);
+        err = catalog(&copy_work.stage, &pb);
+        if (!err && (pb.hFileInfo.ioFlLgLen != copy_work.data_size ||
+            pb.hFileInfo.ioFlRLgLen != copy_work.resource_size ||
+            pb.hFileInfo.ioFlFndrInfo.fdType != copy_work.original.hFileInfo.ioFlFndrInfo.fdType ||
+            pb.hFileInfo.ioFlFndrInfo.fdCreator != copy_work.original.hFileInfo.ioFlFndrInfo.fdCreator ||
+            pb.hFileInfo.ioFlFndrInfo.fdFlags != info.fdFlags)) err = ioErr;
+        if (err) return copy_failed(out, cap, "VERIFY", err, 0);
+        if (copy_result(copy_work.record, sizeof(copy_work.record), "staged", "COPY_FILE", 0) ||
+            journal_mutation(copy_work.journal, copy_work.context, "mutation_staged", copy_work.call_id, copy_work.record)) {
+            copy_work.active = 0;
+            if (copy_result(out, cap, "error", "JOURNAL_STAGE_RETAINED", 0) < 0)
+                fail(out, cap, "LIMIT", "Copy report exceeds the result capacity.", 0);
+            return 1;
+        }
+        copy_work.phase = COPY_PUBLISH;
+        return 2;
+    }
+    /* COPY_PUBLISH: one collision-safe rename, then verified destination. */
+    err = FSpRename(&copy_work.stage, copy_work.target.name);
+    if (err == dupFNErr) return copy_failed(out, cap, "EXISTS_STAGE_RETAINED", err, 0);
+    if (err) goto uncertain;
+    err = FlushVol(NULL, copy_work.target.vRefNum);
+    if (err) goto uncertain;
+    err = catalog(&copy_work.target, &pb);
+    if (err) goto uncertain;
+    if (pb.hFileInfo.ioFlLgLen != copy_work.data_size || pb.hFileInfo.ioFlRLgLen != copy_work.resource_size ||
+        pb.hFileInfo.ioFlFndrInfo.fdType != copy_work.original.hFileInfo.ioFlFndrInfo.fdType ||
+        pb.hFileInfo.ioFlFndrInfo.fdCreator != copy_work.original.hFileInfo.ioFlFndrInfo.fdCreator) { err = ioErr; goto uncertain; }
+    tools_catalog_revision(&pb, revision, sizeof(revision));
+    snprintf(copy_work.revision, sizeof(copy_work.revision), "%s", revision);
+    if (copy_result(out, cap, "ok", "COPIED", 0) < 0) {
+        copy_work.active = 0;
+        fail(out, cap, "LIMIT", "Copy report exceeds the result capacity.", 0);
+        return 0;
+    }
+    if (journal_mutation(copy_work.journal, copy_work.context, "mutation_committed", copy_work.call_id, out)) {
+        copy_work.active = 0;
+        if (copy_result(out, cap, "uncertain", "JOURNAL_AFTER_PUBLISH", 0) < 0)
+            fail(out, cap, "LIMIT", "Copy report exceeds the result capacity.", 0);
+        return 1;
+    }
+    copy_work.active = 0;
+    return 0;
+uncertain:
+    copy_work.active = 0;
+    if (copy_result(out, cap, "uncertain", "COPY_UNCERTAIN_INSPECT_PATHS", err) < 0)
+        fail(out, cap, "LIMIT", "Copy report exceeds the result capacity.", 0);
+    return 1;
+}
 /* Publish a complete, fixed template by one collision-safe folder rename.
  * Failed stages stay journaled for inspection; never reuse or roll them back. */
 static int project_result(char *out, size_t cap, const char *status, const char *code,
@@ -1729,8 +2014,11 @@ int tools_execute_recorded(const AgentCall *call, char *out, size_t cap, AgentJo
     const ToolDef *def = tools_lookup(call->name);
     if (cap < AGENT_RESULT_CAP) { if (cap) out[0] = 0; return 1; }
     if (!def) { fail(out, cap, "UNKNOWN_TOOL", "This tool is not installed.", 0); return 0; }
-    /* The queue guard is the registry's own mutates flag. */
-    if (text_arguments(call, tokens, out, cap, (int)def->mutates)) return 0;
+    /* The queue guard is the registry's own mutates flag, checked against the
+     * path a tool mutates. copy_file's path is an untouched source that may be
+     * sealed build evidence, so only its destination is guarded, inside
+     * copy_file_begin. */
+    if (text_arguments(call, tokens, out, cap, def->id == TOOL_copy_file ? 0 : (int)def->mutates)) return 0;
     switch (def->id) {
     case TOOL_get_environment:
         if (tokens[0].next != 1) fail(out, cap, "ARGUMENTS", "get_environment takes no arguments.", 0);
@@ -1744,6 +2032,7 @@ int tools_execute_recorded(const AgentCall *call, char *out, size_t cap, AgentJo
     case TOOL_create_project: return create_project(call, tokens, out, cap, journal, context);
     case TOOL_create_folder: return create_folder(call, tokens, out, cap, journal, context);
     case TOOL_move_to_trash: return move_to_trash(call, tokens, out, cap, journal, context);
+    case TOOL_copy_file: return copy_file_begin(call, out, cap, journal, context, (uint32_t)TickCount());
     case TOOL_get_file_info:
     case TOOL_resolve_alias:
     case TOOL_list_processes:
@@ -1772,6 +2061,12 @@ int tools_text_step(char *out,size_t cap,uint32_t now,int stop)
     if(text_active==1)return read_text_step(out,cap,now,stop);
     if(text_active==2)return edit_text_step(out,cap,now,stop);
     fail(out,cap,"NO_ACTIVE_TEXT","No active text operation.",0);return 1;
+}
+
+int tools_pending_step(char *out, size_t cap, uint32_t now, int stop)
+{
+    if (copy_work.active) return copy_file_step(out, cap, now, stop);
+    return tools_text_step(out, cap, now, stop);
 }
 
 const char *tools_text_phase(void)

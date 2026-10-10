@@ -123,6 +123,7 @@ typedef enum {
     RUN_QUIT,           /* quit_application pending */
     RUN_LAUNCH,          /* run_application pending */
     RUN_VIEW_IMAGE,      /* view_image reading a PNG */
+    RUN_COPY_FILE,      /* copy_file streaming and verifying both forks */
     RUN_HANDOFF,         /* handoff summary HTTPS exchange in flight */
     RUN_CONTEXT_LOOKUP   /* model context-window lookup in flight */
 } RunState;
@@ -2130,7 +2131,10 @@ static const PendingState kPendingStates[] = {
       "Quit outcome uncertain. The request may still take effect; do not retry." },
     { RUN_VIEW_IMAGE, &kToolDefs[TOOL_view_image], view_image_begin, view_image_step,
       "Reading image...",
-      "Image read stopped. Nothing was attached." }
+      "Image read stopped. Nothing was attached." },
+    { RUN_COPY_FILE, &kToolDefs[TOOL_copy_file], copy_file_begin, copy_file_step,
+      "Copying and verifying both forks...",
+      "Copy stopped. Inspect the retained stage and session recovery records before continuing." }
 };
 static const PendingState *PendingStateForDef(const ToolDef *def)
 {
@@ -2498,7 +2502,8 @@ static void DriveChatStep(void)
     case RUN_BUILD:
     case RUN_QUIT:
     case RUN_LAUNCH:
-    case RUN_VIEW_IMAGE: StepPendingTool(); break;
+    case RUN_VIEW_IMAGE:
+    case RUN_COPY_FILE: StepPendingTool(); break;
     case RUN_TOOLS: StepTools(); break;
     case RUN_MODEL_REQUEST:
     case RUN_HANDOFF: StepModelExchange(); break;

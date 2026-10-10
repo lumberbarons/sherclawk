@@ -22,14 +22,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include "stepped-tools.h"
-static struct File { int used, dir; long parent, id; char name[32], bytes[65538]; long size, resource; FInfo info;
+static struct File { int used, dir; long parent, id; char name[32], bytes[65538], rbytes[65538]; long size, resource; FInfo info;
     unsigned long crdat, mddat; int locked; } files[64];
 static long positions[64];
+static int rfork[64];
 static int dir_error, dir_leftover, dir_race, touch_on_read;
 static int short_write, bad_read, bad_close, rename_race, rename_error, published, flush_error;
 static int journals, fail_journal, creates;
 static int editing, renames, fault_rename, change_after_stage, stage_bad_read, stage_short_read, busy, swapped_publish;
 static int trash_can, trash_vref, trash_moves, trash_intents, trash_commits, rename_lost;
+static int copy_intents, copy_commits;
 static int opens[64];
 static int io_reads,io_writes,io_closes,io_flushes,io_opens;
 static int fault_read,fault_write,fault_close,fault_flush,fault_open;
@@ -125,27 +127,46 @@ OSErr FSpOpenDF(const FSSpec *s, short mode, short *ref)
     int i=find(s->parID,s->name); if(i<0)return fnfErr;
     if(++io_opens==fault_open)return ioErr;
     if((mode==fsRdWrPerm && (busy || opens[i])) || opens[i]==fsRdWrPerm)return ioErr;
-    opens[i]=mode; *ref=(short)i; positions[i]=0; return 0;
+    opens[i]=mode; rfork[i]=0; *ref=(short)i; positions[i]=0; return 0;
+}
+/* The resource fork shares the model's per-file mark and open slot: the copy
+ * executor uses one fork at a time and repositions at each phase start. */
+OSErr FSpOpenRF(const FSSpec *s, short mode, short *ref)
+{
+    int i=find(s->parID,s->name); if(i<0)return fnfErr;
+    if(++io_opens==fault_open)return ioErr;
+    if((mode==fsRdWrPerm && (busy || opens[i])) || opens[i]==fsRdWrPerm)return ioErr;
+    opens[i]=mode; rfork[i]=1; *ref=(short)i; positions[i]=0; return 0;
+}
+OSErr FSpSetFInfo(const FSSpec *s, const FInfo *finfo)
+{
+    int i=find(s->parID,s->name); if(i<0)return fnfErr;
+    files[i].info=*finfo; return 0;
 }
 OSErr FSRead(short ref, long *n, void *out)
 {
+    char *buf=rfork[ref]?files[ref].rbytes:files[ref].bytes;
+    long size=rfork[ref]?files[ref].resource:files[ref].size;
     if(*n>largest_transfer)largest_transfer=*n;
     if(++io_reads==fault_read)return ioErr;
-    if(*n>files[ref].size-positions[ref]) *n=files[ref].size-positions[ref];
+    if(*n>size-positions[ref]) *n=size-positions[ref];
     if(stage_short_read && *n && !strncmp(files[ref].name,"Sherclawk tmp",13)) --*n;
-    memcpy(out,files[ref].bytes+positions[ref],(size_t)*n); positions[ref]+=*n;
+    memcpy(out,buf+positions[ref],(size_t)*n); positions[ref]+=*n;
     if(touch_on_read) files[ref].mddat++;
     if((bad_read || (stage_bad_read && !strncmp(files[ref].name,"Sherclawk tmp",13))) && *n) ((char *)out)[0]^=1;
     return 0;
 }
 OSErr FSWrite(short ref, long *n, const void *in)
 {
+    char *buf=rfork[ref]?files[ref].rbytes:files[ref].bytes;
+    long cap=(long)(rfork[ref]?sizeof(files[ref].rbytes):sizeof(files[ref].bytes));
+    long *size=rfork[ref]?&files[ref].resource:&files[ref].size;
     if(*n>largest_transfer)largest_transfer=*n;
     if(++io_writes==fault_write)return ioErr;
     if(short_write && *n) --*n;
-    assert(positions[ref]+*n<=(long)sizeof(files[ref].bytes)); memcpy(files[ref].bytes+positions[ref],in,(size_t)*n); positions[ref]+=*n; if(positions[ref]>files[ref].size)files[ref].size=positions[ref]; return 0;
+    assert(positions[ref]+*n<=cap); memcpy(buf+positions[ref],in,(size_t)*n); positions[ref]+=*n; if(positions[ref]>*size)*size=positions[ref]; return 0;
 }
-OSErr FSClose(short ref) { opens[ref]=0; return bad_close || ++io_closes==fault_close ? ioErr : 0; }
+OSErr FSClose(short ref) { opens[ref]=0; rfork[ref]=0; return bad_close || ++io_closes==fault_close ? ioErr : 0; }
 OSErr SetFPos(short ref, short mode, long pos) { (void)mode; positions[ref]=pos; return 0; }
 OSErr FlushVol(const unsigned char *name, short vol) { (void)name;(void)vol;return (published && flush_error) || ++io_flushes==fault_flush ? ioErr : 0; }
 OSErr FSpRename(const FSSpec *s, const unsigned char *name)
@@ -448,6 +469,26 @@ static int journal(void *ctx, const char *event, const char *json)
         }
         return fail_journal==journals ? -1 : 0;
     }
+    if(!strcmp(call.name,"copy_file")) {
+        char kind[24], status[16];
+        int mutation=json_member(json,tokens,0,"mutation");
+        int ki=json_member(json,tokens,mutation,"kind"), si=json_member(json,tokens,mutation,"status");
+        assert(mutation>=0 && ki>=0 && si>=0);
+        assert(json_string(json,tokens,ki,kind,sizeof(kind))>=0);
+        assert(json_string(json,tokens,si,status,sizeof(status))>=0);
+        assert(!strcmp(kind,"copy_file"));
+        if(!strcmp(event,"mutation_intent")) {
+            assert(!strcmp(status,"pending") && copy_intents==copy_commits && !creates);
+            copy_intents++;
+        } else if(!strcmp(event,"mutation_staged")) {
+            assert(!strcmp(status,"staged") && creates && !published);
+        } else {
+            assert(!strcmp(event,"mutation_committed") && !strcmp(status,"ok") &&
+                published && copy_intents==copy_commits+1);
+            copy_commits++;
+        }
+        return fail_journal==journals ? -1 : 0;
+    }
     { char temp[768]; int mutation=json_member(json,tokens,0,"mutation");
       int n=json_string(json,tokens,json_member(json,tokens,mutation,"temporary_path"),temp,sizeof(temp));
       assert(n>=0);if((size_t)n>longest_temporary)longest_temporary=(size_t)n; }
@@ -468,9 +509,11 @@ static void reset(void)
     editing=renames=fault_rename=change_after_stage=stage_bad_read=stage_short_read=busy=swapped_publish=0;
     prefs_dir=5000;prefs_error=0;prefs_lookups=0;
     trash_can=-1;trash_vref=1;trash_moves=trash_intents=trash_commits=0;rename_lost=0;
+    copy_intents=copy_commits=0;
     io_reads=io_writes=io_closes=io_flushes=io_opens=0;
     fault_read=fault_write=fault_close=fault_flush=fault_open=0;largest_transfer=0;
     memset(opens,0,sizeof(opens));
+    memset(rfork,0,sizeof(rfork));
     memset(&call,0,sizeof(call));strcpy(call.id,"write1");strcpy(call.name,"write_text");
     strcpy(call.arguments,"{\"path\":\"hello.c\",\"text\":\"caf\\u00e9\\r\\nline\\n\"}");
 }
@@ -1513,6 +1556,170 @@ static void trash_checks(void)
       assert(finished>0 && refused>0); }
     puts("PASS move_to_trash: pinned batches, network Trash and workspace fallback, collisions, refusals, journal barriers, partial failure and result caps");
 }
+/* A copy fixture with both forks and Finder identity, added without touching
+ * the FSpCreate/FSWrite counters the journal barrier assertions rely on. */
+static int copy_fixture(long parent, const char *name, const char *bytes, const char *rbytes,
+                         unsigned long type, unsigned long creator, unsigned short flags)
+{
+    int f=add(parent,name,0);
+    strcpy(files[f].bytes,bytes); files[f].size=(long)strlen(bytes);
+    strcpy(files[f].rbytes,rbytes); files[f].resource=(long)strlen(rbytes);
+    files[f].info.fdType=type; files[f].info.fdCreator=creator; files[f].info.fdFlags=flags;
+    return f;
+}
+static int copy_one(const char *path, const char *revision, const char *destination)
+{
+    strcpy(call.name,"copy_file");
+    snprintf(call.arguments,sizeof(call.arguments),
+        "{\"path\":\"%s\",\"revision\":\"%s\",\"destination\":\"%s\"}",path,revision,destination);
+    return run();
+}
+static void copy_checks(void)
+{
+    static const char data[]="data fork \rbytes", rsrc[]="resource fork bytes";
+    char rev[48], text[256];
+    int d, src, w, b;
+    /* Both forks, Finder identity and the untouched source survive a copy. */
+    reset(); src=copy_fixture(10,"app",data,rsrc,'APPL','ShCk',0x0400);
+    assert(list_revision("app",rev,sizeof(rev)));
+    assert(!copy_one("app",rev,"published") && strstr(result,"COPIED"));
+    d=leaf("published"); assert(d>=0 && files[d].parent==10);
+    assert(files[d].size==(long)strlen(data) && !memcmp(files[d].bytes,data,strlen(data)));
+    assert(files[d].resource==(long)strlen(rsrc) && !memcmp(files[d].rbytes,rsrc,strlen(rsrc)));
+    assert(files[d].info.fdType=='APPL' && files[d].info.fdCreator=='ShCk' && files[d].info.fdFlags==0x0400);
+    assert(files[src].size==(long)strlen(data) && files[src].resource==(long)strlen(rsrc) && files[src].parent==10);
+    assert(journals==3 && copy_intents==1 && copy_commits==1 && renames==1);
+    field("revision",text,sizeof(text)); assert(!strncmp(text,"cat-",4));
+    field("destination",text,sizeof(text)); assert(!strcmp(text,"published"));
+
+    /* A chunked copy of both forks stays within the per-step bound. */
+    reset(); src=copy_fixture(10,"big","x","", 'APPL','ShCk',0);
+    memset(files[src].bytes,0x5a,30000); files[src].size=30000;
+    memset(files[src].rbytes,0xa3,20000); files[src].resource=20000;
+    assert(list_revision("big",rev,sizeof(rev)));
+    assert(!copy_one("big",rev,"published") && strstr(result,"COPIED"));
+    d=leaf("published");
+    assert(files[d].size==30000 && !memcmp(files[d].bytes,files[src].bytes,30000));
+    assert(files[d].resource==20000 && !memcmp(files[d].rbytes,files[src].rbytes,20000));
+    assert(largest_transfer<=TOOLS_COPY_CHUNK);
+
+    /* A resource-only fork copies without a data fork. */
+    reset(); src=copy_fixture(10,"rsrconly","","resource",'APPL','ShCk',0);
+    assert(list_revision("rsrconly",rev,sizeof(rev)));
+    assert(!copy_one("rsrconly",rev,"published") && strstr(result,"COPIED"));
+    d=leaf("published");
+    assert(files[d].size==0 && files[d].resource==8 && !memcmp(files[d].rbytes,"resource",8));
+
+    /* A sealed build artifact is a legal source; the queue is not a destination. */
+    reset(); w=add(10,"Worker01",1); b=add(files[w].id,"buildjobs",1);
+    src=copy_fixture(files[b].id,"artifact","app","rsrc",'APPL','ShCk',0);
+    info_revision("Worker01:buildjobs:artifact",rev,sizeof(rev));
+    assert(!copy_one("Worker01:buildjobs:artifact",rev,"published") && strstr(result,"COPIED"));
+    assert(leaf("published")>=0 && files[src].parent==files[b].id);
+    assert(!copy_one("Worker01:buildjobs:artifact",rev,"Worker01:buildjobs:dest") &&
+        strstr(result,"EXECUTION_EVIDENCE_READ_ONLY") && journals==3 && copy_intents==1);
+
+    /* Existing destinations are refused before any I/O or journal record. */
+    reset(); copy_fixture(10,"app",data,rsrc,'APPL','ShCk',0);
+    copy_fixture(10,"taken","x","",'TEXT','ttxt',0);
+    assert(list_revision("app",rev,sizeof(rev)));
+    assert(!copy_one("app",rev,"taken") && strstr(result,"EXISTS") && journals==0 && !creates && !renames);
+
+    /* Stale or malformed pins, folders and aliases. */
+    reset(); copy_fixture(10,"app",data,rsrc,'APPL','ShCk',0);
+    assert(list_revision("app",rev,sizeof(rev)));
+    assert(!copy_one("app","cat-0-0-0-0","out") && strstr(result,"REVISION_MISMATCH") && journals==0);
+    assert(!copy_one("app","full-00000000-00000000-00000000-00000000","out") && strstr(result,"ARGUMENTS"));
+    reset(); add(10,"dir",1);
+    assert(!copy_one("dir","cat-0-0-0-0","out") && strstr(result,"NOT_FILE") && journals==0);
+    reset(); copy_fixture(10,"alias","x","",'alis','ttxt',0x8000);
+    assert(list_revision("alias",rev,sizeof(rev)));
+    assert(!copy_one("alias",rev,"out") && strstr(result,"ALIAS") && journals==0);
+
+    /* The cap bounds both forks together. */
+    reset(); src=copy_fixture(10,"app","x","",'APPL','ShCk',0);
+    files[src].size=TOOLS_COPY_CAP+1;
+    assert(list_revision("app",rev,sizeof(rev)));
+    assert(!copy_one("app",rev,"out") && strstr(result,"LIMIT") && journals==0);
+    files[src].size=1; files[src].resource=TOOLS_COPY_CAP;
+    assert(list_revision("app",rev,sizeof(rev)));
+    assert(!copy_one("app",rev,"out") && strstr(result,"LIMIT") && journals==0);
+
+    /* Journal barriers: nothing before intent, a retained stage before
+     * committed, and an uncertain publish after the rename. */
+    reset(); copy_fixture(10,"app",data,rsrc,'APPL','ShCk',0);
+    assert(list_revision("app",rev,sizeof(rev))); fail_journal=1;
+    assert(copy_one("app",rev,"out")==1 && strstr(result,"JOURNAL") && !creates && journals==1);
+    reset(); copy_fixture(10,"app",data,rsrc,'APPL','ShCk',0);
+    assert(list_revision("app",rev,sizeof(rev))); fail_journal=2;
+    assert(copy_one("app",rev,"out")==1 && strstr(result,"JOURNAL_STAGE_RETAINED") &&
+        creates==1 && !published && journals==2 && leaf("out")<0);
+    reset(); copy_fixture(10,"app",data,rsrc,'APPL','ShCk',0);
+    assert(list_revision("app",rev,sizeof(rev))); fail_journal=3;
+    assert(copy_one("app",rev,"out")==1 && strstr(result,"JOURNAL_AFTER_PUBLISH") &&
+        published && journals==3);
+    d=leaf("out"); assert(d>=0 && files[d].size==(long)strlen(data));
+
+    /* Stop before the publication rename leaves a retained stage. */
+    reset(); copy_fixture(10,"app",data,rsrc,'APPL','ShCk',0);
+    assert(list_revision("app",rev,sizeof(rev)));
+    strcpy(call.name,"copy_file");
+    snprintf(call.arguments,sizeof(call.arguments),
+        "{\"path\":\"app\",\"revision\":\"%s\",\"destination\":\"out\"}",rev);
+    { int r=copy_file_begin(&call,result,sizeof(result),journal,NULL,42);
+      assert(r==2); }
+    assert(copy_file_step(result,sizeof(result),42,1)==1 && strstr(result,"STOPPED") &&
+        strstr(result,"temporary_path") && leaf("out")<0 && !published);
+    handles_closed();
+
+    /* The 60-second deadline stops a copy the same way. */
+    reset(); copy_fixture(10,"app",data,rsrc,'APPL','ShCk',0);
+    assert(list_revision("app",rev,sizeof(rev)));
+    strcpy(call.name,"copy_file");
+    snprintf(call.arguments,sizeof(call.arguments),
+        "{\"path\":\"app\",\"revision\":\"%s\",\"destination\":\"out\"}",rev);
+    { int r=copy_file_begin(&call,result,sizeof(result),journal,NULL,0xfffffff0U);
+      assert(r==2); }
+    assert(copy_file_step(result,sizeof(result),0xfffffff0U+3600U,0)==1 && strstr(result,"DEADLINE"));
+    handles_closed();
+
+    /* A source that changed under the copy is refused with the stage kept. */
+    reset(); copy_fixture(10,"app",data,rsrc,'APPL','ShCk',0);
+    assert(list_revision("app",rev,sizeof(rev))); touch_on_read=1;
+    assert(!copy_one("app",rev,"out") && strstr(result,"SOURCE_CHANGED") &&
+        journals==1 && creates==1 && leaf("out")<0);
+
+    /* Corrupt read-back, short writes, fork-open faults and rename races. */
+    reset(); copy_fixture(10,"app",data,rsrc,'APPL','ShCk',0);
+    assert(list_revision("app",rev,sizeof(rev))); stage_bad_read=1;
+    assert(!copy_one("app",rev,"out") && strstr(result,"VERIFY") && journals==1 && leaf("out")<0);
+    reset(); copy_fixture(10,"app",data,rsrc,'APPL','ShCk',0);
+    assert(list_revision("app",rev,sizeof(rev))); short_write=1;
+    assert(!copy_one("app",rev,"out") && strstr(result,"WRITE") && journals==1 && leaf("out")<0);
+    reset(); copy_fixture(10,"app",data,rsrc,'APPL','ShCk',0);
+    assert(list_revision("app",rev,sizeof(rev))); fault_read=1;
+    assert(!copy_one("app",rev,"out") && strstr(result,"READ") && journals==1 && leaf("out")<0);
+    reset(); copy_fixture(10,"app",data,rsrc,'APPL','ShCk',0);
+    assert(list_revision("app",rev,sizeof(rev))); fault_open=4;
+    assert(!copy_one("app",rev,"out") && strstr(result,"OPEN") && journals==1 && leaf("out")<0);
+    reset(); copy_fixture(10,"app",data,rsrc,'APPL','ShCk',0);
+    assert(list_revision("app",rev,sizeof(rev))); rename_race=1;
+    assert(!copy_one("app",rev,"out") && strstr(result,"EXISTS_STAGE_RETAINED") && journals==2 && !published);
+
+    /* Malformed calls never reach the journal. */
+    { static const char bad[]="{}|{\"path\":\"app\"}|{\"path\":\"app\",\"revision\":\"cat-0-0-0-0\"}|"
+        "{\"path\":\"app\",\"revision\":\"cat-0-0-0-0\",\"destination\":\"out\",\"extra\":1}|"
+        "{\"path\":\"app\",\"revision\":1,\"destination\":\"out\"}";
+      char *one=(char *)malloc(sizeof(bad)+1);
+      strcpy(one,bad);
+      for(char *at=strtok(one,"|");at;at=strtok(NULL,"|")) {
+        reset(); copy_fixture(10,"app",data,rsrc,'APPL','ShCk',0);
+        strcpy(call.name,"copy_file"); strcpy(call.arguments,at);
+        assert(!run() && strstr(result,"ARGUMENTS") && journals==0 && !creates);
+      }
+      free(one); }
+    puts("PASS copy_file: pinned both-fork copies, publish/rename from build evidence, journal barriers, verification faults and result caps");
+}
 /* The Preferences file, the MCP configuration and its staging/backup siblings
  * hold credentials. They are protected by catalog identity (Preferences folder ID + leaf name): every
  * model-facing tool must refuse them, wherever the workspace puts Preferences. */
@@ -1639,7 +1846,10 @@ static void protection_checks(void)
     guard_untouched();
 
     /* Mutation: nothing can create, replace, edit, fold or trash a protected name. */
-    for (k = 0; k < (int)(sizeof(protected_paths) / sizeof(*protected_paths)); k++) {
+    { char notes_rev[48];
+      info_revision("Preferences:notes.txt", notes_rev, sizeof(notes_rev));
+      assert(guarded.notes && !strncmp(notes_rev, "cat-", 4));
+      for (k = 0; k < (int)(sizeof(protected_paths) / sizeof(*protected_paths)); k++) {
         snprintf(arguments, sizeof(arguments), "{\"path\":\"%s\",\"text\":\"{}\"}", protected_paths[k]);
         guard_call("write_text", arguments); guard_refused();
         snprintf(arguments, sizeof(arguments), "{\"path\":\"%s\"}", protected_paths[k]);
@@ -1657,6 +1867,13 @@ static void protection_checks(void)
         assert(!run() && !journals);
         guard_refused();
         assert(strstr(result, "\"moved\":0"));
+        snprintf(arguments, sizeof(arguments),
+            "{\"path\":\"%s\",\"revision\":\"cat-0000000b-000004d2-00000040-00000000\",\"destination\":\"leaked\"}", protected_paths[k]);
+        guard_call("copy_file", arguments); guard_refused();
+        snprintf(arguments, sizeof(arguments),
+            "{\"path\":\"Preferences:notes.txt\",\"revision\":\"%s\",\"destination\":\"%s\"}", notes_rev, protected_paths[k]);
+        guard_call("copy_file", arguments); guard_refused();
+      }
     }
     guard_untouched();
     assert(!journals);
@@ -1782,20 +1999,23 @@ static void registry_checks(void)
     assert(tools_lookup("write_text")->mutates && tools_lookup("edit_text")->mutates &&
            tools_lookup("create_folder")->mutates && tools_lookup("create_project")->mutates &&
            tools_lookup("move_to_trash")->mutates && tools_lookup("build_project")->mutates &&
-           tools_lookup("run_application")->mutates && tools_lookup("quit_application")->mutates);
+           tools_lookup("run_application")->mutates && tools_lookup("quit_application")->mutates &&
+           tools_lookup("copy_file")->mutates);
     assert(!tools_lookup("get_environment")->mutates && !tools_lookup("list_files")->mutates &&
            !tools_lookup("read_text")->mutates && !tools_lookup("search_text")->mutates &&
            !tools_lookup("read_build_log")->mutates && !tools_lookup("get_file_info")->mutates &&
            !tools_lookup("view_image")->mutates);
     assert(tools_lookup("read_text")->pending && tools_lookup("edit_text")->pending &&
            tools_lookup("build_project")->pending && tools_lookup("run_application")->pending &&
-           tools_lookup("quit_application")->pending && tools_lookup("view_image")->pending);
+           tools_lookup("quit_application")->pending && tools_lookup("view_image")->pending &&
+           tools_lookup("copy_file")->pending);
     assert(!tools_lookup("write_text")->pending && !tools_lookup("read_build_log")->pending);
     /* The model-facing cap descriptions never drift from the caps they name. */
     assert(atol(TOOLS_FILE_CAP_DESCRIPTION) == (long)TOOLS_ACCEPTED_FILE_CAP);
     assert(atol(TOOLS_STRING_CAP_DESCRIPTION) == (long)TOOLS_STRING_CAP);
     assert(atol(TOOLS_DESCRIPTOR_CAP_DESCRIPTION) == (long)TOOLS_DESCRIPTOR_CAP);
     assert(atol(TOOLS_SNAPSHOT_CAP_DESCRIPTION) == (long)TOOLS_SNAPSHOT_CAP);
+    assert(atol(TOOLS_COPY_CAP_DESCRIPTION) == (long)TOOLS_COPY_CAP);
     puts("PASS tool registry: schemas and get_environment agree with one contract table");
 }
 
@@ -1865,5 +2085,6 @@ int main(void)
     view_checks();
     instruction_checks();
     trash_checks();
+    copy_checks();
     return 0;
 }

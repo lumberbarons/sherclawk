@@ -15,7 +15,7 @@ static int diagnostic_execute_recorded(const AgentCall *call,char *out,size_t ca
             if(event.what==keyDown && (event.modifiers & cmdKey) && (event.message & charCodeMask)=='.')stop=1;
         }
         SystemTask();
-        r=tools_text_step(out,cap,(uint32_t)TickCount(),stop);
+        r=tools_pending_step(out,cap,(uint32_t)TickCount(),stop);
     }
     return r;
 }

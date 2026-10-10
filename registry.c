@@ -136,6 +136,13 @@ const ToolDef kToolDefs[] = {
         "\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},"
         "\"required\":[\"path\"],\"additionalProperties\":false}}}",
         0, 1 },
+    { TOOL_copy_file, "copy_file",
+        "{\"type\":\"function\",\"function\":{\"name\":\"copy_file\","
+        "\"description\":\"Copy one workspace file to a NEW destination path in an existing folder; a different leaf name renames, so a built application can be published out of its build artifact folder. Both forks and Finder type, creator and flags are preserved (lock and alias bits are not); the pinned source is never modified, and copying FROM the build queue is allowed while a destination inside it is refused. The source needs its current cat- revision from list_files or get_file_info. At most " TOOLS_COPY_CAP_DESCRIPTION " bytes across both forks; verified in bounded steps with a 60-second deadline; Stop before the final rename leaves a retained stage. Journaled; verify with get_file_info. Never retry an uncertain outcome.\","
+        "\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},"
+        "\"revision\":{\"type\":\"string\"},\"destination\":{\"type\":\"string\"}},"
+        "\"required\":[\"path\",\"revision\",\"destination\"],\"additionalProperties\":false}}}",
+        1, 1 },
 };
 
 #define TOOL_COUNT (sizeof kToolDefs / sizeof *kToolDefs)

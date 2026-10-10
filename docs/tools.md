@@ -8,6 +8,7 @@ buffer and deadline relationships are in [limits](limits.md).
 |---|---|
 | Environment, catalog and text reads | `get_environment`, `list_files`, `read_text` |
 | Search and source changes | `search_text`, `write_text`, `create_folder`, `move_to_trash`, `edit_text` |
+| Copy and publish | `copy_file` |
 | Native project work | `create_project`, `build_project`, `read_build_log`, `run_application` |
 | Read-only platform inspection | `get_file_info`, `resolve_alias`, `list_processes`, `list_fonts`, `measure_text`, `list_resources`, `read_resource` |
 | Read-only image viewing | `view_image` |
@@ -168,6 +169,42 @@ If the report itself cannot be formatted after files moved, the result is
 `uncertain` `REPORT_LIMIT` with only the `moved` count; inspect the Trash before
 retrying. Recover an item by moving it back from the Trash under its reported `moved_as`
 name, or empty the Trash as usual; Stop does not undo a completed rename.
+
+## Copying files
+
+`copy_file(path, revision, destination)` copies one workspace file to a NEW
+destination path in an existing folder; a different leaf name renames, so a
+built application can be published out of its build artifact folder into the
+workspace. The source needs its current `cat-` catalog revision from
+`list_files` or `get_file_info` and is never modified, removed or re-flagged.
+Copying FROM the sealed build queue is a read and is allowed, so a build
+artifact is a legal source; a destination under `Worker01:buildjobs` is
+refused like every other queue mutation. The destination is create-only: an
+existing name is refused `EXISTS` before any I/O, exactly like `write_text`.
+
+Both forks and the Finder type, creator and flags are preserved; the lock and
+alias bits are not copied. The source and destination share the workspace
+volume (every tool path does). Both forks together are capped (see
+[limits](limits.md)); a larger source is refused `LIMIT` before anything is
+created.
+
+The copy is journaled and verified like the other file mutations. Sherclawk
+records `mutation_intent`, streams both forks into a uniquely named sibling
+temporary file in bounded slices serviced from the event loop (within a
+60-second deadline), read-backs and hashes both forks, re-checks the pinned
+source revision, sets the staged Finder identity, records `mutation_staged`,
+then publishes with one non-overwriting rename, verifies the destination
+catalog identity and records `mutation_committed` before returning `COPIED`
+with the destination's own `cat-` revision. A source that changed since it
+was pinned is refused `SOURCE_CHANGED` with the stage retained.
+
+A failure before the rename is an error reporting the retained
+`temporary_path`; a failure after the rename attempt is `uncertain`, stops
+the run and reports both paths. Stop before the rename aborts the copy and
+reports the retained stage; it never leaves an uncertain publish. Never
+retry an uncertain outcome. The published copy is ordinary workspace evidence:
+it is not a build record, and `run_application` still launches only
+authorized build IDs.
 
 ## Inspecting resources and identity
 
