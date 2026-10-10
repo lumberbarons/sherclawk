@@ -473,3 +473,7 @@ Not measured: guest heap headroom (the main app log has no FreeMem line) and the
 real iMac's network and CPU speed; the guest's network is QEMU user networking.
 The model's context window (about 1M tokens by the status line) was never close
 to the limit, so provider-side context overflow at 1 MiB was not exercised.
+
+Recorded October 10, 2026: the `Retro68:Older:` and `Retro68:Spikes:` archives
+named in the October 2 entries no longer exist on the AFP share; those entries
+describe the state on their recorded dates.

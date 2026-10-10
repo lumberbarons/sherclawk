@@ -9,7 +9,7 @@ run the agent.
 ## Workspace and Preferences
 
 The default workspace is `Retro68:`. Configure a native MacRoman path ending
-in a colon. Tool paths are relative to it, for example `Spikes:ccapp:hello.c`;
+in a colon. Tool paths are relative to it, for example `Projects:ccapp:hello.c`;
 leading colons, parent traversal, slash paths, and invalid names are refused.
 Workspace source text is interpreted as MacRoman, converted to UTF-8 for the
 model, and displayed through native TextEdit. Binary/resource-fork files and
