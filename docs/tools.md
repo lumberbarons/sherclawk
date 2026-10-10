@@ -7,7 +7,7 @@ buffer and deadline relationships are in [limits](limits.md).
 | Capability | Tools |
 |---|---|
 | Environment, catalog and text reads | `get_environment`, `list_files`, `read_text` |
-| Search and source changes | `search_text`, `write_text`, `create_folder`, `edit_text` |
+| Search and source changes | `search_text`, `write_text`, `create_folder`, `move_to_trash`, `edit_text` |
 | Native project work | `create_project`, `build_project`, `read_build_log`, `run_application` |
 | Read-only platform inspection | `get_file_info`, `resolve_alias`, `list_processes`, `list_fonts`, `measure_text`, `list_resources`, `read_resource` |
 | Read-only image viewing | `view_image` |
@@ -28,10 +28,13 @@ same plain-text rules (see [project instructions](usage.md#project-instructions-
 The model may update an existing one with `edit_text` like any other text file.
 
 Tool results fit a fixed JSON envelope below 1,536 bytes. Folder listings have
-cursors; text reads supply `next_byte` when a line is partial and scan at most
-8 KiB per invocation. Continue from the returned cursor or byte offset rather
-than assuming the first page is complete. Small-file whole-file revisions can
-guard edits; larger-file scan revisions are observational. See
+cursors; `list_files` and `get_file_info` report a catalog revision (`cat-…`:
+catalog identity, modification date and both fork sizes) for files.
+`move_to_trash` requires that revision; it is not a content hash and `edit_text`
+never accepts it. Text reads supply `next_byte` when a line is partial and scan
+at most 8 KiB per invocation. Continue from the returned cursor or byte offset
+rather than assuming the first page is complete. Small-file whole-file revisions
+can guard edits; larger-file scan revisions are observational. See
 [editing text](#editing-text) for the exact guard requirements.
 
 ## Searching text
@@ -103,6 +106,37 @@ returning `CREATED_FOLDER`. A failure that may have left a folder, an
 unverifiable result or a failed completion record is reported as `uncertain`
 and stops the run. Use `list_files` to verify; Stop does not undo a create.
 
+## Moving files to the Trash
+
+`move_to_trash(files)` moves 1–8 files into the volume's Trash with one
+same-volume rename each. It never permanently deletes, never moves folders and
+never empties a Trash. Every item is exactly `{path, revision}`: the `cat-…`
+catalog revision from `list_files` or `get_file_info` pins catalog identity,
+modification date and both fork sizes, and a target that changed since it was
+listed is refused before any rename. The whole batch is validated first; if any
+item fails, nothing moves.
+
+The destination is resolved through the Folder Manager for the source's volume.
+On an AppleShare volume that is the client's `Network Trash Folder`, so items
+appear in the guest Trash and Empty Trash clears them as usual. When no
+same-volume Trash resolves, the tool journals and creates `Retro68:Sherclawk
+Trash:` once and says so in the result; it never copies across volumes. A
+destination name collision gets a bounded ` n` suffix inside the 31-byte HFS
+limit.
+
+Each item journals `mutation_intent`, renames, verifies the destination catalog
+identity (both fork sizes, type and creator) and source absence, then journals
+`mutation_committed`. A rename error counts as a plain failure only while the
+same file is still at the source path; otherwise the reply may have been lost
+and verification decides. A journal failure before the rename stops the run
+with that file untouched; a failure after it, or failed verification, is
+`uncertain`, stops the run and reports both paths. Refused without a journal
+record: folders, aliases, locked files, anything under `Worker01:buildjobs`
+(launched-build evidence), anything already inside a Trash, a non-`cat-`
+revision, and a batch whose report cannot fit the 1,536-byte result cap.
+Recover an item by moving it back from the Trash under its reported `moved_as`
+name, or empty the Trash as usual; Stop does not undo a completed rename.
+
 ## Inspecting resources and identity
 
 Seven read-only tools report what the workspace and the running system
@@ -114,7 +148,8 @@ as the other tools.
 Finder flags plus named alias/custom-icon/bundle/invisible/locked booleans,
 the label, both fork sizes and created/modified catalog dates formatted as
 `YYYY-MM-DD HH:MM:SS` (converted locally, not through International
-Utilities). Folders omit the file-only fields.
+Utilities). Files also report a `cat-…` catalog revision for
+`move_to_trash`; folders omit the file-only fields.
 
 `resolve_alias(path)` reads an HFS alias file's `alis`/0 resource into a
 bounded private copy (at most 32 KiB), resolves it, and
@@ -215,6 +250,8 @@ identity, modification time, byte count and a hash of every byte, independent
 of the displayed line range or byte page. `revision_scope` identifies this
 as `whole_file`; `editable` identifies CR text within the edit limit. Larger
 reads return `scan-...` observational tokens, which editing never accepts.
+The catalog `cat-…` revisions from `list_files`/`get_file_info` are only for
+`move_to_trash`; `edit_text` requires a `full-…` read revision.
 The snapshot is read and validated in 1 KiB chunks, then reread and compared
 byte for byte with catalog checks and a successful close. Line navigation spans
 the complete snapshot. Revision hashes detect ordinary changes; they are not

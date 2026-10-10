@@ -10,6 +10,7 @@
 #define PROJECT_FILES ((int)(sizeof(project_inputs)/sizeof(project_inputs[0])))
 #define PROJECT_CREATES (1+PROJECT_FILES)
 #include <Files.h>
+#include <Folders.h>
 #include <Resources.h>
 #include <Aliases.h>
 #include <Processes.h>
@@ -22,12 +23,13 @@
 #include <string.h>
 #include "stepped-tools.h"
 static struct File { int used, dir; long parent, id; char name[32], bytes[65538]; long size, resource; FInfo info;
-    unsigned long crdat, mddat; } files[64];
+    unsigned long crdat, mddat; int locked; } files[64];
 static long positions[64];
 static int dir_error, dir_leftover, dir_race, touch_on_read;
 static int short_write, bad_read, bad_close, rename_race, rename_error, published, flush_error;
 static int journals, fail_journal, creates;
 static int editing, renames, fault_rename, change_after_stage, stage_bad_read, stage_short_read, busy, swapped_publish;
+static int trash_can, trash_vref, trash_moves, trash_intents, trash_commits, rename_lost;
 static int opens[64];
 static int io_reads,io_writes,io_closes,io_flushes,io_opens;
 static int fault_read,fault_write,fault_close,fault_flush,fault_open;
@@ -87,7 +89,8 @@ OSErr PBGetCatInfoSync(CInfoPBRec *pb)
         memcpy(pb->hFileInfo.ioNamePtr+1,files[i].name,strlen(files[i].name));
     } else i=find(pb->hFileInfo.ioDirID,pb->hFileInfo.ioNamePtr);
     if(i<0) return fnfErr;
-    pb->hFileInfo.ioFlAttrib=files[i].dir ? 16 : 0;
+    pb->hFileInfo.ioFlAttrib=(unsigned char)(files[i].dir ? 16 : 0);
+    if(files[i].locked) pb->hFileInfo.ioFlAttrib|=1;
     pb->hFileInfo.ioFlFndrInfo=files[i].info;
     pb->hFileInfo.ioFlRLgLen=files[i].resource; pb->hFileInfo.ioFlMdDat=files[i].mddat;
     pb->hFileInfo.ioFlCrDat=files[i].crdat; pb->hFileInfo.ioFlBkDat=files[i].mddat;
@@ -149,6 +152,31 @@ OSErr FSpRename(const FSSpec *s, const unsigned char *name)
     if(rename_error && (!fault_rename || fault_rename==renames))return ioErr;
     strcpy(files[i].name,dest);published=1;
     if((editing && renames==2 && swapped_publish) || (!strcmp(call.name,"create_project") && swapped_publish)) files[i].id++;
+    return 0;
+}
+/* The volume Trash model: index of the folder FindFolder resolves, or -1 for
+ * no volume Trash. trash_vref != 1 models a Trash on another volume. */
+OSErr FindFolder(short vRefNum, unsigned long folderType, Boolean createFolder, short *found_vol, long *found_dir)
+{
+    (void)vRefNum; (void)createFolder;
+    if(folderType!=(unsigned long)kTrashFolderType)return paramErr;
+    if(trash_can<0 || !files[trash_can].used || !files[trash_can].dir)return fnfErr;
+    *found_vol=(short)trash_vref;
+    *found_dir=files[trash_can].id;
+    return 0;
+}
+OSErr FSpCatMove(const FSSpec *source, const FSSpec *dest)
+{
+    int i=find(source->parID,source->name); char name[32];
+    if(i<0)return fnfErr;
+    renames++;
+    memcpy(name,dest->name+1,dest->name[0]); name[dest->name[0]]=0;
+    if(find(dest->parID,dest->name)>=0)return dupFNErr;
+    if(rename_error && (!fault_rename || fault_rename==renames))return ioErr;
+    strcpy(files[i].name,name);
+    files[i].parent=dest->parID;
+    published=1; trash_moves++;
+    if(rename_lost && (!fault_rename || fault_rename==renames))return ioErr;
     return 0;
 }
 /* ---------- Read-only inspection model: resources, aliases, processes,
@@ -382,6 +410,28 @@ static int journal(void *ctx, const char *event, const char *json)
         assert(journals==1 ? !strcmp(event,"mutation_intent") && !creates : !strcmp(event,"mutation_committed") && creates);
         return fail_journal==journals ? -1 : 0;
     }
+    if(!strcmp(call.name,"move_to_trash")) {
+        char kind[24], status[16];
+        int mutation=json_member(json,tokens,0,"mutation");
+        int ki=json_member(json,tokens,mutation,"kind"), si=json_member(json,tokens,mutation,"status");
+        assert(mutation>=0 && ki>=0 && si>=0);
+        assert(json_string(json,tokens,ki,kind,sizeof(kind))>=0);
+        assert(json_string(json,tokens,si,status,sizeof(status))>=0);
+        if(!strcmp(kind,"trash_folder")) {
+            assert(!strcmp(event,!strcmp(status,"pending") ? "mutation_intent" : "mutation_committed"));
+            assert(trash_moves==0);
+        } else {
+            assert(!strcmp(kind,"move_to_trash"));
+            if(!strcmp(event,"mutation_intent")) {
+                assert(!strcmp(status,"pending") && trash_intents==trash_commits);
+                trash_intents++;
+            } else {
+                assert(!strcmp(event,"mutation_committed") && !strcmp(status,"ok") && trash_intents==trash_commits+1);
+                trash_commits++;
+            }
+        }
+        return fail_journal==journals ? -1 : 0;
+    }
     { char temp[768]; int mutation=json_member(json,tokens,0,"mutation");
       int n=json_string(json,tokens,json_member(json,tokens,mutation,"temporary_path"),temp,sizeof(temp));
       assert(n>=0);if((size_t)n>longest_temporary)longest_temporary=(size_t)n; }
@@ -400,6 +450,7 @@ static void reset(void)
     short_write=bad_read=bad_close=rename_race=rename_error=published=flush_error=0;
     journals=fail_journal=creates=0;longest_temporary=0;
     editing=renames=fault_rename=change_after_stage=stage_bad_read=stage_short_read=busy=swapped_publish=0;
+    trash_can=-1;trash_vref=1;trash_moves=trash_intents=trash_commits=0;rename_lost=0;
     io_reads=io_writes=io_closes=io_flushes=io_opens=0;
     fault_read=fault_write=fault_close=fault_flush=fault_open=0;largest_transfer=0;
     memset(opens,0,sizeof(opens));
@@ -1204,6 +1255,214 @@ static void instruction_checks(void)
     puts("PASS AGENTS.md loader: absent, MacRoman/CR, project folders, refusals, change detection, cap and visible truncation");
     project_name_checks();
 }
+/* ---------- Reversible delete: pinned batches into the volume Trash ------- */
+static int trash_file(long parent, const char *name, const char *bytes)
+{
+    int i=add(parent,name,0);
+    memcpy(files[i].bytes,bytes,strlen(bytes)); files[i].size=(long)strlen(bytes);
+    files[i].info.fdType='TEXT'; files[i].info.fdCreator='ttxt';
+    return i;
+}
+static int list_revision(const char *leaf_name, char *out, size_t cap)
+{
+    JsonToken t[128]; int i, files_token, found=0;
+    strcpy(call.name,"list_files"); strcpy(call.arguments,"{\"root\":\"\",\"limit\":12}");
+    tools_execute(&call,result,sizeof(result));
+    assert(json_parse(result,strlen(result),t,128)>0);
+    files_token=json_member(result,t,0,"files"); assert(files_token>=0 && t[files_token].type==JSON_ARRAY);
+    for(i=files_token+1;i<t[files_token].next;i=t[i].next) {
+        char path[256];
+        if(json_string(result,t,json_member(result,t,i,"path"),path,sizeof(path))<0)continue;
+        if(strcmp(path,leaf_name))continue;
+        assert(json_string(result,t,json_member(result,t,i,"revision"),out,cap)>=0);
+        found=1;
+    }
+    return found;
+}
+static void info_revision(const char *path, char *out, size_t cap)
+{
+    strcpy(call.name,"get_file_info");
+    snprintf(call.arguments,sizeof(call.arguments),"{\"path\":\"%s\"}",path);
+    tools_execute(&call,result,sizeof(result));
+    field("revision",out,cap);
+}
+static int trash_can_model(void)
+{
+    int ntf=add(10,"Network Trash Folder",1);
+    int can=add(files[ntf].id,"Trash Can #2",1);
+    trash_can=can; return can;
+}
+static int move_one(const char *path, const char *revision)
+{
+    strcpy(call.name,"move_to_trash");
+    snprintf(call.arguments,sizeof(call.arguments),"{\"files\":[{\"path\":\"%s\",\"revision\":\"%s\"}]}",path,revision);
+    return run();
+}
+static int result_file_field(const char *name, char *out, size_t cap)
+{
+    JsonToken t[128]; int files_token, first;
+    assert(json_parse(result,strlen(result),t,128)>0);
+    files_token=json_member(result,t,0,"files"); assert(files_token>=0 && t[files_token].type==JSON_ARRAY);
+    first=files_token+1; assert(first<t[files_token].next);
+    return json_string(result,t,json_member(result,t,first,name),out,cap)>=0;
+}
+static void trash_checks(void)
+{
+    char rev[48], rev2[48], text[256];
+    int i, j, n, can, folder;
+    /* Both listings emit the same cat- pin; folders emit none. */
+    reset(); trash_file(10,"hello.c","one");
+    assert(list_revision("hello.c",rev,sizeof(rev)) && !strncmp(rev,"cat-",4));
+    info_revision("hello.c",rev2,sizeof(rev2));
+    assert(!strcmp(rev,rev2));
+    reset(); add(10,"sub",1);
+    strcpy(call.name,"get_file_info"); strcpy(call.arguments,"{\"path\":\"sub\"}");
+    tools_execute(&call,result,sizeof(result));
+    assert(strstr(result,"\"kind\":\"folder\"") && !strstr(result,"revision"));
+
+    /* One pinned file renamed into the network Trash. */
+    reset(); i=trash_file(10,"hello.c","one");
+    assert(list_revision("hello.c",rev,sizeof(rev)));
+    can=trash_can_model();
+    assert(!move_one("hello.c",rev) && strstr(result,"TRASHED") && strstr(result,"\"moved\":1") &&
+        journals==2 && trash_moves==1 && trash_intents==1 && trash_commits==1);
+    field("trash",text,sizeof(text)); assert(!strcmp(text,"Network Trash Folder:Trash Can #2:"));
+    assert(result_file_field("moved_as",text,sizeof(text)) && !strcmp(text,"hello.c"));
+    assert(files[i].parent==files[can].id && !strcmp(files[i].name,"hello.c") && !opens[i]);
+
+    /* A collision keeps the leaf recognizable with a bounded suffix. */
+    reset(); i=trash_file(10,"hello.c","one");
+    assert(list_revision("hello.c",rev,sizeof(rev)));
+    can=trash_can_model(); trash_file(files[can].id,"hello.c","old");
+    assert(!move_one("hello.c",rev) && strstr(result,"TRASHED"));
+    assert(result_file_field("moved_as",text,sizeof(text)) && !strcmp(text,"hello.c 2"));
+    assert(files[i].parent==files[can].id && !strcmp(files[i].name,"hello.c 2"));
+
+    /* No volume Trash (or one on another volume): one journaled workspace
+     * fallback, reused by later batches. */
+    reset(); i=trash_file(10,"hello.c","one");
+    assert(list_revision("hello.c",rev,sizeof(rev)));
+    assert(!move_one("hello.c",rev) && strstr(result,"TRASHED") && creates==1 && journals==4);
+    field("trash",text,sizeof(text)); assert(!strcmp(text,"Sherclawk Trash:"));
+    folder=leaf("Sherclawk Trash"); assert(folder>=0 && files[folder].dir && files[i].parent==files[folder].id);
+    j=trash_file(10,"two.c","two");
+    assert(list_revision("two.c",rev2,sizeof(rev2)));
+    assert(!move_one("two.c",rev2) && strstr(result,"TRASHED") && creates==1 && journals==6);
+    assert(files[j].parent==files[folder].id);
+    reset(); i=trash_file(10,"hello.c","one");
+    assert(list_revision("hello.c",rev,sizeof(rev)));
+    trash_can_model(); trash_vref=2;
+    assert(!move_one("hello.c",rev) && strstr(result,"TRASHED") && leaf("Sherclawk Trash")>=0);
+    assert(files[i].parent==files[leaf("Sherclawk Trash")].id);
+
+    /* Refusals: nothing moves, no journal record is written. */
+    reset(); add(10,"dir",1);
+    assert(!move_one("dir","cat-0-0-0-0") && strstr(result,"NOT_FILE") && journals==0 && !trash_moves);
+    reset(); i=trash_file(10,"hello.c","one"); assert(list_revision("hello.c",rev,sizeof(rev)));
+    files[i].locked=1;
+    assert(!move_one("hello.c",rev) && strstr(result,"LOCKED") && journals==0 && !trash_moves && files[i].parent==10);
+    files[i].locked=0;
+    reset(); i=trash_file(10,"hello.c","one"); assert(list_revision("hello.c",rev,sizeof(rev)));
+    files[i].info.fdFlags=0x8000;
+    assert(!move_one("hello.c",rev) && strstr(result,"ALIAS") && !trash_moves);
+    reset(); i=trash_file(10,"hello.c","one"); assert(list_revision("hello.c",rev,sizeof(rev)));
+    files[i].mddat++;
+    assert(!move_one("hello.c",rev) && strstr(result,"REVISION_MISMATCH") && journals==0 && !trash_moves && files[i].parent==10);
+    reset(); { int w=add(10,"Worker01",1), b=add(files[w].id,"buildjobs",1); trash_file(files[b].id,"log","x"); }
+    assert(!move_one("Worker01:buildjobs:log","cat-0-0-0-0") && strstr(result,"REFUSED") && journals==0);
+    reset(); { int t=add(10,"Sherclawk Trash",1); trash_file(files[t].id,"old.c","x"); }
+    assert(!move_one("Sherclawk Trash:old.c","cat-0-0-0-0") && strstr(result,"REFUSED") && !trash_moves);
+    { const char *bad[]={
+        "{}","{\"files\":[]}","{\"files\":\"x\"}",
+        "{\"files\":[{\"path\":\"hello.c\"}]}",
+        "{\"files\":[{\"revision\":\"cat-0-0-0-0\"}]}",
+        "{\"files\":[{\"path\":\"hello.c\",\"revision\":\"full-x\"}]}",
+        "{\"files\":[{\"path\":\"hello.c\",\"revision\":\"cat-0-0-0-0\",\"extra\":1}]}",
+        "{\"files\":[{\"path\":\"a\",\"path\":\"b\",\"revision\":\"cat-0-0-0-0\"}]}",
+        "{\"files\":[{\"path\":\"hello.c\",\"revision\":\"cat-0-0-0-0\"}],\"mode\":\"x\"}" };
+      for(i=0;i<(int)(sizeof(bad)/sizeof(*bad));i++){reset();strcpy(call.name,"move_to_trash");strcpy(call.arguments,bad[i]);
+        assert(!run() && strstr(result,"ARGUMENTS") && journals==0 && !trash_moves);} }
+    reset(); trash_file(10,"hello.c","one"); assert(list_revision("hello.c",rev,sizeof(rev)));
+    { char many[AGENT_ARGUMENT_CAP]; size_t at=0;
+      at+=(size_t)snprintf(many,sizeof(many),"{\"files\":[");
+      for(n=0;n<9;n++)at+=(size_t)snprintf(many+at,sizeof(many)-at,"%s{\"path\":\"hello.c\",\"revision\":\"%s\"}",n?",":"",rev);
+      snprintf(many+at,sizeof(many)-at,"]}");
+      strcpy(call.name,"move_to_trash"); strcpy(call.arguments,many);
+      assert(!run() && strstr(result,"ARGUMENTS") && journals==0); }
+
+    /* A batch moves every pinned item; one stale pin refuses the whole batch. */
+    reset(); i=trash_file(10,"one.c","1"); j=trash_file(10,"two.c","2");
+    assert(list_revision("one.c",rev,sizeof(rev)) && list_revision("two.c",rev2,sizeof(rev2)));
+    can=trash_can_model();
+    strcpy(call.name,"move_to_trash");
+    snprintf(call.arguments,sizeof(call.arguments),"{\"files\":[{\"path\":\"one.c\",\"revision\":\"%s\"},{\"path\":\"two.c\",\"revision\":\"%s\"}]}",rev,rev2);
+    assert(!run() && strstr(result,"TRASHED") && strstr(result,"\"moved\":2") && journals==4 && trash_moves==2);
+    assert(files[i].parent==files[can].id && files[j].parent==files[can].id);
+    reset(); i=trash_file(10,"one.c","1"); j=trash_file(10,"two.c","2");
+    assert(list_revision("one.c",rev,sizeof(rev)) && list_revision("two.c",rev2,sizeof(rev2)));
+    can=trash_can_model(); files[j].mddat++;
+    strcpy(call.name,"move_to_trash");
+    snprintf(call.arguments,sizeof(call.arguments),"{\"files\":[{\"path\":\"one.c\",\"revision\":\"%s\"},{\"path\":\"two.c\",\"revision\":\"%s\"}]}",rev,rev2);
+    assert(!run() && strstr(result,"REVISION_MISMATCH") && strstr(result,"\"moved\":0") && journals==0 && !trash_moves);
+    assert(files[i].parent==10 && files[j].parent==10);
+
+    /* A mid-batch execution failure stops there and reports what moved. */
+    reset(); i=trash_file(10,"one.c","1"); j=trash_file(10,"two.c","2");
+    assert(list_revision("one.c",rev,sizeof(rev)) && list_revision("two.c",rev2,sizeof(rev2)));
+    can=trash_can_model(); rename_error=1; fault_rename=2;
+    strcpy(call.name,"move_to_trash");
+    snprintf(call.arguments,sizeof(call.arguments),"{\"files\":[{\"path\":\"one.c\",\"revision\":\"%s\"},{\"path\":\"two.c\",\"revision\":\"%s\"}]}",rev,rev2);
+    assert(!run() && strstr(result,"MOVE_FAILED") && strstr(result,"\"moved\":1") && journals==3 && trash_moves==1);
+    assert(files[i].parent==files[can].id && files[j].parent==10);
+    field("failed",text,sizeof(text)); assert(!strcmp(text,"two.c"));
+
+    /* Journal barriers: intent stops before the rename, a failed commit is uncertain. */
+    reset(); i=trash_file(10,"hello.c","one"); assert(list_revision("hello.c",rev,sizeof(rev)));
+    trash_can_model(); fail_journal=1;
+    assert(move_one("hello.c",rev)==1 && strstr(result,"JOURNAL") && !trash_moves && files[i].parent==10 && journals==1);
+    reset(); i=trash_file(10,"hello.c","one"); assert(list_revision("hello.c",rev,sizeof(rev)));
+    trash_can_model(); fail_journal=2;
+    assert(move_one("hello.c",rev)==1 && strstr(result,"uncertain") && strstr(result,"JOURNAL_AFTER_MOVE") && trash_moves==1 && journals==2);
+    reset(); i=trash_file(10,"hello.c","one"); assert(list_revision("hello.c",rev,sizeof(rev)));
+    fail_journal=1;
+    assert(move_one("hello.c",rev)==1 && strstr(result,"JOURNAL") && leaf("Sherclawk Trash")<0 && journals==1);
+    reset(); i=trash_file(10,"hello.c","one"); assert(list_revision("hello.c",rev,sizeof(rev)));
+    fail_journal=2;
+    assert(move_one("hello.c",rev)==1 && strstr(result,"uncertain") && strstr(result,"trash_folder") &&
+        leaf("Sherclawk Trash")>=0 && !trash_moves && journals==2);
+
+    /* Move errors and post-move verification failures. */
+    reset(); i=trash_file(10,"hello.c","one"); assert(list_revision("hello.c",rev,sizeof(rev)));
+    trash_can_model(); rename_error=1;
+    assert(!move_one("hello.c",rev) && strstr(result,"MOVE_FAILED") && !trash_moves && files[i].parent==10 && journals==1);
+    reset(); i=trash_file(10,"hello.c","one"); assert(list_revision("hello.c",rev,sizeof(rev)));
+    trash_can_model(); flush_error=1;
+    assert(move_one("hello.c",rev)==1 && strstr(result,"uncertain") && strstr(result,"MOVE_UNCERTAIN") && trash_moves==1 && journals==1);
+    /* A lost rename reply is verified like any other move, never claimed failed. */
+    reset(); i=trash_file(10,"hello.c","one"); assert(list_revision("hello.c",rev,sizeof(rev)));
+    can=trash_can_model(); rename_lost=1;
+    assert(!move_one("hello.c",rev) && strstr(result,"TRASHED") && trash_moves==1 && journals==2 &&
+        files[i].parent==files[can].id);
+    reset(); i=trash_file(10,"hello.c","one"); assert(list_revision("hello.c",rev,sizeof(rev)));
+    trash_can_model(); strcpy(call.name,"move_to_trash");
+    snprintf(call.arguments,sizeof(call.arguments),"{\"files\":[{\"path\":\"hello.c\",\"revision\":\"%s\"}]}",rev);
+    assert(tools_execute_recorded(&call,result,sizeof(result),NULL,NULL)==1 && strstr(result,"JOURNAL") && !trash_moves);
+
+    /* A report that cannot fit the result budget is refused untouched. */
+    reset();
+    { char longpath[220]="", leafname[32], p2[8][220], rb[8][48], args2[AGENT_ARGUMENT_CAP];
+      size_t at=0; long parent=10; int d;
+      for(d=0;d<5;d++){ memset(leafname,'a',31); leafname[31]=0; i=add(parent,leafname,1); parent=files[i].id; strcat(longpath,leafname); strcat(longpath,":"); }
+      for(n=0;n<8;n++){ snprintf(leafname,sizeof(leafname),"f%d.c",n); trash_file(parent,leafname,"x");
+        snprintf(p2[n],sizeof(p2[n]),"%s%s",longpath,leafname); info_revision(p2[n],rb[n],sizeof(rb[n])); }
+      (void)trash_can_model();
+      at+=(size_t)snprintf(args2,sizeof(args2),"{\"files\":[");
+      for(n=0;n<8;n++)at+=(size_t)snprintf(args2+at,sizeof(args2)-at,"%s{\"path\":\"%s\",\"revision\":\"%s\"}",n?",":"",p2[n],rb[n]);
+      snprintf(args2+at,sizeof(args2)-at,"]}");
+      strcpy(call.name,"move_to_trash"); strcpy(call.arguments,args2);
+      assert(!run() && strstr(result,"LIMIT") && journals==0 && !trash_moves); }
+    puts("PASS move_to_trash: pinned batches, network Trash and workspace fallback, collisions, refusals, journal barriers, partial failure and result caps");
+}
 int main(void)
 {
     project_checks();
@@ -1262,5 +1521,6 @@ int main(void)
     inspect_checks();
     view_checks();
     instruction_checks();
+    trash_checks();
     return 0;
 }

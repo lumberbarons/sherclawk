@@ -189,6 +189,16 @@ bounded.
   the guest. Compile-time guards in `agent.c` enforce invariants 1 and 2 and
   the 16 KiB minimum overhead of invariant 3, but only the guest shows the partition is big enough.
 
+## Reversible delete bounds
+
+`move_to_trash` accepts at most 8 `{path, revision}` items per call, so one
+report can fit `AGENT_RESULT_CAP` with room for quoting (the 8-item argument
+list is far below `AGENT_ARGUMENT_CAP`). Before any rename it sums the quoted
+paths, the trash folder and the envelope; a batch that cannot fit is refused
+`LIMIT` with nothing moved. Each item costs one `mutation_intent` and one
+`mutation_committed` record; the first fallback use also journals the
+`Sherclawk Trash` folder creation.
+
 ## Reading the evidence
 
 Each model round logs one line to `Retro68:Sherclawk.log` with
