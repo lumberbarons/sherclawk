@@ -551,7 +551,8 @@ static void edit_checks(void)
     edit_setup("one\r","one","two");assert(tools_execute_recorded(&call,result,sizeof(result),NULL,NULL) && strstr(result,"JOURNAL") && !creates);
     for(j=1;j<=4;j++) {
         i=edit_setup("one\r","one","two");fail_journal=j;assert(run());
-        assert(j<3 ? leaf("hello.c")==i : files[i].used && !strcmp(files[i].bytes,"one\r"));
+        if(j<3)assert(leaf("hello.c")==i);
+        else{field("backup_path",backup,sizeof(backup));assert(leaf(backup)==i && !strcmp(files[i].bytes,"one\r"));}
         assert(!opens[i]);assert(j==4 ? !strcmp(files[leaf("hello.c")].bytes,"two\r") : !strcmp(files[i].bytes,"one\r"));
     }
     i=edit_setup("one\r","one","two");short_write=1;assert(!run() && strstr(result,"STAGE_FAILED") && leaf("hello.c")==i && journals==1);
@@ -763,10 +764,15 @@ static void folder_checks(void)
     strcpy(call.arguments,"{\"path\":\"src\"}");journals=0;assert(!run() && strstr(result,"EXISTS") && !journals);
     reset();strcpy(call.name,"create_folder");strcpy(call.arguments,"{\"path\":\"hello.c\"}");add(10,"hello.c",0);
     assert(!run() && strstr(result,"EXISTS") && !creates && !journals);
-    { const char *bad[]={"{\"path\":\"missing:inner\"}","{\"path\":\":escape\"}","{\"path\":\"src:\"}","{\"path\":\"\"}",
-        "{}","{\"path\":\"a\",\"path\":\"b\"}","{\"path\":\"a\",\"mode\":\"x\"}","{\"path\":\"\\ud83e\\udd80\"}"};
-      for(i=0;i<(int)(sizeof(bad)/sizeof(*bad));i++){reset();strcpy(call.name,"create_folder");strcpy(call.arguments,bad[i]);
-        assert(!run() && strstr(result,"error") && !creates && !journals);} }
+    { const struct { const char *arguments, *code; } bad[]={
+        {"{\"path\":\"missing:inner\"}","PATH"},{"{\"path\":\":escape\"}","PATH"},
+        {"{\"path\":\"src:\"}","PATH"},{"{\"path\":\"\"}","PATH"},
+        {"{}","ARGUMENTS"},{"{\"path\":\"a\",\"path\":\"b\"}","ARGUMENTS"},
+        {"{\"path\":\"a\",\"mode\":\"x\"}","ARGUMENTS"},{"{\"path\":\"\\ud83e\\udd80\"}","PATH"}};
+      for(i=0;i<(int)(sizeof(bad)/sizeof(*bad));i++){char wanted[48];
+        reset();strcpy(call.name,"create_folder");strcpy(call.arguments,bad[i].arguments);
+        snprintf(wanted,sizeof(wanted),"\"code\":\"%s\"",bad[i].code);
+        assert(!run() && strstr(result,"\"status\":\"error\"") && strstr(result,wanted) && !creates && !journals);} }
     reset();i=add(10,"alias",1);files[i].info.fdFlags=0x8000;strcpy(call.name,"create_folder");strcpy(call.arguments,"{\"path\":\"alias:x\"}");
     assert(!run() && !creates && !journals);
     reset();strcpy(call.name,"create_folder");strcpy(call.arguments,"{\"path\":\"src\"}");
@@ -798,9 +804,14 @@ static void project_checks(void)
         assert(!memchr(files[j].bytes,10,(size_t)files[j].size));
     }
     assert(!run() && strstr(result,"EXISTS") && creates==PROJECT_CREATES && journals==3);
-    { const char *bad[]={"{}","{\"path\":\"Project\",\"template\":\"other\"}","{\"path\":\"a\",\"path\":\"b\"}",
-        "{\"path\":\"missing:Project\"}","{\"path\":\":escape\"}","{\"path\":\"Project:\"}","{\"path\":\"\"}"};
-      for(i=0;i<7;i++){reset();strcpy(call.name,"create_project");strcpy(call.arguments,bad[i]);assert(!run() && strstr(result,"error") && !creates && !journals);} }
+    { const struct { const char *arguments, *code; } bad[]={
+        {"{}","ARGUMENTS"},{"{\"path\":\"Project\",\"template\":\"other\"}","ARGUMENTS"},
+        {"{\"path\":\"a\",\"path\":\"b\"}","ARGUMENTS"},{"{\"path\":\"missing:Project\"}","PATH"},
+        {"{\"path\":\":escape\"}","PATH"},{"{\"path\":\"Project:\"}","PATH"},{"{\"path\":\"\"}","PATH"}};
+      for(i=0;i<(int)(sizeof(bad)/sizeof(*bad));i++){char wanted[48];
+        reset();strcpy(call.name,"create_project");strcpy(call.arguments,bad[i].arguments);
+        snprintf(wanted,sizeof(wanted),"\"code\":\"%s\"",bad[i].code);
+        assert(!run() && strstr(result,"\"status\":\"error\"") && strstr(result,wanted) && !creates && !journals);} }
     reset();i=add(10,"alias",1);files[i].info.fdFlags=0x8000;strcpy(call.name,"create_project");strcpy(call.arguments,"{\"path\":\"alias:Project\"}");assert(!run() && !creates);
     for(i=1;i<=3;i++) {
         reset();strcpy(call.name,"create_project");strcpy(call.arguments,"{\"path\":\"Project\"}");fail_journal=i;
@@ -1514,11 +1525,16 @@ int main(void)
     reset();rename_race=1;assert(!run() && strstr(result,"EXISTS_STAGE_RETAINED"));i=leaf("hello.c");assert(i>=0 && !memcmp(files[i].bytes,"racer",5) && journals==2);
     reset();rename_error=1;assert(run() && strstr(result,"uncertain") && !published);
     reset();flush_error=1;assert(run() && strstr(result,"uncertain") && leaf("hello.c")>=0);
-    { const char *bad[]={"{\"path\":\":escape\",\"text\":\"x\"}","{\"path\":\"missing:hello.c\",\"text\":\"x\"}",
-        "{\"path\":\"hello.c\",\"text\":\"\\ud83e\\udd80\"}","{\"path\":\"hello.c\",\"text\":\"\\u0001\"}",
-        "{\"path\":\"hello.c\",\"text\":\"x\",\"text\":\"y\"}","{\"path\":\"hello.c\",\"text\":\"x\",\"mode\":\"overwrite\"}",
-        "{\"path\":\"hello.c\"}","{\"path\":\"hello.c\",\"text\":\"\\u0000\"}","{\"path\":\"hello.c\",\"text\":\"\\u007f\"}"};
-      for(i=0;i<(int)(sizeof(bad)/sizeof(*bad));i++){reset();strcpy(call.arguments,bad[i]);assert(!run() && strstr(result,"error") && !creates && !journals);} }
+    { const struct { const char *arguments, *code; } bad[]={
+        {"{\"path\":\":escape\",\"text\":\"x\"}","PATH"},{"{\"path\":\"missing:hello.c\",\"text\":\"x\"}","PATH"},
+        {"{\"path\":\"hello.c\",\"text\":\"\\ud83e\\udd80\"}","ENCODING_LIMIT"},{"{\"path\":\"hello.c\",\"text\":\"\\u0001\"}","NOT_TEXT"},
+        {"{\"path\":\"hello.c\",\"text\":\"x\",\"text\":\"y\"}","ARGUMENTS"},{"{\"path\":\"hello.c\",\"text\":\"x\",\"mode\":\"overwrite\"}","ARGUMENTS"},
+        {"{\"path\":\"hello.c\"}","ARGUMENTS"},{"{\"path\":\"hello.c\",\"text\":\"\\u0000\"}","ARGUMENTS"},
+        {"{\"path\":\"hello.c\",\"text\":\"\\u007f\"}","NOT_TEXT"}};
+      for(i=0;i<(int)(sizeof(bad)/sizeof(*bad));i++){char wanted[48];
+        reset();strcpy(call.arguments,bad[i].arguments);
+        snprintf(wanted,sizeof(wanted),"\"code\":\"%s\"",bad[i].code);
+        assert(!run() && strstr(result,"\"status\":\"error\"") && strstr(result,wanted) && !creates && !journals);} }
     reset();i=add(10,"alias",0);files[i].info.fdFlags=0x8000;
     strcpy(call.arguments,"{\"path\":\"alias:hello.c\",\"text\":\"x\"}");assert(!run() && !creates);
     reset();i=add(10,"folder",1);strcpy(call.arguments,"{\"path\":\"folder:hello.c\",\"text\":\"x\"}");assert(!run() && journals==3 && published);
