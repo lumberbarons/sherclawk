@@ -4,6 +4,19 @@ Dated acceptance evidence for the OS 9 guest, host checks and live model runs,
 retained from earlier development. Entries describe the state on their recorded
 dates. Use the [current guides](../../README.md#documentation) for present behavior.
 
+Recorded October 10, 2026: `copy_file` was exercised in OS 9.2.2 against the
+AFP `Retro68` volume. `SherclawkCopyCheck` reported zero failures: a native
+fixture with both forks (3,000 data and 1,500 resource bytes) and Finder
+identity (`APPL`/`ShCk`, custom-icon flag set) was pinned through
+`get_file_info` and published under a new name with `mutation_intent`,
+`mutation_staged` and `mutation_committed` records, returning `COPIED` with
+the destination's own `cat-` revision. The destination preserved both fork
+sizes, type/creator and flags without the lock and alias bits, every byte of
+both forks read back identical, and the source stayed untouched. A second
+copy onto the published name was refused `EXISTS` before any I/O, with no
+journal records. Not exercised: a copy at the 1 MiB cap, Stop mid-copy and a
+publish from a real build artifact in the main app.
+
 Recorded October 10, 2026 (display extraction, issue #145): Clang and Linux
 GCC 13 ASan/UBSan host checks passed the extracted formatting, validation,
 transcript capping and scroll/layout fixtures. `tools/check-transport.sh` and
