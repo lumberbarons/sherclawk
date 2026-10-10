@@ -122,7 +122,10 @@ history is full: the summary request never appends to the old history. The model
 produces a concise Markdown handoff covering goals and constraints, completed
 work and exact paths, observed verification, unresolved or uncertain operations,
 and next steps. Summary generation uses the selected model and the normal
-120-second HTTPS deadline. Stop cancels observation and retains the old history;
+120-second HTTPS deadline. Its 6000-token output budget includes reasoning;
+the requested summary remains at most 2800 ASCII characters. If the model
+exhausts that budget, the app reports the output token limit and retains the
+conversation so you can try Save Handoff again. Stop cancels observation and retains the old history;
 there is no automatic retry or automatic compaction.
 
 The app saves a unique `hXXXXXXXX.md` in `Retro68:Sherclawk Sessions:` as

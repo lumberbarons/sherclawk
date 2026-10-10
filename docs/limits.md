@@ -12,7 +12,7 @@ in the headers today; the headers win if this drifts.
 | Constant | Value | Bounds |
 |---|---|---|
 | `AGENT_MAX_TOKENS` | 6000 | `max_tokens` on every agent request. Reasoning tokens count against it. |
-| `AGENT_HANDOFF_MAX_TOKENS` | 1536 | `max_tokens` on the handoff summary request. |
+| `AGENT_HANDOFF_MAX_TOKENS` | 6000 | `max_tokens` on the handoff summary request, including reasoning. Visible summaries are still requested at at most 2800 ASCII characters. |
 | `CHAT_RESPONSE_CAP` | 64 KiB | One raw HTTP response (`ChatNetwork.raw`), its de-chunked body, and the `message` scratch in `agent_response`. |
 | `AGENT_REPLY_CAP` | 40 KiB | Visible text of one reply (`Agent.text`). |
 | `AGENT_ARGUMENT_CAP` | 8 KiB | Arguments of one tool call. |
@@ -80,7 +80,12 @@ in bss and 8,224 bytes of text and data, mostly the embedded starter.
    about 5.8 bytes per token for visible text (3072 tokens → 17,885 bytes) and
    about 9.9 for a reasoning-heavy reply (3072 tokens → 30,347 bytes). So the
    budget is `max_tokens` × 10 ≤ `CHAT_RESPONSE_CAP`; 6000 → about 59 KB fits
-   64 KiB, 8192 → about 81 KB does not.
+   64 KiB, 8192 → about 81 KB does not. The same relation is enforced for
+   `AGENT_HANDOFF_MAX_TOKENS`; its 6000-token budget leaves room for reasoning
+   plus the concise summary without increasing any static buffer. The old
+   1536-token budget exhausted twice in a guest session, with 908 and 977
+   tokens spent on reasoning. Handoffs report truncation and retain history
+   rather than automatically retrying.
 2. **`AGENT_REPLY_CAP` ≥ the longest visible reply, < `CHAT_RESPONSE_CAP`.**
    Visible text is part of the response, so it is bounded by invariant 1; the
    reply cap sizes the copy in `Agent.text`. A complete reply longer than it is

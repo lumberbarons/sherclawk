@@ -17,6 +17,7 @@ static JsonToken tokens[4096];
 #define LIMIT_CHECK(name, cond) typedef char limit_check_##name[(cond) ? 1 : -1]
 /* A worst-case reasoning-heavy completion is about 10 bytes per token. */
 LIMIT_CHECK(tokens_fit_response, AGENT_MAX_TOKENS * 10 <= CHAT_RESPONSE_CAP);
+LIMIT_CHECK(handoff_tokens_fit_response, AGENT_HANDOFF_MAX_TOKENS * 10 <= CHAT_RESPONSE_CAP);
 LIMIT_CHECK(reply_fits_response, AGENT_REPLY_CAP < CHAT_RESPONSE_CAP);
 LIMIT_CHECK(request_holds_history, CHAT_REQUEST_CAP >= AGENT_HISTORY_CAP + 16384 + AGENT_INSTRUCTIONS_CAP);
 
@@ -359,9 +360,12 @@ int agent_handoff_response(const char *body, size_t len, int status, char *summa
     choices = json_member(body, tokens, 0, "choices");
     if (choices < 0 || tokens[choices].type != JSON_ARRAY || tokens[choices].next == choices + 1) return -1;
     msg = json_member(body, tokens, choices + 1, "message");
-    if (msg < 0 || tokens[msg].type != JSON_OBJECT ||
-        json_string(body, tokens, json_member(body, tokens, choices + 1, "finish_reason"), finish, sizeof(finish)) < 0 ||
-        strcmp(finish, "stop") ||
+    if (json_string(body, tokens, json_member(body, tokens, choices + 1, "finish_reason"), finish, sizeof(finish)) < 0) return -1;
+    if (!strcmp(finish, "length")) {
+        snprintf(error, error_cap, "Handoff reached the output token limit before finishing. Conversation retained. Try Save Handoff again.");
+        return -1;
+    }
+    if (msg < 0 || tokens[msg].type != JSON_OBJECT || strcmp(finish, "stop") ||
         json_string(body, tokens, json_member(body, tokens, msg, "role"), role, sizeof(role)) < 0 || strcmp(role, "assistant")) return -1;
     calls = json_member(body, tokens, msg, "tool_calls");
     if (calls >= 0 && !null_token(body, tokens, calls) &&

@@ -683,6 +683,14 @@ int main(void)
     saved = a;
     assert(agent_handoff_request(&a, "model", req, sizeof(req)) > AGENT_HISTORY_CAP);
     assert(!strstr(req, "\"tools\":") && strstr(req, "Write the handoff summary now"));
+    {
+        JsonToken request_tokens[4096];
+        long max_tokens;
+        assert(json_parse(req, strlen(req), request_tokens, 4096) > 0);
+        assert(!json_integer(req, request_tokens,
+            json_member(req, request_tokens, 0, "max_tokens"), &max_tokens));
+        assert(max_tokens == 6000);
+    }
     assert(!memcmp(&a, &saved, sizeof(a)));
     assert(!agent_handoff_response(final, strlen(final), 200, req, sizeof(req), error, sizeof(error)));
     assert(!strcmp(req, "Inspected."));
@@ -691,6 +699,9 @@ int main(void)
     assert(agent_handoff_response(response, strlen(response), 200, req, sizeof(req), error, sizeof(error)) == -1);
     call("length");
     assert(agent_handoff_response(response, strlen(response), 200, req, sizeof(req), error, sizeof(error)) == -1);
+    assert(!*req && strstr(error, "output token limit") && strstr(error, "Conversation retained"));
+    assert(agent_handoff_response(reasoning_only, strlen(reasoning_only), 200, req, sizeof(req), error, sizeof(error)) == -1);
+    assert(!*req && strstr(error, "output token limit") && !memcmp(&a, &saved, sizeof(a)));
     for (i = 0; i < strlen(final); i++)
         assert(agent_handoff_response(final, i, 200, req, sizeof(req), error, sizeof(error)) == -1);
     agent_reset(&candidate, journal, NULL); fail_record = 1;

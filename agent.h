@@ -21,7 +21,7 @@
 #define AGENT_MODEL_ROWS_MAX 10
 /* Completion budget per agent request, reasoning included. */
 #define AGENT_MAX_TOKENS 6000
-#define AGENT_HANDOFF_MAX_TOKENS 1536
+#define AGENT_HANDOFF_MAX_TOKENS 6000
 /* Largest PNG, in bytes, that view_image attaches: its base64 form must fit
  * the one flat request beside a history that is re-sent every round. */
 #define AGENT_IMAGE_CAP 131072
