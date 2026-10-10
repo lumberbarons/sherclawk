@@ -193,11 +193,16 @@ bounded.
 
 `move_to_trash` accepts at most 8 `{path, revision}` items per call, so one
 report can fit `AGENT_RESULT_CAP` with room for quoting (the 8-item argument
-list is far below `AGENT_ARGUMENT_CAP`). Before any rename it sums the quoted
-paths, the trash folder and the envelope; a batch that cannot fit is refused
-`LIMIT` with nothing moved. Each item costs one `mutation_intent` and one
-`mutation_committed` record; the first fallback use also journals the
-`Sherclawk Trash` folder creation.
+list is far below `AGENT_ARGUMENT_CAP`). Before any rename it formats the
+largest report the batch can produce (every item under its longest possible
+trashed name, with the longest status and code) with the same formatter the
+real report uses; a batch that cannot fit is refused `LIMIT` with nothing
+moved, so a report change cannot silently outgrow the check. If a report still
+cannot be formatted after files moved, the result is an `uncertain`
+`REPORT_LIMIT` carrying only the `moved` count, and the run stops. Each item
+costs one `mutation_intent` and one `mutation_committed` record; the first
+fallback use also journals the `Sherclawk Trash` folder creation. The call's
+scratch buffers are static, not stack.
 
 ## Reading the evidence
 

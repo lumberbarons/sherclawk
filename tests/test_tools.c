@@ -1461,6 +1461,27 @@ static void trash_checks(void)
       snprintf(args2+at,sizeof(args2)-at,"]}");
       strcpy(call.name,"move_to_trash"); strcpy(call.arguments,args2);
       assert(!run() && strstr(result,"LIMIT") && journals==0 && !trash_moves); }
+    /* The pre-rename capacity check is a true bound: whatever the batch size, the
+       call either finishes with every file moved or refuses before any rename
+       (never a partial move that then cannot report). Colliding Trash names make
+       the trashed names longer than the listed ones. */
+    { int k, finished=0, refused=0;
+      for(k=1;k<=8;k++) {
+        char longpath[220]="", leafname[32], p2[8][220], rb[8][48], args2[AGENT_ARGUMENT_CAP];
+        size_t at=0; long parent=10; int d, can2;
+        reset();
+        for(d=0;d<5;d++){ memset(leafname,'a',31); leafname[31]=0; i=add(parent,leafname,1); parent=files[i].id; strcat(longpath,leafname); strcat(longpath,":"); }
+        can2=trash_can_model();
+        for(n=0;n<k;n++){ snprintf(leafname,sizeof(leafname),"f%d.c",n); trash_file(parent,leafname,"x"); trash_file(files[can2].id,leafname,"old");
+          snprintf(p2[n],sizeof(p2[n]),"%s%s",longpath,leafname); info_revision(p2[n],rb[n],sizeof(rb[n])); }
+        at+=(size_t)snprintf(args2,sizeof(args2),"{\"files\":[");
+        for(n=0;n<k;n++)at+=(size_t)snprintf(args2+at,sizeof(args2)-at,"%s{\"path\":\"%s\",\"revision\":\"%s\"}",n?",":"",p2[n],rb[n]);
+        snprintf(args2+at,sizeof(args2)-at,"]}");
+        strcpy(call.name,"move_to_trash"); strcpy(call.arguments,args2);
+        if(!run() && strstr(result,"TRASHED") && trash_moves==k) finished++;
+        else { assert(strstr(result,"LIMIT") && journals==0 && !trash_moves); refused++; }
+      }
+      assert(finished>0 && refused>0); }
     puts("PASS move_to_trash: pinned batches, network Trash and workspace fallback, collisions, refusals, journal barriers, partial failure and result caps");
 }
 int main(void)

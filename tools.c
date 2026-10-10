@@ -218,6 +218,24 @@ void tools_catalog_revision(const CInfoPBRec *pb, char *out, size_t cap)
         (unsigned long)pb->hFileInfo.ioFlMdDat, (unsigned long)pb->hFileInfo.ioFlLgLen,
         (unsigned long)pb->hFileInfo.ioFlRLgLen);
 }
+/* Worker01:buildjobs and its children are sealed build evidence for every
+ * mutating tool. Case-insensitive, whole path components only. */
+static int evidence_path(const char *path)
+{
+    static const char sealed[] = "worker01:buildjobs";
+    size_t i;
+    for (i = 0; i < sizeof(sealed) - 1 && path[i]; i++) {
+        unsigned char c = (unsigned char)path[i];
+        if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + 'a' - 'A');
+        if (c != (unsigned char)sealed[i]) return 0;
+    }
+    return i == sizeof(sealed) - 1 && (path[i] == 0 || path[i] == ':');
+}
+/* A real folder: a directory that is not an alias. */
+static int is_plain_dir(const CInfoPBRec *pb)
+{
+    return (pb->hFileInfo.ioFlAttrib & 16) && !(pb->hFileInfo.ioFlFndrInfo.fdFlags & 0x8000);
+}
 static int same_file(const CInfoPBRec *a, const CInfoPBRec *b)
 {
     return a->hFileInfo.ioDirID == b->hFileInfo.ioDirID &&
@@ -236,16 +254,13 @@ static char text_scratch[TOOLS_WORK_CHUNK];
 static int text_active;
 static int text_arguments(const AgentCall *call, JsonToken *tokens, char *out, size_t cap, int mutation)
 {
-    char path[512]; size_t i;
+    char path[512];
     if(cap<AGENT_RESULT_CAP || strlen(call->arguments)>=AGENT_ARGUMENT_CAP ||
        json_parse(call->arguments,strlen(call->arguments),tokens,128)<1 || tokens[0].type!=JSON_OBJECT) {
         fail(out,cap,"ARGUMENTS","Tool arguments must be a bounded JSON object.",0);return -1;
     }
-    if(mutation && string_arg(call->arguments,tokens,"path",path,sizeof(path))>=0) {
-        for(i=0;path[i];i++)if(path[i]>='A' && path[i]<='Z')path[i]=(char)(path[i]+'a'-'A');
-        if(!strncmp(path,"worker01:buildjobs",18) && (!path[18] || path[18]==':')) {
-            fail(out,cap,"EXECUTION_EVIDENCE_READ_ONLY","Worker queue and snapshots are read-only to source tools.",0);return -1;
-        }
+    if(mutation && string_arg(call->arguments,tokens,"path",path,sizeof(path))>=0 && evidence_path(path)) {
+        fail(out,cap,"EXECUTION_EVIDENCE_READ_ONLY","Worker queue and snapshots are read-only to source tools.",0);return -1;
     }
     return 0;
 }
@@ -721,12 +736,23 @@ static int mutation_result(char *out, size_t cap, const char *status, const char
         "\"revision\":\"%s\",\"os_error\":%d}", status, code, qp, qt, bytes, revision, native);
     return n < 0 || (size_t)n >= cap ? -1 : 0;
 }
+/* The one place a mutation record is wrapped in its call envelope and handed to
+ * the session journal. Nonzero means the record was not durably accepted,
+ * including an envelope that would not fit. */
+static int journal_mutation(AgentJournal journal, void *context, const char *event,
+                            const char *call_id, const char *record)
+{
+    static char envelope[AGENT_RESULT_CAP + 1000];
+    int n = snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
+    if (n < 0 || (size_t)n >= sizeof(envelope)) return 1;
+    return journal(context, event, envelope);
+}
 static int write_text(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap,
                       AgentJournal journal, void *context)
 {
     static char utf8[AGENT_ARGUMENT_CAP], bytes[TOOLS_STRING_CAP+1], observed[4097];
     char path[512], temporary[768], tempname[32], revision[80] = "", record[AGENT_RESULT_CAP];
-    char call_id[800], envelope[AGENT_RESULT_CAP + 900];
+    char call_id[800];
     FSSpec target, stage;
     CInfoPBRec pb;
     OSErr err, closed;
@@ -765,8 +791,7 @@ static int write_text(const AgentCall *call, const JsonToken *tokens, char *out,
         if (mutation_result(record, sizeof(record), "pending", "CREATE_ONLY", path, temporary, length, revision, 0)) {
             fail(out, cap, "LIMIT", "Cannot encode recovery paths; no file created.", 0); return 0;
         }
-        snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
-        if (journal(context, "mutation_intent", envelope)) { fail(out, cap, "JOURNAL", "Cannot record mutation intent; no file created.", 0); return 1; }
+        if (journal_mutation(journal, context, "mutation_intent", call_id, record)) { fail(out, cap, "JOURNAL", "Cannot record mutation intent; no file created.", 0); return 1; }
         err = FSpCreate(&stage, 'ttxt', 'TEXT', smSystemScript);
         if (err == dupFNErr) continue;
         break;
@@ -790,8 +815,7 @@ static int write_text(const AgentCall *call, const JsonToken *tokens, char *out,
     if (err) goto failed;
     full_revision(&pb, bytes, length, revision, sizeof(revision));
     mutation_result(record, sizeof(record), "staged", "CREATE_ONLY", path, temporary, length, revision, 0);
-    snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
-    if (journal(context, "mutation_staged", envelope)) {
+    if (journal_mutation(journal, context, "mutation_staged", call_id, record)) {
         mutation_result(out, cap, "error", "JOURNAL_STAGE_RETAINED", path, temporary, length, revision, 0); return 1;
     }
     /* HFS/AFP rename refuses a colliding name, including a late race. */
@@ -804,8 +828,7 @@ static int write_text(const AgentCall *call, const JsonToken *tokens, char *out,
     err = catalog(&target, &pb); if (err) goto uncertain;
     full_revision(&pb, bytes, length, revision, sizeof(revision));
     mutation_result(out, cap, "ok", "CREATED", path, "", length, revision, 0);
-    snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, out);
-    if (journal(context, "mutation_committed", envelope)) {
+    if (journal_mutation(journal, context, "mutation_committed", call_id, out)) {
         mutation_result(out, cap, "uncertain", "JOURNAL_AFTER_PUBLISH", path, temporary, length, revision, 0); return 1;
     }
     return 0;
@@ -866,11 +889,10 @@ static int edit_finish(char *out,size_t cap,const char *code,int native,int stop
 }
 static int edit_record(const char *event,const char *status)
 {
-    static char record[AGENT_RESULT_CAP],envelope[AGENT_RESULT_CAP+900];
+    static char record[AGENT_RESULT_CAP];
     if(edit_result(record,sizeof(record),status,!strcmp(status,"ok") ? "EDITED" : "EXACT_EDIT",text_edit.path,!strcmp(status,"ok") ? "" : text_edit.temporary,
                    text_edit.backup_path,text_edit.length,text_edit.revision,text_edit.previous,0))return -1;
-    snprintf(envelope,sizeof(envelope),"{\"call_id\":%s,\"mutation\":%s}",text_edit.call_id,record);
-    return text_edit.journal(text_edit.context,event,envelope);
+    return journal_mutation(text_edit.journal,text_edit.context,event,text_edit.call_id,record);
 }
 int edit_text_begin(const AgentCall *call,char *out,size_t cap,AgentJournal journal,void *context,uint32_t now)
 {
@@ -1109,14 +1131,37 @@ int edit_text_step(char *out,size_t cap,uint32_t now,int stop)
 }
 /* Create-only folder publication: HFS creation is atomic, so one intent record
  * precedes it and one committed record follows verification. */
+enum { FOLDER_CREATED, FOLDER_EXISTS, FOLDER_FAILED, FOLDER_UNCERTAIN, FOLDER_UNVERIFIED };
+/* Create one folder and prove it: FSpDirCreate, FlushVol, then a catalog read
+ * that must show a real folder. *os_err is the native error of the step that
+ * decided the result. FOLDER_EXISTS: the name was taken, unless accept_existing
+ * verifies the folder that is there instead. FOLDER_FAILED: provably nothing
+ * is at the name. FOLDER_UNCERTAIN: the create errored but something exists.
+ * FOLDER_UNVERIFIED: the create succeeded but the folder cannot be proven.
+ * *dir is the folder's directory ID only for FOLDER_CREATED. */
+static int create_verified_folder(FSSpec *target, int accept_existing, long *dir, OSErr *os_err)
+{
+    CInfoPBRec pb;
+    long made = 0;
+    OSErr err = FSpDirCreate(target, smSystemScript, &made);
+    *os_err = err;
+    if (err == dupFNErr && !accept_existing) return FOLDER_EXISTS;
+    if (err && err != dupFNErr) return catalog(target, &pb) ? FOLDER_FAILED : FOLDER_UNCERTAIN;
+    err = FlushVol(NULL, target->vRefNum);
+    if (!err) err = catalog(target, &pb);
+    if (!err && !is_plain_dir(&pb)) err = ioErr;
+    *os_err = err;
+    if (err) return FOLDER_UNVERIFIED;
+    *dir = pb.dirInfo.ioDrDirID;
+    return FOLDER_CREATED;
+}
 static int create_folder(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap,
                          AgentJournal journal, void *context)
 {
-    char path[512], q[1100], record[AGENT_RESULT_CAP], call_id[800], envelope[AGENT_RESULT_CAP + 900];
+    char path[512], q[1100], record[AGENT_RESULT_CAP], call_id[800];
     FSSpec target;
-    CInfoPBRec pb;
     OSErr err;
-    long created = 0;
+    long dir = 0;
     if (valid_keys(call->arguments, tokens, "|path|") ||
         string_arg(call->arguments, tokens, "path", path, sizeof(path)) < 0) {
         fail(out, cap, "ARGUMENTS", "Expected only a path string.", 0); return 0;
@@ -1129,24 +1174,20 @@ static int create_folder(const AgentCall *call, const JsonToken *tokens, char *o
         fail(out, cap, "JOURNAL", "Cannot encode call identity.", 0); return 1;
     }
     snprintf(record, sizeof(record), "{\"status\":\"pending\",\"code\":\"CREATE_FOLDER\",\"path\":%s,\"os_error\":0}", q);
-    snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
-    if (journal(context, "mutation_intent", envelope)) { fail(out, cap, "JOURNAL", "Cannot record mutation intent; no folder created.", 0); return 1; }
-    err = FSpDirCreate(&target, smSystemScript, &created);
-    if (err == dupFNErr) { fail(out, cap, "EXISTS", "Destination appeared during creation; nothing was changed by this call.", err); return 0; }
-    if (err) {
-        /* A failed create may still have left a folder; never claim "unchanged" unless proven. */
-        if (!catalog(&target, &pb)) { snprintf(record, sizeof(record), "{\"status\":\"uncertain\",\"code\":\"CREATE_FOLDER_UNCERTAIN\",\"path\":%s,\"os_error\":%d}", q, (int)err); strcpy(out, record); return 1; }
+    if (journal_mutation(journal, context, "mutation_intent", call_id, record)) { fail(out, cap, "JOURNAL", "Cannot record mutation intent; no folder created.", 0); return 1; }
+    switch (create_verified_folder(&target, 0, &dir, &err)) {
+    case FOLDER_EXISTS:
+        fail(out, cap, "EXISTS", "Destination appeared during creation; nothing was changed by this call.", err); return 0;
+    case FOLDER_FAILED:
         fail(out, cap, "CREATE_FAILED", "Folder creation failed; no folder exists at the destination.", err); return 0;
-    }
-    err = FlushVol(NULL, target.vRefNum);
-    if (!err) err = catalog(&target, &pb);
-    if (!err && (!(pb.hFileInfo.ioFlAttrib & 16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000))) err = ioErr;
-    if (err) {
+    case FOLDER_UNCERTAIN:
+        /* A failed create may still have left a folder; never claim "unchanged" unless proven. */
+        snprintf(out, cap, "{\"status\":\"uncertain\",\"code\":\"CREATE_FOLDER_UNCERTAIN\",\"path\":%s,\"os_error\":%d}", q, (int)err); return 1;
+    case FOLDER_UNVERIFIED:
         snprintf(out, cap, "{\"status\":\"uncertain\",\"code\":\"CREATE_FOLDER_UNVERIFIED\",\"path\":%s,\"os_error\":%d}", q, (int)err); return 1;
     }
     snprintf(out, cap, "{\"status\":\"ok\",\"code\":\"CREATED_FOLDER\",\"path\":%s,\"os_error\":0}", q);
-    snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, out);
-    if (journal(context, "mutation_committed", envelope)) {
+    if (journal_mutation(journal, context, "mutation_committed", call_id, out)) {
         snprintf(out, cap, "{\"status\":\"uncertain\",\"code\":\"JOURNAL_AFTER_PUBLISH\",\"path\":%s,\"os_error\":0}", q); return 1;
     }
     return 0;
@@ -1160,24 +1201,18 @@ static int create_folder(const AgentCall *call, const JsonToken *tokens, char *o
 #define TRASH_MAX 8
 #define TRASH_FOLDER_NAME "Sherclawk Trash"
 typedef struct {
-    char path[512], revision[48], leaf[64];
+    char path[512], revision[48], leaf[64], moved_as[64];
     FSSpec source;
     long identity, data_size, resource_size;
     unsigned long file_type, creator;
 } TrashItem;
-/* Worker01:buildjobs and its children are sealed build evidence, like the
- * text tools' guard. */
-static int evidence_path(const char *path)
-{
-    static const char sealed[] = "worker01:buildjobs";
-    size_t i;
-    for (i = 0; i < sizeof(sealed) - 1 && path[i]; i++) {
-        unsigned char c = (unsigned char)path[i];
-        if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + 'a' - 'A');
-        if (c != (unsigned char)sealed[i]) return 0;
-    }
-    return i == sizeof(sealed) - 1 && (path[i] == 0 || path[i] == ':');
-}
+/* Scratch for one move_to_trash call, static because the application stack is
+ * small (docs/limits.md). Calls never overlap: tools run one at a time. */
+static struct {
+    char call_id[800];
+    char record[AGENT_RESULT_CAP];
+    char quoted[1100], quoted_alt[1100], path[1100];
+} trash_work;
 /* Nothing inside a Trash can be trashed again. Both roots sit at the workspace
  * (volume) top level on this deployment. */
 static int trash_reserved_path(const char *path)
@@ -1206,11 +1241,11 @@ static int revision_matches(const CInfoPBRec *pb, const char *expected)
 static int trash_refuse(char *out, size_t cap, const char *code, const char *message,
                         const char *path, int native)
 {
-    char qp[1100], qm[512];
-    if (json_quote(path, qp, sizeof(qp)) < 0 || json_quote(message, qm, sizeof(qm)) < 0)
+    if (json_quote(path, trash_work.quoted, sizeof(trash_work.quoted)) < 0 ||
+        json_quote(message, trash_work.quoted_alt, sizeof(trash_work.quoted_alt)) < 0)
         return fail(out, cap, "LIMIT", "Cannot encode the refusal.", native);
     snprintf(out, cap, "{\"status\":\"error\",\"code\":\"%s\",\"moved\":0,\"failed\":%s,\"message\":%s,\"os_error\":%d}",
-        code, qp, qm, native);
+        code, trash_work.quoted, trash_work.quoted_alt, native);
     return -1;
 }
 /* Validate one item without changing anything. 1 valid, 0 refused (out set). */
@@ -1262,44 +1297,42 @@ static OSErr trash_destination(const FSSpec *source, short *vref, long *dir)
 }
 /* The workspace fallback Trash, created once with its own journal records.
  * 0 usable, 1 stop the run, -1 error with nothing moved. */
-static int trash_fallback(short *vref, long *dir, const char *call_id,
-                          AgentJournal journal, void *context, char *out, size_t cap)
+static int trash_fallback(short *vref, long *dir, AgentJournal journal, void *context,
+                          char *out, size_t cap)
 {
     FSSpec trash;
     CInfoPBRec pb;
     OSErr err;
-    long created = 0;
-    char q[128], record[AGENT_RESULT_CAP], envelope[AGENT_RESULT_CAP + 1000];
+    long made = 0;
+    char q[128];
+    int status;
     err = tools_resolve(TRASH_FOLDER_NAME, &trash);
     if (err && err != fnfErr) { fail(out, cap, "TRASH", "Cannot resolve the workspace trash folder.", err); return -1; }
     err = catalog(&trash, &pb);
     if (!err) {
-        if (!(pb.hFileInfo.ioFlAttrib & 16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000)) {
+        if (!is_plain_dir(&pb)) {
             fail(out, cap, "TRASH", "The workspace trash name is not a folder.", 0); return -1;
         }
         *vref = trash.vRefNum; *dir = pb.dirInfo.ioDrDirID; return 0;
     }
     if (err != fnfErr) { fail(out, cap, "TRASH", "Cannot inspect the workspace trash folder.", err); return -1; }
     if (json_quote(TRASH_FOLDER_NAME, q, sizeof(q)) < 0) { fail(out, cap, "JOURNAL", "Cannot encode the trash path.", 0); return 1; }
-    snprintf(record, sizeof(record), "{\"status\":\"pending\",\"code\":\"CREATE_FOLDER\",\"kind\":\"trash_folder\",\"path\":%s,\"os_error\":0}", q);
-    snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
-    if (journal(context, "mutation_intent", envelope)) { fail(out, cap, "JOURNAL", "Cannot record trash folder intent; nothing moved.", 0); return 1; }
-    err = FSpDirCreate(&trash, smSystemScript, &created);
-    if (err && err != dupFNErr) {
-        if (catalog(&trash, &pb)) { fail(out, cap, "TRASH_FAILED", "Trash folder creation failed; nothing moved.", err); return -1; }
-        snprintf(out, cap, "{\"status\":\"uncertain\",\"code\":\"TRASH_FOLDER_UNCERTAIN\",\"kind\":\"trash_folder\",\"path\":%s,\"os_error\":%d}", q, (int)err);
+    snprintf(trash_work.record, sizeof(trash_work.record),
+        "{\"status\":\"pending\",\"code\":\"CREATE_FOLDER\",\"kind\":\"trash_folder\",\"path\":%s,\"os_error\":0}", q);
+    if (journal_mutation(journal, context, "mutation_intent", trash_work.call_id, trash_work.record)) {
+        fail(out, cap, "JOURNAL", "Cannot record trash folder intent; nothing moved.", 0); return 1;
+    }
+    status = create_verified_folder(&trash, 1, &made, &err);
+    if (status == FOLDER_FAILED) { fail(out, cap, "TRASH_FAILED", "Trash folder creation failed; nothing moved.", err); return -1; }
+    if (status != FOLDER_CREATED) {
+        snprintf(out, cap, "{\"status\":\"uncertain\",\"code\":\"%s\",\"kind\":\"trash_folder\",\"path\":%s,\"os_error\":%d}",
+            status == FOLDER_UNCERTAIN ? "TRASH_FOLDER_UNCERTAIN" : "TRASH_FOLDER_UNVERIFIED", q, (int)err);
         return 1;
     }
-    err = FlushVol(NULL, trash.vRefNum);
-    if (!err) err = catalog(&trash, &pb);
-    if (err || !(pb.hFileInfo.ioFlAttrib & 16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000)) {
-        snprintf(out, cap, "{\"status\":\"uncertain\",\"code\":\"TRASH_FOLDER_UNVERIFIED\",\"kind\":\"trash_folder\",\"path\":%s,\"os_error\":%d}", q, (int)err);
-        return 1;
-    }
-    snprintf(record, sizeof(record), "{\"status\":\"ok\",\"code\":\"CREATED_FOLDER\",\"kind\":\"trash_folder\",\"path\":%s,\"os_error\":0}", q);
-    snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
-    *vref = trash.vRefNum; *dir = pb.dirInfo.ioDrDirID;
-    if (journal(context, "mutation_committed", envelope)) {
+    snprintf(trash_work.record, sizeof(trash_work.record),
+        "{\"status\":\"ok\",\"code\":\"CREATED_FOLDER\",\"kind\":\"trash_folder\",\"path\":%s,\"os_error\":0}", q);
+    *vref = trash.vRefNum; *dir = made;
+    if (journal_mutation(journal, context, "mutation_committed", trash_work.call_id, trash_work.record)) {
         snprintf(out, cap, "{\"status\":\"uncertain\",\"code\":\"JOURNAL_AFTER_PUBLISH\",\"kind\":\"trash_folder\",\"path\":%s,\"os_error\":0}", q);
         return 1;
     }
@@ -1346,7 +1379,8 @@ static void trash_folder_text(long dir, const char *fallback_leaf, char *out, si
     if (fallback_leaf && text_to_utf8(fallback_leaf, strlen(fallback_leaf), out, cap) >= 0) return;
     out[0] = 0;
 }
-static int trash_report(char *out, size_t cap, const char *status, const char *code,
+/* Format the batch report. -1 when it does not fit, leaving out unspecified. */
+static int trash_format(char *out, size_t cap, const char *status, const char *code,
                         const char *folder, const TrashItem *items, int moved,
                         const char *failed, int native)
 {
@@ -1354,34 +1388,135 @@ static int trash_report(char *out, size_t cap, const char *status, const char *c
     char head[80], tail[64];
     int i;
     snprintf(head, sizeof(head), "{\"status\":\"%s\",\"code\":\"%s\",\"moved\":%d,\"trash\":", status, code, moved);
-    if (append(out, cap, &at, head) || quote(out, cap, &at, folder)) goto too_long;
+    if (append(out, cap, &at, head) || quote(out, cap, &at, folder)) return -1;
     if (failed) {
-        if (append(out, cap, &at, ",\"failed\":") || quote(out, cap, &at, failed)) goto too_long;
+        if (append(out, cap, &at, ",\"failed\":") || quote(out, cap, &at, failed)) return -1;
     }
-    if (append(out, cap, &at, ",\"files\":[")) goto too_long;
+    if (append(out, cap, &at, ",\"files\":[")) return -1;
     for (i = 0; i < moved; i++) {
-        if (i && append(out, cap, &at, ",")) goto too_long;
+        if (i && append(out, cap, &at, ",")) return -1;
         if (append(out, cap, &at, "{\"path\":") || quote(out, cap, &at, items[i].path) ||
-            append(out, cap, &at, ",\"moved_as\":") || quote(out, cap, &at, items[i].leaf) ||
-            append(out, cap, &at, "}")) goto too_long;
+            append(out, cap, &at, ",\"moved_as\":") || quote(out, cap, &at, items[i].moved_as) ||
+            append(out, cap, &at, "}")) return -1;
     }
     snprintf(tail, sizeof(tail), "],\"os_error\":%d}", native);
-    if (append(out, cap, &at, tail)) goto too_long;
-    return 0;
-too_long:
-    fail(out, cap, "LIMIT", "Trash report exceeds the result capacity.", 0);
-    return -1;
+    return append(out, cap, &at, tail) ? -1 : 0;
 }
-static int move_to_trash(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap,
-                         AgentJournal journal, void *context)
+/* Publish the report. When it cannot be formatted after files already moved,
+ * still say how many moved rather than a bare LIMIT. Nonzero: stop the run. */
+static int trash_report(char *out, size_t cap, const char *status, const char *code,
+                        const char *folder, const TrashItem *items, int moved,
+                        const char *failed, int native)
 {
-    static TrashItem items[TRASH_MAX];
-    char call_id[800], qsrc[1100], folder[256], record[AGENT_RESULT_CAP], envelope[AGENT_RESULT_CAP + 1000];
-    char scratch[1100];
-    short trash_vref = 0;
-    long trash_dir = 0, need;
-    int count = 0, i, moved = 0, files_token, r, fallback = 0;
+    if (!trash_format(out, cap, status, code, folder, items, moved, failed, native)) return 0;
+    if (moved > 0) {
+        snprintf(out, cap, "{\"status\":\"uncertain\",\"code\":\"REPORT_LIMIT\",\"moved\":%d,\"os_error\":%d}", moved, native);
+    } else {
+        fail(out, cap, "LIMIT", "Trash report exceeds the result capacity.", 0);
+    }
+    return 1;
+}
+/* Refuse before any rename when any report this batch can produce would not
+ * fit. The largest report formats every item with its longest possible trashed
+ * name (the source name plus a " 100" collision suffix) under the longest
+ * status and code. */
+static int trash_report_fits(char *out, size_t cap, const char *folder, TrashItem *items, int count)
+{
+    int i;
+    for (i = 0; i < count; i++)
+        snprintf(items[i].moved_as, sizeof(items[i].moved_as), "%s 100", items[i].leaf);
+    if (trash_format(out, cap, "uncertain", "MOVE_UNCERTAIN_INSPECT_PATHS", folder, items, count, NULL, 0)) {
+        fail(out, cap, "LIMIT", "Batch report cannot fit the result budget; send fewer files.", 0);
+        return 0;
+    }
+    return 1;
+}
+/* Why a single move stopped. counted: the file is in the Trash anyway. */
+typedef struct {
+    const char *status, *code;
+    int native, stop, counted;
+} TrashOutcome;
+static int trash_stopped(TrashOutcome *o, const char *status, const char *code, int native, int stop, int counted)
+{
+    o->status = status; o->code = code; o->native = native; o->stop = stop; o->counted = counted;
+    return 0;
+}
+/* Move one validated file with one journaled same-volume rename. 1 moved and
+ * committed; 0 stopped, described by *o. */
+static int trash_commit_one(TrashItem *item, short trash_vref, long trash_dir, const char *folder,
+                            AgentJournal journal, void *context, TrashOutcome *o)
+{
+    FSSpec target;
+    CInfoPBRec pb, gone;
+    unsigned char target_name[32];
     OSErr err;
+    int rn;
+    err = catalog(&item->source, &pb);
+    if (err) return trash_stopped(o, "error", "FILE", err, 0, 0);
+    if (!revision_matches(&pb, item->revision) || pb.hFileInfo.ioDirID != item->identity)
+        return trash_stopped(o, "error", "REVISION_MISMATCH", 0, 0, 0);
+    err = trash_target_name(trash_vref, trash_dir, item->source.name, target_name);
+    if (err) return trash_stopped(o, "error", "EXISTS", err, 0, 0);
+    target = item->source;
+    target.vRefNum = trash_vref; target.parID = trash_dir;
+    memcpy(target.name, target_name, (size_t)target_name[0] + 1);
+    if (text_to_utf8((char *)target_name + 1, target_name[0], item->moved_as, sizeof(item->moved_as)) < 0)
+        return trash_stopped(o, "error", "ENCODING", 0, 0, 0);
+    if (json_quote(item->path, trash_work.quoted, sizeof(trash_work.quoted)) < 0 ||
+        snprintf(trash_work.path, sizeof(trash_work.path), "%s%s", folder, item->moved_as) >= (int)sizeof(trash_work.path) ||
+        json_quote(trash_work.path, trash_work.quoted_alt, sizeof(trash_work.quoted_alt)) < 0)
+        return trash_stopped(o, "error", "LIMIT", 0, 0, 0);
+    rn = snprintf(trash_work.record, sizeof(trash_work.record),
+        "{\"status\":\"pending\",\"code\":\"MOVE_TO_TRASH\",\"kind\":\"move_to_trash\","
+        "\"path\":%s,\"trash_path\":%s,\"revision\":\"%s\",\"os_error\":0}",
+        trash_work.quoted, trash_work.quoted_alt, item->revision);
+    if (rn < 0 || rn >= (int)sizeof(trash_work.record)) return trash_stopped(o, "error", "LIMIT", 0, 0, 0);
+    if (journal_mutation(journal, context, "mutation_intent", trash_work.call_id, trash_work.record))
+        return trash_stopped(o, "error", "JOURNAL", 0, 1, 0);
+    /* One same-volume rename is the whole mutation. A rename error is only
+       certain when the same file is still at the source path; otherwise the
+       reply may have been lost, so verify the destination below instead of
+       claiming failure. */
+    err = FSpCatMove(&item->source, &target);
+    if (err && !catalog(&item->source, &gone) && gone.hFileInfo.ioDirID == item->identity)
+        return trash_stopped(o, "error", err == dupFNErr ? "EXISTS" : "MOVE_FAILED", err, 0, 0);
+    err = FlushVol(NULL, target.vRefNum);
+    if (!err) err = catalog(&target, &pb);
+    if (!err && (pb.hFileInfo.ioFlLgLen != item->data_size || pb.hFileInfo.ioFlRLgLen != item->resource_size ||
+        pb.hFileInfo.ioFlFndrInfo.fdType != item->file_type || pb.hFileInfo.ioFlFndrInfo.fdCreator != item->creator)) err = ioErr;
+    if (!err && !catalog(&item->source, &gone)) err = ioErr;
+    if (err) return trash_stopped(o, "uncertain", "MOVE_UNCERTAIN_INSPECT_PATHS", err, 1, 1);
+    snprintf(trash_work.record, sizeof(trash_work.record),
+        "{\"status\":\"ok\",\"code\":\"TRASHED\",\"kind\":\"move_to_trash\","
+        "\"path\":%s,\"trash_path\":%s,\"revision\":\"%s\",\"os_error\":0}",
+        trash_work.quoted, trash_work.quoted_alt, item->revision);
+    if (journal_mutation(journal, context, "mutation_committed", trash_work.call_id, trash_work.record))
+        return trash_stopped(o, "uncertain", "JOURNAL_AFTER_MOVE", 0, 1, 1);
+    return 1;
+}
+/* One {path, revision} object into *item. 1 parsed, 0 malformed. */
+static int trash_parse_item(const char *arguments, const JsonToken *tokens, int object, TrashItem *item)
+{
+    int k, keys = 0, path_token = -1, revision_token = -1;
+    memset(item, 0, sizeof(*item));
+    for (k = object + 1; k < tokens[object].next; k = tokens[k + 1].next) {
+        char key[32];
+        if (json_string(arguments, tokens, k, key, sizeof(key)) < 0) return 0;
+        keys++;
+        if (!strcmp(key, "path") && path_token < 0) path_token = k + 1;
+        else if (!strcmp(key, "revision") && revision_token < 0) revision_token = k + 1;
+        else return 0;
+    }
+    return keys == 2 && path_token >= 0 && revision_token >= 0 &&
+        json_string(arguments, tokens, path_token, item->path, sizeof(item->path)) >= 0 &&
+        json_string(arguments, tokens, revision_token, item->revision, sizeof(item->revision)) >= 0 &&
+        !strncmp(item->revision, "cat-", 4);
+}
+/* The files array into items. Count on success; 0 refused with out set. */
+static int trash_parse(const AgentCall *call, const JsonToken *tokens, TrashItem items[TRASH_MAX],
+                       char *out, size_t cap)
+{
+    int count = 0, i, files_token;
     if (valid_keys(call->arguments, tokens, "|files|")) {
         fail(out, cap, "ARGUMENTS", "Expected only a files array of {path, revision} objects.", 0); return 0;
     }
@@ -1390,31 +1525,30 @@ static int move_to_trash(const AgentCall *call, const JsonToken *tokens, char *o
         fail(out, cap, "ARGUMENTS", "files must be a non-empty array of {path, revision} objects.", 0); return 0;
     }
     for (i = files_token + 1; i < tokens[files_token].next; i = tokens[i].next) {
-        TrashItem *item;
-        int k, keys = 0, path_token = -1, revision_token = -1;
         if (tokens[i].type != JSON_OBJECT || count == TRASH_MAX) {
             fail(out, cap, "ARGUMENTS", "At most 8 {path, revision} items are accepted, with no other fields.", 0); return 0;
         }
-        item = &items[count];
-        memset(item, 0, sizeof(*item));
-        for (k = i + 1; k < tokens[i].next; k = tokens[k + 1].next) {
-            char key[32];
-            if (json_string(call->arguments, tokens, k, key, sizeof(key)) < 0) goto arguments;
-            keys++;
-            if (!strcmp(key, "path") && path_token < 0) path_token = k + 1;
-            else if (!strcmp(key, "revision") && revision_token < 0) revision_token = k + 1;
-            else goto arguments;
+        if (!trash_parse_item(call->arguments, tokens, i, &items[count])) {
+            fail(out, cap, "ARGUMENTS", "Each item must be exactly {path, revision} with a cat- revision.", 0); return 0;
         }
-        if (keys != 2 || path_token < 0 || revision_token < 0 ||
-            json_string(call->arguments, tokens, path_token, item->path, sizeof(item->path)) < 0 ||
-            json_string(call->arguments, tokens, revision_token, item->revision, sizeof(item->revision)) < 0)
-            goto arguments;
-        if (strncmp(item->revision, "cat-", 4)) goto arguments;
         count++;
     }
-    if (!count) { fail(out, cap, "ARGUMENTS", "files must be a non-empty array.", 0); return 0; }
+    return count;
+}
+static int move_to_trash(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap,
+                         AgentJournal journal, void *context)
+{
+    static TrashItem items[TRASH_MAX];
+    char folder[256];
+    short trash_vref = 0;
+    long trash_dir = 0;
+    int count, i, moved = 0, r, fallback = 0;
+    OSErr err;
+    TrashOutcome o;
+    count = trash_parse(call, tokens, items, out, cap);
+    if (!count) return 0;
     if (!journal) { fail(out, cap, "JOURNAL", "Moving files requires a durable session journal.", 0); return 1; }
-    if (json_quote(call->id, call_id, sizeof(call_id)) < 0) {
+    if (json_quote(call->id, trash_work.call_id, sizeof(trash_work.call_id)) < 0) {
         fail(out, cap, "JOURNAL", "Cannot encode call identity.", 0); return 1;
     }
     for (i = 0; i < count; i++) {
@@ -1425,99 +1559,20 @@ static int move_to_trash(const AgentCall *call, const JsonToken *tokens, char *o
     }
     err = trash_destination(&items[0].source, &trash_vref, &trash_dir);
     if (err) {
-        r = trash_fallback(&trash_vref, &trash_dir, call_id, journal, context, out, cap);
+        r = trash_fallback(&trash_vref, &trash_dir, journal, context, out, cap);
         if (r > 0) return 1;
         if (r < 0) return 0;
         fallback = 1;
     }
     trash_folder_text(trash_dir, fallback ? TRASH_FOLDER_NAME : NULL, folder, sizeof(folder));
-    /* Refuse the whole batch before any rename when its report cannot fit. */
-    {
-        int n = json_quote(folder, scratch, sizeof(scratch));
-        if (n < 0) { fail(out, cap, "LIMIT", "Cannot encode the batch; nothing moved.", 0); return 0; }
-        need = 320 + n;
-    }
+    if (!trash_report_fits(out, cap, folder, items, count)) return 0;
     for (i = 0; i < count; i++) {
-        int n = json_quote(items[i].path, scratch, sizeof(scratch));
-        int m = json_quote(items[i].leaf, scratch, sizeof(scratch));
-        if (n < 0 || m < 0) { fail(out, cap, "LIMIT", "Cannot encode the batch; nothing moved.", 0); return 0; }
-        need += n + m + 48;
+        if (trash_commit_one(&items[i], trash_vref, trash_dir, folder, journal, context, &o)) { moved++; continue; }
+        moved += o.counted;
+        return trash_report(out, cap, o.status, o.code, folder, items, moved,
+                            o.counted ? NULL : items[i].path, o.native) || o.stop;
     }
-    if (need > (long)cap) {
-        fail(out, cap, "LIMIT", "Batch report cannot fit the result budget; send fewer files.", 0); return 0;
-    }
-    for (i = 0; i < count; i++) {
-        TrashItem *item = &items[i];
-        FSSpec target;
-        CInfoPBRec pb, gone;
-        unsigned char target_name[32];
-        char qtrash[1100];
-        int rn;
-        err = catalog(&item->source, &pb);
-        if (err) {
-            trash_report(out, cap, "error", "FILE", folder, items, moved, item->path, err);
-            return 0;
-        }
-        if (!revision_matches(&pb, item->revision) || pb.hFileInfo.ioDirID != item->identity) {
-            trash_report(out, cap, "error", "REVISION_MISMATCH", folder, items, moved, item->path, 0);
-            return 0;
-        }
-        err = trash_target_name(trash_vref, trash_dir, item->source.name, target_name);
-        if (err) {
-            trash_report(out, cap, "error", "EXISTS", folder, items, moved, item->path, err);
-            return 0;
-        }
-        target = item->source;
-        target.vRefNum = trash_vref; target.parID = trash_dir;
-        memcpy(target.name, target_name, (size_t)target_name[0] + 1);
-        if (text_to_utf8((char *)target_name + 1, target_name[0], item->leaf, sizeof(item->leaf)) < 0) {
-            fail(out, cap, "ENCODING", "Filename conversion failed; nothing moved for this batch.", 0); return 0;
-        }
-        if (json_quote(item->path, qsrc, sizeof(qsrc)) < 0 ||
-            snprintf(scratch, sizeof(scratch), "%s%s", folder, item->leaf) >= (int)sizeof(scratch) ||
-            json_quote(scratch, qtrash, sizeof(qtrash)) < 0) {
-            fail(out, cap, "LIMIT", "Cannot encode the destination; nothing moved for this batch.", 0); return 0;
-        }
-        rn = snprintf(record, sizeof(record), "{\"status\":\"pending\",\"code\":\"MOVE_TO_TRASH\",\"kind\":\"move_to_trash\","
-            "\"path\":%s,\"trash_path\":%s,\"revision\":\"%s\",\"os_error\":0}", qsrc, qtrash, item->revision);
-        if (rn < 0 || rn >= (int)sizeof(record)) { fail(out, cap, "LIMIT", "Cannot encode the move record; nothing moved for this batch.", 0); return 0; }
-        rn = snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
-        if (rn < 0 || rn >= (int)sizeof(envelope)) { fail(out, cap, "LIMIT", "Cannot encode the move record; nothing moved for this batch.", 0); return 0; }
-        if (journal(context, "mutation_intent", envelope)) {
-            fail(out, cap, "JOURNAL", "Cannot record move intent; no more files moved.", 0); return 1;
-        }
-        /* One same-volume rename is the whole mutation. A rename error is only
-           certain when the same file is still at the source path; otherwise the
-           reply may have been lost, so verify the destination below instead of
-           claiming failure. */
-        err = FSpCatMove(&item->source, &target);
-        if (err && !catalog(&item->source, &gone) && gone.hFileInfo.ioDirID == item->identity) {
-            trash_report(out, cap, "error", err == dupFNErr ? "EXISTS" : "MOVE_FAILED", folder, items, moved, item->path, err);
-            return 0;
-        }
-        err = FlushVol(NULL, target.vRefNum);
-        if (!err) err = catalog(&target, &pb);
-        if (!err && (pb.hFileInfo.ioFlLgLen != item->data_size || pb.hFileInfo.ioFlRLgLen != item->resource_size ||
-            pb.hFileInfo.ioFlFndrInfo.fdType != item->file_type || pb.hFileInfo.ioFlFndrInfo.fdCreator != item->creator)) err = ioErr;
-        if (!err && !catalog(&item->source, &gone)) err = ioErr;
-        if (err) {
-            trash_report(out, cap, "uncertain", "MOVE_UNCERTAIN_INSPECT_PATHS", folder, items, moved + 1, NULL, err);
-            return 1;
-        }
-        moved++;
-        snprintf(record, sizeof(record), "{\"status\":\"ok\",\"code\":\"TRASHED\",\"kind\":\"move_to_trash\","
-            "\"path\":%s,\"trash_path\":%s,\"revision\":\"%s\",\"os_error\":0}", qsrc, qtrash, item->revision);
-        snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
-        if (journal(context, "mutation_committed", envelope)) {
-            trash_report(out, cap, "uncertain", "JOURNAL_AFTER_MOVE", folder, items, moved, NULL, 0);
-            return 1;
-        }
-    }
-    if (trash_report(out, cap, "ok", "TRASHED", folder, items, moved, NULL, 0) < 0) return 1;
-    return 0;
-arguments:
-    fail(out, cap, "ARGUMENTS", "Each item must be exactly {path, revision} with a cat- revision.", 0);
-    return 0;
+    return trash_report(out, cap, "ok", "TRASHED", folder, items, moved, NULL, 0);
 }
 /* Publish a complete, fixed template by one collision-safe folder rename.
  * Failed stages stay journaled for inspection; never reuse or roll them back. */
@@ -1566,7 +1621,7 @@ static int create_project(const AgentCall *call, const JsonToken *tokens, char *
                           AgentJournal journal, void *context)
 {
     char path[512], temporary[768], local[256], child[800], tempname[32];
-    char record[AGENT_RESULT_CAP], call_id[800], envelope[AGENT_RESULT_CAP + 900];
+    char record[AGENT_RESULT_CAP], call_id[800];
     FSSpec target, stage, file;
     CInfoPBRec pb;
     OSErr err;
@@ -1603,8 +1658,7 @@ static int create_project(const AgentCall *call, const JsonToken *tokens, char *
         if (err != fnfErr) { fail(out, cap, "STAGE", "Cannot inspect project staging name.", err); return 0; }
         snprintf(temporary, sizeof(temporary), "%.*s%s", (int)prefix, path, tempname);
         project_result(record, sizeof(record), "pending", "CREATE_PROJECT", path, temporary, 0);
-        snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
-        if (journal(context, "mutation_intent", envelope)) { fail(out, cap, "JOURNAL", "No project created: intent recording failed.", 0); return 1; }
+        if (journal_mutation(journal, context, "mutation_intent", call_id, record)) { fail(out, cap, "JOURNAL", "No project created: intent recording failed.", 0); return 1; }
         err = FSpDirCreate(&stage, smSystemScript, &dir);
         if (err == dupFNErr) continue;
         break;
@@ -1621,8 +1675,7 @@ static int create_project(const AgentCall *call, const JsonToken *tokens, char *
         err = project_file(&file, project_inputs[i].bytes, 1); if (err) goto retained;
     }
     project_result(record, sizeof(record), "staged", "CREATE_PROJECT", path, temporary, 0);
-    snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, record);
-    if (journal(context, "mutation_staged", envelope)) { err = 0; code = "JOURNAL_STAGE_RETAINED"; goto retained; }
+    if (journal_mutation(journal, context, "mutation_staged", call_id, record)) { err = 0; code = "JOURNAL_STAGE_RETAINED"; goto retained; }
     err = FSpRename(&stage, target.name);
     if (err == dupFNErr) { code = "EXISTS_STAGE_RETAINED"; goto retained; }
     status = "uncertain"; code = "PROJECT_PUBLISH_UNCERTAIN";
@@ -1637,8 +1690,7 @@ static int create_project(const AgentCall *call, const JsonToken *tokens, char *
         err = project_file(&file, project_inputs[i].bytes, 0); if (err) goto retained;
     }
     project_result(out, cap, "ok", "CREATED_PROJECT", path, "", 0);
-    snprintf(envelope, sizeof(envelope), "{\"call_id\":%s,\"mutation\":%s}", call_id, out);
-    if (journal(context, "mutation_committed", envelope)) { code = "JOURNAL_AFTER_PUBLISH"; goto retained; }
+    if (journal_mutation(journal, context, "mutation_committed", call_id, out)) { code = "JOURNAL_AFTER_PUBLISH"; goto retained; }
     return 0;
 retained:
     project_result(out, cap, status, code, path, temporary, err);
