@@ -105,17 +105,18 @@ int main(void)
             if (result >= 0) result = wait_client();
             if (result > 0) {
                 static JsonToken tokens[8192];
+                const char *response = mcp_client_response(&client);
                 int r, content, text;
-                r = json_parse(client.response, strlen(client.response), tokens, 8192);
-                r = r > 0 ? json_member(client.response, tokens, 0, "result") : -1;
-                content = r >= 0 ? json_member(client.response, tokens, r, "content") : -1;
+                r = json_parse(response, strlen(response), tokens, 8192);
+                r = r > 0 ? json_member(response, tokens, 0, "result") : -1;
+                content = r >= 0 ? json_member(response, tokens, r, "content") : -1;
                 if (client.call_error || content < 0 || tokens[content].type != JSON_ARRAY || tokens[content].next == content + 1) {
                     fputs("FAIL search error or missing content\n", logfile); result = -1;
                 } else {
                     /* Inspect only structure/known markers; never log server text.
                      * Reuse the closed exchange's request buffer as decoded scratch. */
-                    text = json_member(client.response, tokens, content + 1, "text");
-                    if (text < 0 || json_string(client.response, tokens, text,
+                    text = json_member(response, tokens, content + 1, "text");
+                    if (text < 0 || json_string(response, tokens, text,
                             client.exchange.request, sizeof(client.exchange.request)) < 0) {
                         fputs("FAIL search text missing or oversized\n", logfile); result = -1;
                     } else {
@@ -141,7 +142,7 @@ int main(void)
                         if (!count) {
                             fputs("FAIL search returned no result URLs (body deliberately omitted)\n", logfile); result = -1;
                         } else fprintf(logfile, "PASS Tavily search results=%d bytes=%lu (body deliberately omitted)\n",
-                            count, (unsigned long)strlen(client.response));
+                            count, (unsigned long)strlen(response));
                         memset(body, 0, sizeof(client.exchange.request));
                     }
                 }
@@ -149,7 +150,7 @@ int main(void)
         }
     } else if (client.error[0]) fprintf(logfile, "FAIL %s\n", client.error);
     mcp_client_close(&client);
-    memset(client.response, 0, sizeof(client.response));
+    memset(client.exchange.stream.message, 0, sizeof(client.exchange.stream.message));
     /* Yield before global OT shutdown, as the existing native probe does. */
     start = TickCount();
     while ((unsigned long)(TickCount() - start) < 60) WaitNextEvent(everyEvent, &event, 1, NULL);

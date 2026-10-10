@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 struct MacTLS_Context {
-    char request[12000], response[12000];
+    char request[12000], response[70000];
     size_t sent, received;
     int used, pumps;
     MacTLS_State state;
@@ -15,6 +15,8 @@ static McpClient client;
 static McpConfig config;
 static int creates, closes, lists, calls, cancels, ping_replies, reads_in_step;
 static int connecting, stalled, bad_version, bad_status, tool_error, disconnect, with_ping, close_after_reply;
+static int big_reply, connect_aux, read_chunk = 3, processing_steps;
+static size_t max_work;
 static char error[256];
 MacTLS_Context *MacTLS_Create(const char *host, uint16_t port)
 {
@@ -22,7 +24,7 @@ MacTLS_Context *MacTLS_Create(const char *host, uint16_t port)
     assert(!strcmp(host, "mcp.tavily.com") && port == 443);
     for (i = 0; i < 2; i++) if (!contexts[i].used) {
         memset(&contexts[i], 0, sizeof(contexts[i])); contexts[i].used = 1;
-        contexts[i].state = connecting ? kMacTLS_Connecting : kMacTLS_Connected;
+        contexts[i].state = connecting || (i == 1 && connect_aux) ? kMacTLS_Connecting : kMacTLS_Connected;
         creates++; return &contexts[i];
     }
     assert(0); return NULL;
@@ -30,7 +32,7 @@ MacTLS_Context *MacTLS_Create(const char *host, uint16_t port)
 MacTLS_State MacTLS_Pump(MacTLS_Context *c)
 {
     assert(c->used); c->pumps++;
-    if (connecting) return c->state = kMacTLS_Connecting;
+    if (connecting || (c == &contexts[1] && connect_aux)) return c->state = kMacTLS_Connecting;
     if (stalled) return c->state = kMacTLS_Handshaking;
     if (disconnect && c->sent) return kMacTLS_Closed;
     if (close_after_reply && c->response[0]) return kMacTLS_Closed;
@@ -49,7 +51,7 @@ static void respond(MacTLS_Context *c)
     char *body = strstr(c->request, "\r\n\r\n"), *length = strstr(c->request, "Content-Length: ");
     long wanted;
     int scanned;
-    char reply[8000];
+    static char reply[66000];
     if (!body || !length) return;
     scanned = sscanf(length, "Content-Length: %ld", &wanted);
     assert(scanned == 1);
@@ -72,6 +74,12 @@ static void respond(MacTLS_Context *c)
         lists++;
         if (lists == 1) {
             assert(!strstr(body, "cursor"));
+            if (big_reply) {
+                /* A page near the 64 KiB message cap: ignored members the client must still parse and key-check. */
+                size_t at = (size_t)snprintf(reply, sizeof(reply), "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"pad\":\"");
+                memset(reply + at, 'p', 60000); at += 60000;
+                snprintf(reply + at, sizeof(reply) - at, "\",\"tools\":[{\"name\":\"tavily_search\",\"inputSchema\":{\"type\":\"object\"}}],\"nextCursor\":\"next-page\"}}");
+            } else
             strcpy(reply, "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[{\"name\":\"tavily_search\",\"inputSchema\":{\"type\":\"object\"}}],\"nextCursor\":\"next-page\"}}");
         } else {
             assert(strstr(body, "\"cursor\":\"next-page\""));
@@ -95,7 +103,7 @@ int MacTLS_Read(MacTLS_Context *c, void *bytes, size_t len)
     assert(reads_in_step <= 4);
     if (!c->response[0]) respond(c);
     n = strlen(c->response) - c->received;
-    if (n > 3) n = 3;
+    if (n > (size_t)read_chunk) n = (size_t)read_chunk;
     if (n > len) n = len;
     memcpy(bytes, c->response + c->received, n); c->received += n;
     return (int)n;
@@ -104,7 +112,14 @@ MacTLS_State MacTLS_GetState(const MacTLS_Context *c) { return c->state; }
 void MacTLS_Close(MacTLS_Context *c) { assert(c->used && c->state != kMacTLS_Connecting); c->used = 0; closes++; }
 static int step(unsigned long ticks)
 {
-    reads_in_step = 0; return mcp_client_step(&client, ticks);
+    int was_working = client.working, r;
+    reads_in_step = 0;
+    r = mcp_client_step(&client, ticks);
+    /* A step reads or processes, never both, and processing stays in budget. */
+    assert(!(was_working && reads_in_step));
+    if (client.working) processing_steps++;
+    if (client.work.work > max_work) max_work = client.work.work;
+    return r;
 }
 static void expect_step(unsigned long ticks, int expected)
 {
@@ -116,6 +131,7 @@ static void reset(void)
     memset(&client, 0, sizeof(client)); memset(contexts, 0, sizeof(contexts));
     creates = closes = lists = calls = cancels = ping_replies = 0;
     connecting = stalled = bad_version = bad_status = tool_error = disconnect = with_ping = close_after_reply = 0;
+    big_reply = connect_aux = processing_steps = 0; read_chunk = 3; max_work = 0;
     {
         const char *s = "{\"mcpServers\":{\"tavily\":{\"url\":\"https://mcp.tavily.com/mcp/\"}}}";
         assert(!mcp_config_parse(s, strlen(s), &config, error, sizeof(error)));
@@ -140,7 +156,8 @@ int main(void)
     assert(!mcp_client_call(&client, "mcp_tavily_tavily_search", "{\"query\":\"fixture\"}", 3000));
     for (i = 3000; i < 4000 && !step((unsigned long)i); i++) {}
     assert(client.state == MCP_COMPLETE && client.call_error && calls == 2);
-    mcp_client_close(&client); assert(creates == closes && !client.session[0]);
+    assert(mcp_client_response(&client)[0]);
+    mcp_client_close(&client); assert(creates == closes && !client.session[0] && !mcp_client_response(&client)[0]);
     reset(); stalled = 1; assert(!mcp_client_discover(&client, &config, 0));
     expect_step(1799, 0); expect_step(1800, -1);
     assert(client.state == MCP_FAILED && !lists);
@@ -182,6 +199,30 @@ int main(void)
     assert(!mcp_client_call(&client, "mcp_tavily_tavily_search", "{\"query\":\"fixture\"}", 2000));
     for (i = 2000; i < 3000 && !step((unsigned long)i); i++) {}
     assert(client.state == MCP_COMPLETE && !client.call_error && calls == 1);
+    /* A page near the message cap is parsed and key-checked in bounded steps. */
+    reset(); big_reply = 1; read_chunk = 2048; ready();
+    assert(max_work > 0 && max_work <= MCP_WORK_BUDGET && processing_steps >= 7);
+    assert(client.registry.count == 2 && lists == 2);
+    /* Stop abandons a message part-way through processing. */
+    reset(); big_reply = 1; read_chunk = 2048;
+    assert(!mcp_client_discover(&client, &config, 0));
+    for (i = 0; i < 1600 && !(client.working && client.work.steps >= 2); i++) { expect_step((unsigned long)i, 0); }
+    assert(client.working && client.state == MCP_LIST && client.work.steps >= 2);
+    mcp_client_stop(&client, 1700);
+    assert(!client.working && !client.registry.count);
+    for (i = 1700; i < 1900 && !step((unsigned long)i); i++) {}
+    assert(client.state == MCP_STOPPED && cancels == 1 && creates == closes && !client.working);
+    /* Stop while a server-request acknowledgment is still connecting drains it first. */
+    reset(); with_ping = 1; connect_aux = 1;
+    assert(!mcp_client_discover(&client, &config, 0));
+    for (i = 0; i < 1600 && !client.auxiliary.ctx; i++) { expect_step((unsigned long)i, 0); }
+    assert(client.auxiliary.ctx && creates == 4 && client.state == MCP_LIST);
+    mcp_client_stop(&client, 1700);
+    expect_step(1701, 0); expect_step(1702, 0);
+    assert(client.state == MCP_STOPPING && closes < creates);
+    connect_aux = 0;
+    for (i = 1703; i < 1900 && !step((unsigned long)i); i++) {}
+    assert(client.state == MCP_STOPPED && creates == closes);
     puts("PASS MCP cooperative discovery, pagination, calls, ping, deadlines, failures and Stop");
     return 0;
 }

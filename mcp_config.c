@@ -189,23 +189,63 @@ int mcp_config_parse(const char *s, size_t len, McpConfig *c, char *err, size_t 
     memset(val, 0, sizeof(val)); memset(url, 0, sizeof(url)); memset(key, 0, sizeof(key));
     return result;
 }
-static void redact_value(char *s, const char *secret)
+/* Resumable redaction: a naive search per needle, one text/needle comparison
+ * per unit, so a long description cannot stall the event loop. Needles run in
+ * the original order: the session, then each secret and its payload. */
+enum { RED_SECRET, RED_MEASURE, RED_MATCH, RED_DONE };
+enum { STAGE_SESSION, STAGE_WHOLE, STAGE_PAYLOAD };
+static void redact_begin(McpRedact *r, const char *needle, int stage)
 {
-    char *p;
-    size_t n = strlen(secret);
-    if (!n) return;
-    while ((p = strstr(s, secret)) != NULL) { memset(p, '*', n); s = p + n; }
+    r->needle = needle; r->stage = stage; r->pos = 0; r->k = 0; r->state = RED_MATCH;
+}
+void mcp_redact_init(McpRedact *r, const McpConfig *config, const char *session, char *text)
+{
+    memset(r, 0, sizeof(*r));
+    r->config = config; r->text = text;
+    if (session) redact_begin(r, session, STAGE_SESSION);
+    else r->state = RED_SECRET;
+}
+/* The current needle is exhausted: move on to the next one. */
+static void redact_next(McpRedact *r)
+{
+    const char *value = r->config->secrets + r->at;
+    if (r->stage == STAGE_SESSION) { r->state = RED_SECRET; return; }
+    if (r->stage == STAGE_WHOLE && r->space && value[r->space]) {
+        redact_begin(r, value + r->space, STAGE_PAYLOAD);
+        return;
+    }
+    r->at += r->scan + 1;
+    r->state = RED_SECRET;
+}
+int mcp_redact_step(McpRedact *r, size_t budget)
+{
+    size_t work = 0;
+    while (r->state != RED_DONE && work < budget) {
+        const char *value = r->config->secrets + r->at;
+        work++;
+        switch (r->state) {
+        case RED_SECRET:
+            if (r->at >= r->config->secrets_len) r->state = RED_DONE;
+            else { r->scan = 0; r->space = 0; r->state = RED_MEASURE; }
+            break;
+        case RED_MEASURE:
+            /* Length and payload start (after the first space), one character a unit. */
+            if (!value[r->scan]) redact_begin(r, value, STAGE_WHOLE);
+            else { if (value[r->scan] == ' ' && !r->space) r->space = r->scan + 1; r->scan++; }
+            break;
+        default:
+            if (!r->needle[0] || !r->text[r->pos]) redact_next(r);
+            else if (!r->needle[r->k]) { memset(r->text + r->pos, '*', r->k); r->pos += r->k; r->k = 0; }
+            else if (r->text[r->pos + r->k] == r->needle[r->k]) r->k++;
+            else { r->pos++; r->k = 0; }
+        }
+    }
+    r->work = work;
+    return r->state == RED_DONE;
 }
 void mcp_redact(const McpConfig *c, const char *session, char *s)
 {
-    size_t at = 0;
-    if (session) redact_value(s, session);
-    while (at < c->secrets_len) {
-        const char *v = c->secrets + at;
-        const char *payload = strchr(v, ' ');
-        size_t n = strlen(v);
-        redact_value(s, v);
-        if (payload && payload[1]) redact_value(s, payload + 1);
-        at += n + 1;
-    }
+    McpRedact r;
+    mcp_redact_init(&r, c, session, s);
+    mcp_redact_step(&r, (size_t)-1);
 }

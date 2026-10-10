@@ -362,6 +362,26 @@ reading an editor-written file. A synthetic click needs a held press
 (`TrackControl`) to scroll the pane. Host and guest results do not establish
 the integrated memory partition or any agent use of the configuration.
 
+## MCP resumable processing, October 10, 2026
+
+Issue #161's guest gate: `SherclawkMCPCheck` was Docker-built from source
+commit `d15752c8379bcbf74cf4cf89f0b4b5660ab775f1`, published with AFP fork metadata and launched in the OS 9.2.2
+UTM guest against the official Tavily endpoint with the owner's saved
+configuration. Message parsing, key checks, discovery and result checks ran in
+8 KiB steps; the SHA-256 of the published app was
+`e29c868af73c9c62f0e68e2cce571b2e19f5757500406ed8e485497451ff57e3`. Its log:
+
+```text
+PASS configuration
+PASS TLS initialize version=2025-11-25 pages=1 entries=5 eligible=2
+PASS Tavily search results=5 bytes=13470 (body deliberately omitted)
+END PASS
+```
+
+Escape during processing and a pending connect are covered by host fault
+tests only (`tests/test_mcp_client.c`); no guest Stop run was repeated for this
+change.
+
 ## MCP Tavily diagnostic, October 10, 2026
 
 Issue #159's native diagnostic gate passed in the OS 9.2.2 UTM guest against
