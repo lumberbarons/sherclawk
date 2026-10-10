@@ -173,7 +173,8 @@ the prompt from 2 KiB to 8 KiB (with `AGENT_TEXT_CAP` at 32 KiB) linked at
 measured on 2026-10-10 with the command above on `build/Sherclawk.xcoff`. The
 old 6 MiB minimum partition could not hold that, so `SIZE` was raised to 10 MiB
 minimum / 16 MiB preferred, which leaves more room for dynamic allocations than
-the old pair did. Guest heap headroom is not measured yet. History capacity
+the old pair did. The app launched and filled its history to 99% in the OS 9.2.2
+guest (see `history/verification.md`); guest heap headroom is not measured. History capacity
 also increases per-round upload and input-token costs and is not a guarantee
 of provider context capacity. The TextEdit transcript remains independently
 bounded.

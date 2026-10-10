@@ -361,3 +361,30 @@ Enter/Escape key shortcuts, an application restart, and `SherclawkMCPCheck`
 reading an editor-written file. A synthetic click needs a held press
 (`TrackControl`) to scroll the pane. Host and guest results do not establish
 the integrated memory partition or any agent use of the configuration.
+
+Raised limits verification, October 10, 2026: the main `Sherclawk` build (Docker,
+history 1 MiB, tool results 4096 bytes, prompt 8 KiB, `SIZE` 10 MiB minimum / 16 MiB
+preferred) was published to the AFP share and run in the OS 9.2.2 UTM guest with
+`openai/gpt-6-luna`. It launched in the new partition and the status line read
+`History: 0/1024 KiB`. Reading `Minefield9:game.c` (4,083 bytes) took three pages
+whose results were 2,190 and 2,344 bytes, which the old 1,536-byte cap could not
+hold. A 4,352-byte prompt (built by select-all, copy and paste, since a longer
+paste is refused with "Paste is empty or exceeds the field limit") was sent whole
+and journaled at full length. Seven such prompts overflowed the transcript; its
+top then read "[Earlier conversation is saved in the session file.]" followed by
+the surviving recent entries, where the old code cleared the pane.
+
+History was then grown with about 8 KB prompts, one model round each, every round
+ending `end=ok`. Requests reached `up=1043436` bytes at 1002/1024 KiB (status
+"History nearly full. Save Handoff (Command-H) to free h…"); the largest rounds
+took about 3.7 to 5.4 seconds in all, the upload itself about one second
+(`sent` minus `handshake`, in ticks), far inside the 120-second deadline. At 1022 KiB
+the next send was refused with "Session/history unavailable. Start a new
+session." and the prompt stayed in the field. Save Handoff at that size sent
+`up=1046928`, saved the summary and left a fresh 2 KiB history. The app then quit
+cleanly (`Sherclawk session ended.`).
+
+Not measured: guest heap headroom (the main app log has no FreeMem line) and the
+real iMac's network and CPU speed; the guest's network is QEMU user networking.
+The model's context window (about 1M tokens by the status line) was never close
+to the limit, so provider-side context overflow at 1 MiB was not exercised.
