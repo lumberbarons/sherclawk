@@ -1,5 +1,5 @@
-/* Catalog-identity guard for the MCP configuration and the staging and backup
- * files that carry the same credentials. The files are named by the Preferences
+/* Catalog-identity guard for the Preferences file (OpenRouter key), the MCP
+ * configuration and the staging and backup files that carry the same credentials. The files are named by the Preferences
  * folder's volume and directory ID plus a leaf name, never by a workspace path,
  * so a workspace that contains Preferences, a rename of the workspace, or a
  * resolved alias target cannot reach them. Every model-facing file tool asks
@@ -23,8 +23,8 @@ typedef struct {
 /* Locate the Preferences folder. Fails closed: when it cannot be located,
  * nothing can be proved unprotected and the result is MCP_GUARD_DENIED. */
 OSErr mcp_guard_open(McpGuard *guard);
-/* 1 when spec names the configuration, "<name>.new" or "<name>.old" in the
- * Preferences folder, whether or not the file exists. Names compare without
+/* 1 when spec names the Preferences file, the MCP configuration, or the
+ * configuration's "<name>.new" or "<name>.old" in the Preferences folder, whether or not the file exists. Names compare without
  * case, as HFS does. */
 int mcp_guard_protects(const McpGuard *guard, const FSSpec *spec);
 /* open + protects: 0 when spec may be used, else MCP_GUARD_DENIED. */

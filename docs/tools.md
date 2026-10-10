@@ -37,13 +37,15 @@ rather than assuming the first page is complete. Small-file whole-file revisions
 can guard edits; larger-file scan revisions are observational. See
 [editing text](#editing-text) for the exact guard requirements.
 
-## Protected MCP configuration
+## Protected credential files
 
-`System Folder:Preferences:Sherclawk MCP Servers.json` and the
-`….json.new` and `….json.old` files a save stages beside it hold MCP
-credentials in clear text. No model-facing tool reads, lists, searches,
-creates, replaces, edits or trashes them, even when the configured workspace
-contains the Preferences folder. See [MCP](mcp.md#configuration-protection).
+`System Folder:Preferences:Sherclawk Preferences`, which holds the OpenRouter
+key, and `System Folder:Preferences:Sherclawk MCP Servers.json` with the
+`….json.new` and `….json.old` files a save stages beside it, hold credentials
+in clear text. No model-facing tool reads, lists, searches, creates, replaces,
+edits or trashes them, even when the configured workspace contains the
+Preferences folder. Saving Preferences rewrites that file in place and stages
+no sibling. See [MCP](mcp.md#configuration-protection).
 
 - **Identity, not spelling.** The guard names the files by the Preferences
   folder's volume and directory ID (from `FindFolder`) plus the leaf name,

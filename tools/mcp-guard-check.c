@@ -223,7 +223,8 @@ int main(void)
     check(!catalog(&config, &size_before, &modified_before), "configuration catalog read");
 
     {
-        const char *names[] = { CONFIG_NAME, CONFIG_NAME ".new", CONFIG_NAME ".old", "SHERCLAWK MCP SERVERS.JSON", "sherclawk mcp servers.json.OLD" };
+        const char *names[] = { CONFIG_NAME, CONFIG_NAME ".new", CONFIG_NAME ".old", "SHERCLAWK MCP SERVERS.JSON", "sherclawk mcp servers.json.OLD",
+            "Sherclawk Preferences", "SHERCLAWK PREFERENCES" };
         size_t k;
         for (k = 0; k < sizeof(names) / sizeof(names[0]); k++) {
             snprintf(path, sizeof(path), "%s%s", prefs_rel, names[k]);

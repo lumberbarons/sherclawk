@@ -97,7 +97,7 @@ static int  gQuit = 0;
 /* ── Preferences ──────────────────────────────────────────────────── */
 static Prefs gPrefs;
 static int   gPrefsUnreadable = 0;   /* existing file could not be read */
-#define kPrefsFileName "\pSherclawk Preferences"
+#define kPrefsFileName "\p" PREFS_FILENAME
 #define kPrefsCreator 'ShCk'
 #define kPrefsFileType 'pref'
 

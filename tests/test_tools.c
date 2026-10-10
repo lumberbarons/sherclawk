@@ -1513,24 +1513,45 @@ static void trash_checks(void)
       assert(finished>0 && refused>0); }
     puts("PASS move_to_trash: pinned batches, network Trash and workspace fallback, collisions, refusals, journal barriers, partial failure and result caps");
 }
-/* The MCP configuration and its staging/backup siblings hold credentials. They
- * are protected by catalog identity (Preferences folder ID + leaf name): every
+/* The Preferences file, the MCP configuration and its staging/backup siblings
+ * hold credentials. They are protected by catalog identity (Preferences folder ID + leaf name): every
  * model-facing tool must refuse them, wherever the workspace puts Preferences. */
 #define SECRET "Bearer SECRET-TOKEN-123"
 #define CONFIG_NAME "Sherclawk MCP Servers.json"
-static struct { int prefs, config, stage, backup, notes; } guarded;
+#define PREFS_NAME "Sherclawk Preferences"
+#define GUARD_SLOTS 4
+static const char guard_config_body[] = "{\"mcpServers\":{\"t\":{\"headers\":{\"Authorization\":\"" SECRET "\"}}}}";
+/* The OpenRouter key is generated per run (fixed seed, so failures reproduce) instead of
+ * living in the source as a literal that secret scanners would flag. */
+static char guard_key[80];
+static char guard_prefs_body[128];
+static struct { int prefs, config, stage, backup, key, notes; } guarded;
+static const char *guard_body(int slot) { return slot == 3 ? guard_prefs_body : guard_config_body; }
+static long guard_body_size(int slot) { return (long)strlen(guard_body(slot)); }
+static void guard_make_key(void)
+{
+    static const char hex[] = "0123456789abcdef";
+    unsigned long state = 0x2545F491ul;
+    size_t at = (size_t)snprintf(guard_key, sizeof(guard_key), "sk-or-v1-"), n;
+    for (n = 0; n < 64; n++) {
+        state = (state * 1103515245ul + 12345ul) & 0x7fffffffUL;
+        guard_key[at++] = hex[(state >> 16) & 15];
+    }
+    guard_key[at] = '\0';
+    snprintf(guard_prefs_body, sizeof(guard_prefs_body), "model=openai/gpt-4o\rapi_key=%s\r", guard_key);
+}
 static void guard_setup(void)
 {
-    static const char body[] = "{\"mcpServers\":{\"t\":{\"headers\":{\"Authorization\":\"" SECRET "\"}}}}";
-    const char *names[3] = { CONFIG_NAME, CONFIG_NAME ".new", CONFIG_NAME ".old" };
-    int *slot[3] = { &guarded.config, &guarded.stage, &guarded.backup }, k;
+    const char *names[GUARD_SLOTS] = { CONFIG_NAME, CONFIG_NAME ".new", CONFIG_NAME ".old", PREFS_NAME };
+    int *slot[GUARD_SLOTS] = { &guarded.config, &guarded.stage, &guarded.backup, &guarded.key }, k;
     reset();
+    guard_make_key();
     guarded.prefs = add(10, "Preferences", 1);
     prefs_dir = files[guarded.prefs].id;
-    for (k = 0; k < 3; k++) {
+    for (k = 0; k < GUARD_SLOTS; k++) {
         *slot[k] = add(files[guarded.prefs].id, names[k], 0);
         files[*slot[k]].info.fdType = 'TEXT'; files[*slot[k]].info.fdCreator = 'ttxt';
-        memcpy(files[*slot[k]].bytes, body, sizeof(body) - 1); files[*slot[k]].size = (long)sizeof(body) - 1;
+        memcpy(files[*slot[k]].bytes, guard_body(k), (size_t)guard_body_size(k)); files[*slot[k]].size = guard_body_size(k);
     }
     guarded.notes = add(files[guarded.prefs].id, "notes.txt", 0);
     files[guarded.notes].info.fdType = 'TEXT';
@@ -1548,21 +1569,22 @@ static void guard_refused(void)
     assert(strstr(result, "\"status\":\"error\"") && strstr(result, "\"code\":\"PROTECTED\""));
     assert(strstr(result, "\"os_error\":30001"));
     assert(!strstr(result, "SECRET") && !strstr(result, "Bearer") && !strstr(result, "mcpServers"));
+    assert(!strstr(result, "api_key") && !strstr(result, "sk-or") && !strstr(result, guard_key));
 }
 static void guard_untouched(void)
 {
-    static const char body[] = "{\"mcpServers\":{\"t\":{\"headers\":{\"Authorization\":\"" SECRET "\"}}}}";
-    int k, slot[3] = { guarded.config, guarded.stage, guarded.backup };
-    for (k = 0; k < 3; k++)
-        assert(files[slot[k]].used && files[slot[k]].size == (long)sizeof(body) - 1 &&
-               !memcmp(files[slot[k]].bytes, body, sizeof(body) - 1) && !files[slot[k]].locked);
+    int k, slot[GUARD_SLOTS] = { guarded.config, guarded.stage, guarded.backup, guarded.key };
+    for (k = 0; k < GUARD_SLOTS; k++)
+        assert(files[slot[k]].used && files[slot[k]].size == guard_body_size(k) &&
+               !memcmp(files[slot[k]].bytes, guard_body(k), (size_t)guard_body_size(k)) && !files[slot[k]].locked);
     assert(!creates && !published && !trash_moves && !renames);
 }
 static void protection_checks(void)
 {
     const char *protected_paths[] = {
         "Preferences:" CONFIG_NAME, "Preferences:" CONFIG_NAME ".new", "Preferences:" CONFIG_NAME ".old",
-        "Preferences:SHERCLAWK mcp servers.JSON", "Preferences:sherclawk MCP servers.json.OLD" };
+        "Preferences:SHERCLAWK mcp servers.JSON", "Preferences:sherclawk MCP servers.json.OLD",
+        "Preferences:" PREFS_NAME, "Preferences:SHERCLAWK PREFERENCES", "Preferences:sherclawk preferences" };
     char arguments[AGENT_ARGUMENT_CAP];
     int k, i;
 
@@ -1605,7 +1627,9 @@ static void protection_checks(void)
 
     /* Search, flat and recursive, never reads or reports their bytes. */
     guard_call("search_text", "{\"root\":\"Preferences\",\"query\":\"SECRET\"}");
-    assert(strstr(result, "\"matches\":[]") && !strstr(result, "SECRET\"") && strstr(result, "\"skipped\":3"));
+    assert(strstr(result, "\"matches\":[]") && !strstr(result, "SECRET\"") && strstr(result, "\"skipped\":4"));
+    guard_call("search_text", "{\"root\":\"\",\"query\":\"api_key\",\"recursive\":true}");
+    assert(strstr(result, "\"matches\":[]") && !strstr(result, "sk-or") && !strstr(result, guard_key));
     guard_call("search_text", "{\"root\":\"\",\"query\":\"Bearer\",\"recursive\":true,\"limit\":8}");
     assert(strstr(result, "\"matches\":[]") && !strstr(result, "Bearer\""));
     guard_call("search_text", "{\"root\":\"\",\"query\":\"mcpServers\",\"recursive\":true}");
@@ -1641,8 +1665,8 @@ static void protection_checks(void)
     { int alias = add(10, "Config Alias", 0);
       unsigned char record;
       files[alias].info.fdType = 'alis'; files[alias].info.fdFlags = 0x8000;
-      for (k = 0; k < 3; k++) {
-          record = (unsigned char)((k == 0 ? guarded.config : k == 1 ? guarded.stage : guarded.backup) + 1);
+      for (k = 0; k < GUARD_SLOTS; k++) {
+          record = (unsigned char)((k == 0 ? guarded.config : k == 1 ? guarded.stage : k == 2 ? guarded.backup : guarded.key) + 1);
           memset(resources, 0, sizeof(resources));
           add_resource(alias, 'alis', 0, "", &record, 1); files[alias].resource = 1;
           guard_call("resolve_alias", "{\"path\":\"Config Alias\"}");
@@ -1678,16 +1702,19 @@ static void protection_checks(void)
     journals = creates = published = renames = 0;
     strcpy(call.name, "write_text"); strcpy(call.arguments, "{\"path\":\"hello.c\",\"text\":\"ok\"}");
     assert(!run() && strstr(result, "CREATED"));
-    { int k, slot[3] = { guarded.config, guarded.stage, guarded.backup };
-      for (k = 0; k < 3; k++) assert(files[slot[k]].used && strstr(files[slot[k]].bytes, SECRET)); }
+    { int k, slot[GUARD_SLOTS] = { guarded.config, guarded.stage, guarded.backup, guarded.key };
+      for (k = 0; k < GUARD_SLOTS; k++) assert(files[slot[k]].used && strstr(files[slot[k]].bytes, k == 3 ? guard_key : SECRET)); }
 
-    /* Identity, not spelling: the same leaf name elsewhere is an ordinary file. */
+    /* Identity, not spelling: the same leaf names elsewhere are ordinary files. */
     reset();
     i = add(10, CONFIG_NAME, 0); files[i].info.fdType = 'TEXT'; strcpy(files[i].bytes, "plain"); files[i].size = 5;
     guard_call("read_text", "{\"path\":\"" CONFIG_NAME "\"}");
     assert(strstr(result, "plain") && !strstr(result, "PROTECTED"));
     guard_call("search_text", "{\"root\":\"\",\"query\":\"plain\"}");
     assert(strstr(result, CONFIG_NAME));
+    i = add(10, PREFS_NAME, 0); files[i].info.fdType = 'TEXT'; strcpy(files[i].bytes, "copy"); files[i].size = 4;
+    guard_call("read_text", "{\"path\":\"" PREFS_NAME "\"}");
+    assert(strstr(result, "copy") && !strstr(result, "PROTECTED"));
 
     /* Fail closed: an unlocatable Preferences folder protects everything, and a
      * lookup failure is never confused with "missing" so create tools stay out. */
