@@ -51,12 +51,24 @@ static int load(void)
 static int wait_client(void)
 {
     EventRecord event;
-    int r;
+    int r, stopped = 0;
+    unsigned long stop_ticks = 0;
+    long stop_id = 0;
     while (!(r = mcp_client_step(&client, TickCount()))) {
         WaitNextEvent(everyEvent, &event, 1, NULL);
-        if (event.what == keyDown && (event.message & charCodeMask) == 27)
-            mcp_client_stop(&client, TickCount());
+        if (!stopped && event.what == keyDown && (event.message & charCodeMask) == 27) {
+            MacTLS_State state = client.exchange.ctx ? MacTLS_GetState(client.exchange.ctx) : kMacTLS_Closed;
+            stopped = 1; stop_ticks = TickCount(); stop_id = client.id;
+            fprintf(logfile, "STOP Escape phase=%d tls_state=%d pending_connect=%d request_id=%ld\n",
+                client.state, (int)state, state == kMacTLS_Idle || state == kMacTLS_Connecting, stop_id);
+            fflush(logfile);
+            mcp_client_stop(&client, stop_ticks);
+        }
     }
+    if (stopped && client.state == MCP_STOPPED)
+        fprintf(logfile, "PASS Stop drained ticks=%lu contexts=%d request_id_unchanged=%d (server cancellation unproven)\n",
+            (unsigned long)(TickCount() - stop_ticks),
+            (client.exchange.ctx != NULL) + (client.auxiliary.ctx != NULL), client.id == stop_id);
     if (r < 0) {
         fprintf(logfile, "FAIL %s\n", client.state == MCP_STOPPED ? "stopped (cancellation best effort; no replay)" : client.error);
     }
@@ -71,6 +83,7 @@ int main(void)
     logfile = fopen("Retro68:SherclawkMCPCheck.log", "w");
     if (!logfile) return 1;
     if (load() < 0) { fclose(logfile); return 1; }
+    fflush(logfile);
     InitOpenTransport();
     if (MacTLS_Init() != kMacTLS_OK) {
         fputs("FAIL TLS library initialization\n", logfile);
@@ -82,6 +95,7 @@ int main(void)
     if (result > 0) {
         fprintf(logfile, "PASS TLS initialize version=%s pages=%d entries=%d eligible=%d\n",
             client.version, client.registry.pages, client.registry.entries, client.registry.count);
+        fflush(logfile);
         for (i = 0; i < client.registry.count; i++)
             if (!strcmp(client.registry.tools[i].original, "tavily_search")) found = i;
         if (found < 0) { fputs("FAIL select tavily_search in the configuration\n", logfile); result = -1; }
@@ -91,13 +105,46 @@ int main(void)
             if (result >= 0) result = wait_client();
             if (result > 0) {
                 static JsonToken tokens[8192];
-                int r, content;
+                int r, content, text;
                 r = json_parse(client.response, strlen(client.response), tokens, 8192);
                 r = r > 0 ? json_member(client.response, tokens, 0, "result") : -1;
                 content = r >= 0 ? json_member(client.response, tokens, r, "content") : -1;
                 if (client.call_error || content < 0 || tokens[content].type != JSON_ARRAY || tokens[content].next == content + 1) {
                     fputs("FAIL search error or missing content\n", logfile); result = -1;
-                } else fprintf(logfile, "PASS Tavily search bytes=%lu (body deliberately omitted)\n", (unsigned long)strlen(client.response));
+                } else {
+                    /* Inspect only structure/known markers; never log server text.
+                     * Reuse the closed exchange's request buffer as decoded scratch. */
+                    text = json_member(client.response, tokens, content + 1, "text");
+                    if (text < 0 || json_string(client.response, tokens, text,
+                            client.exchange.request, sizeof(client.exchange.request)) < 0) {
+                        fputs("FAIL search text missing or oversized\n", logfile); result = -1;
+                    } else {
+                        char *body = client.exchange.request;
+                        int results, count = 0, entry, url;
+                        r = json_parse(body, strlen(body), tokens, 8192);
+                        results = r > 0 ? json_member(body, tokens, 0, "results") : -1;
+                        if (results >= 0 && tokens[results].type == JSON_ARRAY) {
+                            for (entry = results + 1; entry < tokens[results].next; entry = tokens[entry].next) {
+                                url = json_member(body, tokens, entry, "url");
+                                if (url >= 0 && json_string(body, tokens, url, bytes, sizeof(bytes)) > 0 &&
+                                    (!strncmp(bytes, "https://", 8) || !strncmp(bytes, "http://", 7)))
+                                    count++;
+                                memset(bytes, 0, sizeof(bytes));
+                            }
+                        } else if (strstr(body, "Detailed Results:")) {
+                            char *at = body;
+                            while ((at = strstr(at, "\nURL: "))) {
+                                at += 6;
+                                if (!strncmp(at, "https://", 8) || !strncmp(at, "http://", 7)) count++;
+                            }
+                        }
+                        if (!count) {
+                            fputs("FAIL search returned no result URLs (body deliberately omitted)\n", logfile); result = -1;
+                        } else fprintf(logfile, "PASS Tavily search results=%d bytes=%lu (body deliberately omitted)\n",
+                            count, (unsigned long)strlen(client.response));
+                        memset(body, 0, sizeof(client.exchange.request));
+                    }
+                }
             }
         }
     } else if (client.error[0]) fprintf(logfile, "FAIL %s\n", client.error);

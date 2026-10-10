@@ -27,6 +27,7 @@ static unsigned char engine_buf[32];
 static unsigned char recvapp_data[32];
 static size_t recvapp_len;
 static int last_sendapp_ack, last_recvapp_ack, flushes;
+static int closes, destroys, engine_closes;
 
 unsigned long TickCount(void) { return 10; }
 OTTransportState ot_transport_pump(OTTransport *t) { return t->state; }
@@ -60,8 +61,8 @@ OTTransport *ot_transport_create(const char *host, uint16_t port)
     transport.state = kOTTransport_Connecting;
     return &transport;
 }
-void ot_transport_close(OTTransport *t) { (void)t; }
-void ot_transport_destroy(OTTransport *t) { (void)t; }
+void ot_transport_close(OTTransport *t) { (void)t; closes++; }
+void ot_transport_destroy(OTTransport *t) { (void)t; destroys++; }
 tls13_hs_result tls13_handshake_step(tls13_hs_ctx *hs,
     unsigned char *buf, size_t *len, const char *host)
 {
@@ -106,7 +107,7 @@ void br_ssl_engine_sendrec_ack(br_ssl_engine_context *cc, size_t len)
 void br_ssl_engine_recvrec_ack(br_ssl_engine_context *cc, size_t len)
 { (void)cc; (void)len; recv_acks++; engine_state = BR_SSL_SENDAPP; }
 void br_ssl_engine_close(br_ssl_engine_context *cc)
-{ (void)cc; engine_state = BR_SSL_CLOSED; }
+{ (void)cc; engine_closes++; engine_state = BR_SSL_CLOSED; }
 int br_ssl_client_reset(br_ssl_client_context *cc, const char *host,
     int resume_session)
 { (void)cc; (void)host; (void)resume_session; resets++; return 1; }
@@ -273,6 +274,7 @@ static void application_reset(void)
 int main(void)
 {
     static char large[20000], received[16384];
+    MacTLS_Context *closing;
     int old, n;
     size_t at;
     pump_regressions();
@@ -333,6 +335,19 @@ int main(void)
     assert(MacTLS_Read(&ctx, received, sizeof(received)) == 5);
     assert(!memcmp(received, "world", 5));
     assert(last_recvapp_ack == 5 && recvapp_len == 0);
+    /* Native Escape during TLS 1.3 initialization must never enter the
+     * uninitialized BearSSL runner. Use heap storage: Close wipes/frees it. */
+    reset(1);
+    closing = malloc(sizeof(*closing)); assert(closing); *closing = ctx;
+    closes = destroys = engine_closes = encryptions = 0;
+    MacTLS_Close(closing);
+    assert(closes == 1 && destroys == 1 && engine_closes == 0 && encryptions == 0);
+    /* TLS 1.2 fallback has initialized BearSSL and retains graceful close. */
+    reset(0);
+    closing = malloc(sizeof(*closing)); assert(closing); *closing = ctx;
+    MacTLS_Close(closing);
+    assert(closes == 2 && destroys == 2 && engine_closes == 1 && encryptions == 0);
     puts("PASS application TLS partial I/O, backpressure, record boundaries, receive draining");
+    puts("PASS TLS handshake Stop skips uninitialized TLS 1.3 engine and preserves TLS 1.2 close");
     return 0;
 }
