@@ -5,12 +5,14 @@
 #define FSRead model_FSRead
 #define FSClose model_FSClose
 #define SetFPos model_SetFPos
+#define FSpOpenRF model_FSpOpenRF
 #define main text_tools_main
 #include "test_tools.c"
 #undef main
 #undef FSRead
 #undef FSClose
 #undef SetFPos
+#undef FSpOpenRF
 #include "build_project.h"
 #include "run_application.h"
 #include "toolserver.h"
@@ -42,7 +44,6 @@ int toolserver_poll(uint32_t now,int stop,ToolServerReply *reply)
 #endif
 OSErr FSpDelete(const FSSpec *s) {int i=find(s->parID,s->name);if(i<0)return fnfErr;files[i].used=0;return 0;}
 OSErr FSpGetFInfo(const FSSpec *s,FInfo *p) {int i=find(s->parID,s->name);if(i<0)return fnfErr;*p=files[i].info;return 0;}
-OSErr FSpSetFInfo(const FSSpec *s,const FInfo *p) {int i=find(s->parID,s->name);if(i<0)return fnfErr;files[i].info=*p;return 0;}
 static int launches,launch_error,process_error,run_journal_error;
 static FSSpec launched;
 static int process_absent, identity_changed;
@@ -59,8 +60,10 @@ OSErr FSRead(short ref,long *n,void *out)
 OSErr FSClose(short ref) {return model_FSClose(ref>=64 ? ref-64 : ref);}
 OSErr SetFPos(short ref,short mode,long at) {return model_SetFPos(ref>=64 ? ref-64 : ref,mode,at);}
 
+/* The wrapped resource-fork open shifts refs by 64 so FSRead above can serve
+ * the launched-artifact resource bytes this suite stages itself. */
 OSErr FSpOpenRF(const FSSpec *s,short mode,short *ref)
-{ OSErr e=FSpOpenDF(s,mode,ref); if(!e)*ref+=64; return e; }
+{ OSErr e=model_FSpOpenRF(s,mode,ref); if(!e)*ref+=64; return e; }
 OSErr LaunchApplication(LaunchParamBlockRec *p)
 { launches++;launched=*p->launchAppSpec;p->launchProcessSN.highLongOfPSN=0;p->launchProcessSN.lowLongOfPSN=launch_psn;return launch_error ? ioErr : 0; }
 OSErr GetProcessInformation(const ProcessSerialNumber *p,ProcessInfoRec *i)

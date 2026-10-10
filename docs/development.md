@@ -143,6 +143,7 @@ diagnostic built as its own CMake target; launch it in the guest and read
 | `SherclawkViewImageCheck` | `view_image` against the File Manager: a PNG at the size cap read in bounded steps, refusals and the vision gate |
 | `SherclawkMCPCheck` (`tools/mcp-check.c`) | MCP configuration, TLS initialize, discovery and a Tavily search; see [the MCP guide](mcp.md#protocol-diagnostic) |
 | `SherclawkTrashCheck` | `move_to_trash` against the real volume Trash: what `FindFolder` resolves, a pinned rename, destination identity, recovery and the fallback |
+| `SherclawkCopyCheck` (`tools/copy-check.c`) | `copy_file` against the real volume: a fixture with both forks and Finder identity, a pinned publish under a new name, byte verification of both forks, an untouched source and the overwrite refusal |
 | `SherclawkMCPGuardCheck` (`tools/mcp-guard-check.c`) | The MCP configuration guard against the real Preferences folder: the workspace is pointed at the boot volume, every protected tool is refused, listing and search skip the file, an alias target is refused, and its size and modification date stay unchanged; the log carries only statuses |
 | `SherclawkProjectCheck` | `create_project` publication, bytes and metadata |
 | `SherclawkBuildCheck`, `SherclawkRunCheck`, `SherclawkSelfBuildCheck`, `SherclawkSelfBuildStopCheck` | `build_project` / `run_application` through the native executor (`tools/build-check.c`) |
@@ -190,6 +191,10 @@ APP=SherclawkTrashCheck tools/deploy-to-share.sh
 # Launch SherclawkTrashCheck in OS 9; retains its fixture folder and leaves the
 # moved item visible in the Trash. Record the resolution NOTES and RESULT line.
 ssh "$SHARE_HOST" 'cat /srv/retro68/SherclawkTrashCheck.log'
+APP=SherclawkCopyCheck tools/deploy-to-share.sh
+# Launch SherclawkCopyCheck in OS 9; retains its fixture folder. Record the
+# RESULT line before advertising copy_file.
+ssh "$SHARE_HOST" 'cat /srv/retro68/SherclawkCopyCheck.log'
 ```
 
 The cursor matcher can mistake highlights in the lobster artwork for the arrow.

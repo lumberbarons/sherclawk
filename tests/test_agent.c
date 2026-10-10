@@ -42,7 +42,7 @@ static const char *const tool_names[] = {
     "get_environment", "list_files", "read_text", "search_text", "write_text", "edit_text",
     "create_folder", "move_to_trash", "create_project", "build_project", "read_build_log",
     "run_application", "quit_application", "get_file_info", "resolve_alias", "list_processes",
-    "list_fonts", "measure_text", "list_resources", "read_resource", "view_image",
+    "list_fonts", "measure_text", "list_resources", "read_resource", "view_image", "copy_file",
 };
 static int member(int object, const char *key)
 {

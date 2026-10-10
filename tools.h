@@ -18,7 +18,7 @@ enum ToolId {
     TOOL_run_application, TOOL_quit_application, TOOL_get_file_info,
     TOOL_resolve_alias, TOOL_list_processes, TOOL_list_fonts,
     TOOL_measure_text, TOOL_list_resources, TOOL_read_resource,
-    TOOL_view_image
+    TOOL_view_image, TOOL_copy_file
 };
 typedef struct {
     enum ToolId id;
@@ -38,6 +38,8 @@ int read_text_begin(const AgentCall *, char *, size_t, AgentJournal, void *, uin
 int read_text_step(char *, size_t, uint32_t, int);
 int edit_text_begin(const AgentCall *, char *, size_t, AgentJournal, void *, uint32_t);
 int edit_text_step(char *, size_t, uint32_t, int);
+int copy_file_begin(const AgentCall *, char *, size_t, AgentJournal, void *, uint32_t);
+int copy_file_step(char *, size_t, uint32_t, int);
 /* Host diagnostics simulate the File Manager and never resolve guest paths. */
 #ifndef SHERCLAWK_HOST
 #include <Files.h>
@@ -61,6 +63,10 @@ int tools_execute_recorded(const AgentCall *call, char *result, size_t cap,
                            AgentJournal journal, void *context);
 const char *tools_text_phase(void);
 int tools_text_step(char *, size_t, uint32_t, int stop);
+/* Advance whichever pending tool operation is active: a text read/edit or a
+ * copy. The generic host and diagnostic drivers pump this; main.c pairs the
+ * registry rows with their own step functions instead. */
+int tools_pending_step(char *, size_t, uint32_t, int stop);
 int tools_validate_path(const char *path, int folder);
 /* Runtime workspace root (MacRoman, ends in ':'), compiled default unless the
  * app applies the saved preferences. Shared by tools, inspection and builds. */

@@ -8,7 +8,7 @@ static int test_execute_recorded(const AgentCall *call,char *out,size_t cap,Agen
     unsigned int steps=0;
     while(r==2) {
         steps++;assert(steps<10000);
-        r=tools_text_step(out,cap,(uint32_t)TickCount(),0);
+        r=tools_pending_step(out,cap,(uint32_t)TickCount(),0);
     }
     return r;
 }

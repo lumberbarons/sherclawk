@@ -78,6 +78,7 @@ target_compile_definitions(SherclawkNativeBuildErrorCheck PRIVATE NATIVE_BUILD_E
 sherclawk_app(SherclawkInspectCheck tools/inspect-check.c ${TOOLS_SRC} json.c text.c hello.r)
 sherclawk_app(SherclawkViewImageCheck tools/view-image-check.c ${TOOLS_SRC} view_image.c json.c text.c hello.r)
 sherclawk_app(SherclawkTrashCheck tools/trash-check.c ${TOOLS_SRC} json.c text.c hello.r)
+sherclawk_app(SherclawkCopyCheck tools/copy-check.c ${TOOLS_SRC} json.c text.c hello.r)
 sherclawk_app(SherclawkMCPGuardCheck tools/mcp-guard-check.c ${TOOLS_SRC} json.c text.c hello.r)
 # These two diagnostics #include ../main.c themselves, so APP_SRC carries the
 # app modules they do not name directly.
