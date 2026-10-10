@@ -18,7 +18,9 @@ The transcript and MCP editor share the same scroll calculations.
 
 `chat_append_message()` in `chat.c` converts UTF-8 to bounded MacRoman/CR display
 text, substitutes session-file notices for oversized entries, and caps accumulated
-transcript bytes and separators. It returns the entry offset for tool-line folding.
+transcript bytes and separators. When the next entry does not fit, it drops the
+oldest leading text up to a blank line, behind one session-file notice, rather
+than clearing the window. It returns the entry offset for tool-line folding.
 The UI then refreshes TextEdit and scrolls to the bottom. Display capping leaves
 conversation history and the session journal intact. These helpers run in host
 ASan/UBSan checks; the scroll diagnostic still exercises the real guest controls.

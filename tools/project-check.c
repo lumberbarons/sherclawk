@@ -31,7 +31,8 @@ static void check(int ok, const char *name)
 int main(void)
 {
     AgentCall call;
-    char result[AGENT_RESULT_CAP], folder[80], full[256], raw[4096];
+    static char result[AGENT_RESULT_CAP];
+    char folder[80], full[256], raw[4096];
     FSSpec spec;
     CInfoPBRec pb;
     Str255 native;

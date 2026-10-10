@@ -752,12 +752,26 @@ static void wire_shape(void)
     message(messages, 0, "system"); message(messages, 3, "tool");
     assert(is_text(member(message(messages, 6, "user"), "content"), "Write the handoff summary now."));
 }
+/* The composer takes CHAT_PROMPT_CAP - 1 MacRoman bytes, each up to three bytes of UTF-8. */
+static void longest_prompt(void)
+{
+    static char prompt[(CHAT_PROMPT_CAP - 1) * 3 + 1];
+    size_t i;
+    for (i = 0; i + 3 <= sizeof(prompt) - 1; i += 3) memcpy(prompt + i, "\xe2\x82\xac", 3);
+    prompt[i] = 0;
+    records = 0; agent_reset(&a, journal, NULL);
+    assert(strlen(prompt) == (CHAT_PROMPT_CAP - 1) * 3);
+    assert(!agent_begin(&a, prompt, error, sizeof(error)));
+    assert(a.used > strlen(prompt) && pin(agent_request(&a, "model", req, sizeof(req))) > 0);
+    assert(strstr(req, prompt));
+}
 int main(void)
 {
     const char *final = "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Inspected.\"}}]}";
     size_t used, i;
     instructions();
     wire_shape();
+    longest_prompt();
     begin();
     assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0);
     assert(strstr(req, "\"tools\"") && strstr(req, "\"role\":\"system\"") && strstr(req, "write_text") && strstr(req, "create_project") && strstr(req, "create_folder") && strstr(req, "edit_text") && strstr(req, "search_text") && strstr(req,"build_project") && strstr(req,"read_build_log") && strstr(req,"view_image") && strstr(req,"at most 131072 bytes;") && !strstr(req,"131072L"));

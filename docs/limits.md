@@ -17,11 +17,12 @@ in the headers today; the headers win if this drifts.
 | `AGENT_REPLY_CAP` | 40 KiB | Visible text of one reply (`Agent.text`). |
 | `AGENT_ARGUMENT_CAP` | 8 KiB | Arguments of one tool call. |
 | `AGENT_CALL_MAX` | 4 | Tool calls accepted from one response. |
-| `AGENT_HISTORY_CAP` | 384 KiB | Recorded conversation JSON (`Agent.history`). |
-| `CHAT_REQUEST_CAP` | 416 KiB | The whole request JSON (`gJSON`): history plus system prompt and tool schemas. |
+| `AGENT_HISTORY_CAP` | 1 MiB | Recorded conversation JSON (`Agent.history`). |
+| `CHAT_REQUEST_CAP` | 1,056 KiB (1,081,344) | The whole request JSON (`gJSON`): history plus system prompt and tool schemas. |
 | `AGENT_INSTRUCTIONS_CAP` | 4096 | UTF-8 bytes of one `AGENTS.md` (marker included). The root file rides in the system message, so it is request overhead; a project file is a history message. Up to `AGENT_PROJECT_MAX` projects are tracked per chat. |
-| `AGENT_TEXT_CAP` | 16 KiB | User prompt and handoff message buffers. Not reply text. |
-| `AGENT_RESULT_CAP` | 1536 | One tool result recorded into history. |
+| `AGENT_TEXT_CAP` | 32 KiB | User prompt and handoff message buffers. Not reply text. Must hold a full prompt in UTF-8 (`CHAT_PROMPT_CAP` below): a compile-time guard in `agent.c` enforces it. |
+| `CHAT_PROMPT_CAP` | 8193 | The prompt field, in MacRoman bytes including the terminator. Each byte can become three bytes of UTF-8 in `gPending`. |
+| `AGENT_RESULT_CAP` | 4096 | One tool result recorded into history. Tool executors fill pages to it, and several keep a record of it in static scratch (the application stack is small). Escaped on the wire it can reach `AGENT_RESULT_WIRE_CAP` (six times as much, plus 256), which `agent_response` reserves per call. |
 | `AGENT_IMAGE_CAP` | 128 KiB | Largest PNG `view_image` reads (`view_image.c` holds one in a static buffer). Its base64 form, a third larger, rides in one request. |
 | `AGENT_IMAGE_NOTE_CAP` | 2048 | History reserved for the note that accompanies an image, whenever a response calls `view_image`. |
 | JSON token scratch | 4096 tokens | Tokens (not bytes) in any parsed response; `tokens[]` in `agent.c`. A catalog page over the cap parses to zero rows. |
@@ -30,7 +31,7 @@ in the headers today; the headers win if this drifts.
 
 | Limit | Value | Bounds |
 |---|---|---|
-| `CHAT_TRANSCRIPT_CAP` | 30,001 bytes | The TextEdit transcript. Classic TextEdit stops at 32,000 bytes, so this cannot simply be raised. A reply too long for it is journaled but shown as a "see the session file" placeholder. |
+| `CHAT_TRANSCRIPT_CAP` | 30,001 bytes | The TextEdit transcript. Classic TextEdit stops at 32,000 bytes, so this cannot simply be raised. A reply too long for it is journaled but shown as a "see the session file" placeholder. When the next entry does not fit (bytes, or the 1400-line cap), `chat_append_message` drops the oldest text up to a blank line, behind one session-file notice; if no cut makes room, only the notice stays. History and the journal are never touched. |
 | Request deadline | 120 s | One HTTPS exchange (`StepModelExchange`). |
 | Model catalog deadline | 30 s | The model context-window query and each Preferences catalog fetch (popular page, Find, OK validation). Dragging the dialog restarts it. |
 | Catalog page rows | 10 | `AGENT_MODEL_ROWS_MAX`; the popular, search and validation queries all send `limit=10`. |
@@ -38,7 +39,7 @@ in the headers today; the headers win if this drifts.
 
 ### Memory partition (`hello.r`)
 
-`SIZE` asks for 8 MiB preferred and 6 MiB minimum. The static data below counts
+`SIZE` asks for 16 MiB preferred and 10 MiB minimum. The static data below counts
 against it, along with dynamic TLS and UI allocations.
 
 ### Generated-app starter (`templates/ppc-toolbox`)
@@ -125,7 +126,7 @@ in bss and 8,224 bytes of text and data, mostly the embedded starter.
    (`AGENT_IMAGE_CAP` bytes become 4/3 as many characters) is spliced into the
    request that follows `view_image` only, so the request must hold history,
    system prompt and schemas, and the image at once: with a 128 KiB PNG that
-   leaves about 230 KB of history, not the full 384 KiB. `agent_attach_image`
+   leaves about 880 KB of history, not the full 1 MiB. `agent_attach_image`
    checks this when it records the note and, if the image would not fit, says
    so in the note instead of sending it. Later rounds and handoff requests
    carry the note alone, so images never occupy history. Raising
@@ -143,6 +144,8 @@ in bss and 8,224 bytes of text and data, mostly the embedded starter.
 | `AGENT_HISTORY_CAP` | live history, handoff candidate history, `gJSON`, HTTP request | 4 |
 | `AGENT_REPLY_CAP` | `Agent.text` in the live and candidate `Agent` | 2 |
 | `AGENT_TEXT_CAP` | prompt buffer; handoff content (once) and message (six times) | 8 |
+| `CHAT_PROMPT_CAP` | `gPending` (three times) and the `SendChat` prompt buffer | 4 |
+| `AGENT_RESULT_CAP` | `gToolResult`, the static record scratch in `tools.c`, and the wire message (`AGENT_RESULT_WIRE_CAP`) | about 15 |
 | `AGENT_IMAGE_CAP` | the `view_image` PNG buffer | 1 |
 | `AGENT_MAX_TOKENS` | none | 0 |
 
@@ -164,10 +167,13 @@ tokens with the 40 KiB `AGENT_REPLY_CAP`, and 3,036,744 bytes (2.90 MiB) with
 buffer and later changes were linked. This excludes dynamic TLS and UI
 allocations and the stack, so keep the minimum partition comfortably above it.
 
-With the same layout, increasing history from 384 KiB to 512 KiB would raise
-that baseline to roughly 3.4 MiB before dynamic allocations; 1 MiB history
-would need roughly 5.4 MiB, and 2 MiB would exceed the current 8 MiB preferred
-partition. Re-measure and raise `SIZE` before such increases. History capacity
+Raising history from 384 KiB to 1 MiB, tool results from 1536 to 4096 bytes and
+the prompt from 2 KiB to 8 KiB (with `AGENT_TEXT_CAP` at 32 KiB) linked at
+602,112 bytes text, 9,728 data and 6,014,920 bss: 6,626,760 total (6.32 MiB),
+measured on 2026-10-10 with the command above on `build/Sherclawk.xcoff`. The
+old 6 MiB minimum partition could not hold that, so `SIZE` was raised to 10 MiB
+minimum / 16 MiB preferred, which leaves more room for dynamic allocations than
+the old pair did. Guest heap headroom is not measured yet. History capacity
 also increases per-round upload and input-token costs and is not a guarantee
 of provider context capacity. The TextEdit transcript remains independently
 bounded.
@@ -182,6 +188,13 @@ bounded.
 - **History:** raise `CHAT_REQUEST_CAP` with it, update the memory measurements
   here and the [usage limits](usage.md#run-limits), re-measure size, and check
   the `SIZE` resource.
+- **`AGENT_RESULT_CAP`:** move any new stack buffer sized by it to static, check
+  `AGENT_RESULT_WIRE_CAP` against the history reserve, and update the figures in
+  `tools.md`, `usage.md` and the README; tests that rely on a result not fitting
+  need a larger fixture.
+- **`CHAT_PROMPT_CAP`:** its UTF-8 form (three bytes each) must fit
+  `AGENT_TEXT_CAP`; the guard in `agent.c` enforces it. Update `gPending` and the
+  [usage limits](usage.md#run-limits).
 - **`AGENT_IMAGE_CAP`:** check invariant 8 against `CHAT_REQUEST_CAP`, update the
   `view_image` text in `docs/tools.md` and the schema description in `agent.c`
   (it quotes the value), and re-measure size.
@@ -256,7 +269,7 @@ The protocol diagnostic still parses a completed JSON message synchronously;
 resumable parsing and result processing within 8 KiB per step are required
 before application integration. The separate acknowledgment connection adds
 TLS allocations, so its footprint must also be measured on the guest.
-The future retained-result cap is 128 KiB, while the existing 1536-byte tool
+The future retained-result cap is 128 KiB, while the existing tool
 result and 8 KiB argument caps will remain unchanged. Result artifacts and
 pagination are not implemented yet.
 
@@ -265,7 +278,7 @@ On 2026-10-08 the Docker-linked MCP diagnostic measured 339,968 bytes text,
 bytes because it did not yet link MCP. With the configuration editor the main
 app linked at 585,728 bytes text, 9,664 data and 3,173,888 bss: 3,769,280 total
 (3.59 MiB). These measurements exclude dynamic TLS/UI allocations and stack;
-they do not prove the integrated 6 MiB minimum partition is sufficient.
+they do not prove the integrated minimum partition is sufficient.
 
 ## Owned process Quit
 
@@ -294,7 +307,7 @@ prevents another send. These bounds do not change the model argument/result caps
 The two 64 KiB snapshots, 1 KiB verification scratch, 4 KiB strings and KMP
 prefix table replace the small editor buffers. Build inputs share one 128 KiB
 arena plus one terminator per input; no file-sized verification buffers are
-allocated. Sherclawk now requests 6 MiB minimum / 8 MiB preferred. The generated
+allocated. Sherclawk now requests 10 MiB minimum / 16 MiB preferred. The generated
 starter's partition remains unchanged. Guest heap headroom and timing evidence
 are pending; [the design](large-text.md) specifies the admission gate.
 
@@ -303,4 +316,4 @@ On 2026-10-09 the large-text implementation linked at 561,152 bytes text,
 `SherclawkLargeTextCheck` had this footprint. This was measured with
 `powerpc-apple-macos-size` in the Retro68 Docker image. It excludes dynamic
 TLS/UI allocation and stack and does not establish guest heap headroom at the
-6 MiB minimum partition.
+minimum partition.

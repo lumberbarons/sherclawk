@@ -20,6 +20,8 @@ LIMIT_CHECK(tokens_fit_response, AGENT_MAX_TOKENS * 10 <= CHAT_RESPONSE_CAP);
 LIMIT_CHECK(handoff_tokens_fit_response, AGENT_HANDOFF_MAX_TOKENS * 10 <= CHAT_RESPONSE_CAP);
 LIMIT_CHECK(reply_fits_response, AGENT_REPLY_CAP < CHAT_RESPONSE_CAP);
 LIMIT_CHECK(request_holds_history, CHAT_REQUEST_CAP >= AGENT_HISTORY_CAP + 16384 + AGENT_INSTRUCTIONS_CAP);
+/* A prompt is composed in MacRoman and recorded as UTF-8, up to three bytes each. */
+LIMIT_CHECK(prompt_fits_text, (CHAT_PROMPT_CAP - 1) * 3 + 64 <= AGENT_TEXT_CAP);
 
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)
@@ -77,7 +79,7 @@ const char *agent_tool_schemas(void)
         "\"cursor\":{\"type\":\"integer\",\"minimum\":0},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":12}},"
         "\"required\":[\"root\"],\"additionalProperties\":false}}},"
         "{\"type\":\"function\",\"function\":{\"name\":\"read_text\","
-        "\"description\":\"Read bounded plain MacRoman text as UTF-8, with line range and byte continuation. Pages fill the 1536-byte JSON result budget; escaping can reduce text per page. Files up to " TOOLS_FILE_CAP_DESCRIPTION " bytes get a whole-file revision independent of pagination; larger files get observational scan revisions. editable indicates CR text within the edit limit. Refuses binary/resource-fork files. Use paths from list_files.\","
+        "\"description\":\"Read bounded plain MacRoman text as UTF-8, with line range and byte continuation. Pages fill the " STRINGIFY(AGENT_RESULT_CAP) "-byte JSON result budget; escaping can reduce text per page. Files up to " TOOLS_FILE_CAP_DESCRIPTION " bytes get a whole-file revision independent of pagination; larger files get observational scan revisions. editable indicates CR text within the edit limit. Refuses binary/resource-fork files. Use paths from list_files.\","
         "\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},"
         "\"start_byte\":{\"type\":\"integer\",\"minimum\":0},\"start_line\":{\"type\":\"integer\",\"minimum\":1},\"max_lines\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":30}},"
         "\"required\":[\"path\"],\"additionalProperties\":false}}},"

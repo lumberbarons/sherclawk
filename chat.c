@@ -128,6 +128,29 @@ int chat_commit(Chat *c, const char *prompt, const char *reply, int limited)
     c->messages += 2; return 0;
 }
 
+#define TRANSCRIPT_MAX_LINES 1400
+static const char kEarlier[] = "[Earlier conversation is saved in the session file.]\r\r";
+
+/* Make room for an entry of `need` bytes and `lines` total lines by dropping
+ * whole leading chunks (each ends at a blank line) behind one session-file
+ * notice. The fewest bytes go; if no cut is enough, only the notice remains.
+ * Returns the new transcript length. */
+static size_t transcript_make_room(char *t, size_t at, size_t lines, size_t need, size_t cap)
+{
+    size_t notice = sizeof(kEarlier) - 1, start = 0, cut, i, crs = 0, keep = at;
+    if (at >= notice && !memcmp(t, kEarlier, notice)) start = notice;
+    for (i = 0; i < start; i++) if (t[i] == 13) crs++;
+    for (cut = i = start;;) {
+        if (notice + (at - cut) + need < cap && lines + 2 - crs <= TRANSCRIPT_MAX_LINES) { keep = cut; break; }
+        while (i + 1 < at && !(t[i] == 13 && t[i + 1] == 13)) { if (t[i] == 13) crs++; i++; }
+        if (i + 1 >= at) break;
+        crs += 2; i += 2; cut = i;
+    }
+    memmove(t + notice, t + keep, at - keep + 1);
+    memcpy(t, kEarlier, notice);
+    return notice + at - keep;
+}
+
 /* Bounded transcript display; UTF-8 input, MacRoman/CR output. */
 long chat_append_message(Chat *chat, const char *label, const char *text)
 {
@@ -147,10 +170,8 @@ long chat_append_message(Chat *chat, const char *label, const char *text)
         }
         lines += own_lines;
     }
-    if (at + len + prefix + 8 >= sizeof(chat->transcript) || lines > 1400) {
-        strcpy(chat->transcript, "[Earlier conversation is saved in the session file.]\r\r");
-        at = strlen(chat->transcript);
-    }
+    if (at + len + prefix + 8 >= sizeof(chat->transcript) || lines > TRANSCRIPT_MAX_LINES)
+        at = transcript_make_room(chat->transcript, at, lines, len + prefix + 8, sizeof(chat->transcript));
     if (prefix + len + 5 >= sizeof(chat->transcript) - at) return -1;
     if (prefix) { strcpy(chat->transcript + at, label); strcat(chat->transcript, ":\r"); }
     strcat(chat->transcript, display); strcat(chat->transcript, "\r\r");

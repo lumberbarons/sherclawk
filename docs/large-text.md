@@ -32,7 +32,7 @@ Each file transfer, splice and verification advances at most 1 KiB. KMP prefix
 construction and matching charge each comparison, including fallback, against
 a 1,024-comparison step budget. Overlapping matches count separately; the second
 match refuses the edit immediately. Strings remain at most 4,096 MacRoman
-bytes each, arguments 8 KiB, and results 1,536 bytes. Multiple replacements per
+bytes each, arguments 8 KiB, and results 4,096 bytes. Multiple replacements per
 call remain outside this change (#113). Create-only writes remain 4 KiB.
 
 Within the selected file limit, reads retain the entire snapshot, validate and
@@ -76,7 +76,7 @@ recipe and manifest) are checked before queue creation, snapshot journaling or
 reservation. The total remains 128 KiB. `SNAPSHOT_SIZE_LIMIT` identifies the
 applicable descriptor, input and total limits.
 
-Sherclawk's partition is 6 MiB minimum / 8 MiB preferred. Generated starter
+Sherclawk's partition is 10 MiB minimum / 16 MiB preferred. Generated starter
 partitions are unchanged. Linked size is recorded in `limits.md`; guest heap
 headroom is an acceptance measurement, not inferred from static size.
 
@@ -88,7 +88,7 @@ I/O faults, every edit journal/rename boundary, cancellation through phases,
 tick wrap, recovery handles, immutable build inputs and aggregate rejection.
 Both clang and GCC run with ASan/UBSan.
 
-Run the edit diagnostic on the AFP workspace at the 6 MiB minimum. Preserve its
+Run the edit diagnostic on the AFP workspace at the 10 MiB minimum. Preserve its
 log, fixture and backups. It writes 16/64 KiB fixtures natively, times every
 phase/step, reports heap headroom, checks boundary-crossing replacements and
 exact backup/replacement bytes, and rereads fresh revisions. Record visible

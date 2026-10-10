@@ -52,15 +52,65 @@ static void capping(void)
     assert(!strcmp(chat.transcript, limits));
     reset(); memset(chat.transcript, '\r', 1400); chat.transcript[1400] = 0;
     assert(chat_append_message(&chat, NULL, "x") == 1400);
+    /* Over the line cap, only as many leading line pairs go as needed. */
     reset(); memset(chat.transcript, '\r', 1401); chat.transcript[1401] = 0;
-    assert(chat_append_message(&chat, NULL, "x") == (long)strlen(earlier));
-    assert(!strcmp(chat.transcript + strlen(earlier), "x\r\r")); history_retained();
+    assert(chat_append_message(&chat, NULL, "x") == (long)strlen(earlier) + 1397);
+    assert(!strncmp(chat.transcript, earlier, strlen(earlier)));
+    assert(!strcmp(chat.transcript + strlen(earlier) + 1397, "x\r\r")); history_retained();
 
     reset(); memset(text, 'L', sizeof(text) - 1); text[sizeof(text) - 1] = 0;
     assert(chat_append_message(&chat, text, "x") == -1);
     assert(!strcmp(chat.transcript, earlier)); history_retained();
 }
+/* Entry bodies carry no blank line, so each "\r\r" ends exactly one entry. */
+static void fill_entry(const char *label, char ch, size_t bytes)
+{
+    memset(text, ch, bytes); text[bytes] = 0;
+    assert(chat_append_message(&chat, label, text) >= 0);
+}
+static void dropping_oldest(void)
+{
+    long at;
+    size_t before, i;
+    reset();
+    fill_entry("First", 'a', 5000); fill_entry("Second", 'b', 5000);
+    fill_entry("Third", 'c', 5000); fill_entry("Fourth", 'd', 5000);
+    fill_entry("Fifth", 'e', 5000);
+    assert(!strstr(chat.transcript, "Earlier"));
+    before = strlen(chat.transcript);
+    memset(text, 'f', 5000); text[5000] = 0;
+    at = chat_append_message(&chat, "Sixth", text);
+    /* Only the oldest entry goes; the rest stay readable behind one notice. */
+    assert(!strncmp(chat.transcript, earlier, strlen(earlier)));
+    assert(!strstr(chat.transcript, "First:"));
+    assert(!strncmp(chat.transcript + strlen(earlier), "Second:\r", 8));
+    assert(strstr(chat.transcript, "Fifth:\r") && strstr(chat.transcript, "Sixth:\r"));
+    assert(strlen(chat.transcript) < CHAT_TRANSCRIPT_CAP && strlen(chat.transcript) > before - 5009);
+    assert(at == (long)(strlen(chat.transcript) - strlen("Sixth:\r") - 5000 - 2));
+    assert(!strcmp(chat.transcript + at + 7 + 5000, "\r\r")); history_retained();
+
+    /* The notice is never stacked, however often the window rolls. */
+    for (i = 0; i < 12; i++) fill_entry("More", 'g', 6000);
+    assert(!strncmp(chat.transcript, earlier, strlen(earlier)));
+    assert(!strstr(chat.transcript + 1, "[Earlier"));
+    assert(strlen(chat.transcript) < CHAT_TRANSCRIPT_CAP); history_retained();
+}
+static void dropping_for_lines(void)
+{
+    size_t i;
+    reset();
+    for (i = 0; i < 600; i++) strcpy(text + 2 * i, "l\n");
+    text[1200] = 0;
+    assert(chat_append_message(&chat, "First", text) == 0);
+    assert(chat_append_message(&chat, "Second", text) >= 0);
+    assert(!strstr(chat.transcript, "Earlier"));
+    assert(chat_append_message(&chat, "Third", text) >= 0);
+    assert(!strncmp(chat.transcript, earlier, strlen(earlier)));
+    assert(!strstr(chat.transcript, "First:"));
+    assert(strstr(chat.transcript, "Second:\r") && strstr(chat.transcript, "Third:\r"));
+    history_retained();
+}
 int main(void)
 {
-    capping(); puts("chat display checks passed"); return 0;
+    capping(); dropping_oldest(); dropping_for_lines(); puts("chat display checks passed"); return 0;
 }

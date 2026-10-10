@@ -2044,7 +2044,7 @@ static int ToolEventJournal(void *context, const char *event, const char *json)
  * the result indented under it and the call's journal events follow. */
 static void ShowToolResult(const AgentCall *call, const char *label, const char *text)
 {
-    static char block[4096];
+    static char block[AGENT_RESULT_CAP + 4096]; /* header, one result and the call's journal events */
     char header[400];
     if (!call) { ShowMessage(label, text); return; }
     RenderToolCall(call, header, sizeof(header));
@@ -2314,7 +2314,7 @@ static void FinishContextLookup(int completed)
 }
 static void SendChat(void)
 {
-    char prompt[CHAT_PROMPT_CAP];
+    static char prompt[CHAT_PROMPT_CAP]; /* static: the application stack is small */
     if (RunBusy()) return;
     if (gLookupDrain) { SetStatus("The stopped lookup is still closing; send again in a moment."); return; }
     if (!gPrefs.api_key[0]) { SetStatus("No API key: choose Preferences from the Edit menu."); return; }

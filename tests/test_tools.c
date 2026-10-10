@@ -497,7 +497,7 @@ static void page_checks(void)
             assert(reconstructed+(size_t)n<sizeof(rebuilt));memcpy(rebuilt+reconstructed,decoded,(size_t)n);reconstructed+=(size_t)n;
             cursor=next;assert(++pages<200);
         }
-        if(k==0)assert(pages==4);
+        if(k==0)assert(pages==2);
         assert(text_to_utf8(files[f].bytes,4096,expected,sizeof(expected))==(int)reconstructed);
         assert(!memcmp(rebuilt,expected,reconstructed));
     }
@@ -578,9 +578,9 @@ static void edit_checks(void)
     edit_setup("one\r","one","two");strcpy(call.arguments,"{\"path\":\"hello.c\",\"expected_revision\":\"full-x\",\"old_text\":\"one\",\"old_text\":\"two\",\"new_text\":\"x\"}");assert(!run() && strstr(result,"ARGUMENTS") && !creates);
     /* All three recovery paths must fit a result before creating any file. */
     i=edit_setup("one\r","one","two");field("revision",revision,sizeof(revision));
-    { char path[512]="", name[32], quoted[1100];long parent=10;int d,k;
-      for(d=0;d<6;d++) {
-          int n=d==5 ? 7 : 31;
+    { char path[512]="", name[32], quoted[2200];long parent=10;int d,k;
+      for(d=0;d<15;d++) {
+          int n=d==14 ? 7 : 31;
           memset(name,0xdb,(size_t)n);name[n]=0;k=add(parent,name,1);parent=files[k].id;
           for(k=0;k<n;k++)strcat(path,"\xe2\x82\xac");
           strcat(path,":");
