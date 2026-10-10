@@ -56,6 +56,12 @@ OSErr FSMakeFSSpec(short vol, long parent, const unsigned char *name, FSSpec *sp
 {
     (void)vol; spec->vRefNum=1;
     unsigned char leafname[32];
+    if (parent && !name[0]) { /* the directory itself, like the real File Manager */
+        int k; for(k=0;k<64;k++) if(files[k].used && files[k].dir && files[k].id==parent) break;
+        if(k==64) return dirNFErr;
+        spec->parID=files[k].parent; spec->name[0]=(unsigned char)strlen(files[k].name);
+        memcpy(spec->name+1,files[k].name,spec->name[0]); return 0;
+    }
     if (!parent) {
         assert(name[0]>=8 && !memcmp(name+1,"Retro68:",8));
         if (name[0]==8) { parent=1;name=(const unsigned char *)"\007Retro68"; }
@@ -165,16 +171,17 @@ OSErr FindFolder(short vRefNum, unsigned long folderType, Boolean createFolder, 
     *found_dir=files[trash_can].id;
     return 0;
 }
+/* dest names the destination DIRECTORY (its own name and parent), as the real
+ * call does; the moved file keeps its name. */
 OSErr FSpCatMove(const FSSpec *source, const FSSpec *dest)
 {
-    int i=find(source->parID,source->name); char name[32];
+    int i=find(source->parID,source->name), d=find(dest->parID,dest->name);
     if(i<0)return fnfErr;
+    if(d<0 || !files[d].dir)return fnfErr;
     renames++;
-    memcpy(name,dest->name+1,dest->name[0]); name[dest->name[0]]=0;
-    if(find(dest->parID,dest->name)>=0)return dupFNErr;
+    if(find(files[d].id,source->name)>=0)return dupFNErr;
     if(rename_error && (!fault_rename || fault_rename==renames))return ioErr;
-    strcpy(files[i].name,name);
-    files[i].parent=dest->parID;
+    files[i].parent=files[d].id;
     published=1; trash_moves++;
     if(rename_lost && (!fault_rename || fault_rename==renames))return ioErr;
     return 0;
@@ -1330,13 +1337,11 @@ static void trash_checks(void)
     assert(result_file_field("moved_as",text,sizeof(text)) && !strcmp(text,"hello.c"));
     assert(files[i].parent==files[can].id && !strcmp(files[i].name,"hello.c") && !opens[i]);
 
-    /* A collision keeps the leaf recognizable with a bounded suffix. */
+    /* A name already in the Trash is refused; a move never renames. */
     reset(); i=trash_file(10,"hello.c","one");
     assert(list_revision("hello.c",rev,sizeof(rev)));
     can=trash_can_model(); trash_file(files[can].id,"hello.c","old");
-    assert(!move_one("hello.c",rev) && strstr(result,"TRASHED"));
-    assert(result_file_field("moved_as",text,sizeof(text)) && !strcmp(text,"hello.c 2"));
-    assert(files[i].parent==files[can].id && !strcmp(files[i].name,"hello.c 2"));
+    assert(!move_one("hello.c",rev) && strstr(result,"EXISTS") && !trash_moves && files[i].parent==10);
 
     /* No volume Trash (or one on another volume): one journaled workspace
      * fallback, reused by later batches. */
@@ -1463,16 +1468,15 @@ static void trash_checks(void)
       assert(!run() && strstr(result,"LIMIT") && journals==0 && !trash_moves); }
     /* The pre-rename capacity check is a true bound: whatever the batch size, the
        call either finishes with every file moved or refuses before any rename
-       (never a partial move that then cannot report). Colliding Trash names make
-       the trashed names longer than the listed ones. */
+       (never a partial move that then cannot report). */
     { int k, finished=0, refused=0;
       for(k=1;k<=8;k++) {
         char longpath[220]="", leafname[32], p2[8][220], rb[8][48], args2[AGENT_ARGUMENT_CAP];
-        size_t at=0; long parent=10; int d, can2;
+        size_t at=0; long parent=10; int d;
         reset();
         for(d=0;d<5;d++){ memset(leafname,'a',31); leafname[31]=0; i=add(parent,leafname,1); parent=files[i].id; strcat(longpath,leafname); strcat(longpath,":"); }
-        can2=trash_can_model();
-        for(n=0;n<k;n++){ snprintf(leafname,sizeof(leafname),"f%d.c",n); trash_file(parent,leafname,"x"); trash_file(files[can2].id,leafname,"old");
+        trash_can_model();
+        for(n=0;n<k;n++){ snprintf(leafname,sizeof(leafname),"f%d.c",n); trash_file(parent,leafname,"x");
           snprintf(p2[n],sizeof(p2[n]),"%s%s",longpath,leafname); info_revision(p2[n],rb[n],sizeof(rb[n])); }
         at+=(size_t)snprintf(args2,sizeof(args2),"{\"files\":[");
         for(n=0;n<k;n++)at+=(size_t)snprintf(args2+at,sizeof(args2)-at,"%s{\"path\":\"%s\",\"revision\":\"%s\"}",n?",":"",p2[n],rb[n]);

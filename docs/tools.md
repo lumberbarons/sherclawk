@@ -120,9 +120,9 @@ The destination is resolved through the Folder Manager for the source's volume.
 On an AppleShare volume that is the client's `Network Trash Folder`, so items
 appear in the guest Trash and Empty Trash clears them as usual. When no
 same-volume Trash resolves, the tool journals and creates `Retro68:Sherclawk
-Trash:` once and says so in the result; it never copies across volumes. A
-destination name collision gets a bounded ` n` suffix inside the 31-byte HFS
-limit.
+Trash:` once and says so in the result; it never copies across volumes. The
+move keeps the file's name, so a name already in that Trash is refused `EXISTS`
+before any rename.
 
 Each item journals `mutation_intent`, renames, verifies the destination catalog
 identity (both fork sizes, type and creator) and source absence, then journals
