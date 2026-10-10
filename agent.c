@@ -75,7 +75,7 @@ const char *agent_tool_schemas(void)
         "\"cursor\":{\"type\":\"integer\",\"minimum\":0},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":12}},"
         "\"required\":[\"root\"],\"additionalProperties\":false}}},"
         "{\"type\":\"function\",\"function\":{\"name\":\"read_text\","
-        "\"description\":\"Read bounded plain MacRoman text as UTF-8, with line range and byte continuation. Files up to 4096 bytes get a whole-file revision independent of pagination; larger files get observational scan revisions. editable indicates CR text within the edit limit. Refuses binary/resource-fork files. Use paths from list_files.\","
+        "\"description\":\"Read bounded plain MacRoman text as UTF-8, with line range and byte continuation. Pages fill the 1536-byte JSON result budget; escaping can reduce text per page. Files up to 4096 bytes get a whole-file revision independent of pagination; larger files get observational scan revisions. editable indicates CR text within the edit limit. Refuses binary/resource-fork files. Use paths from list_files.\","
         "\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},"
         "\"start_byte\":{\"type\":\"integer\",\"minimum\":0},\"start_line\":{\"type\":\"integer\",\"minimum\":1},\"max_lines\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":30}},"
         "\"required\":[\"path\"],\"additionalProperties\":false}}},"

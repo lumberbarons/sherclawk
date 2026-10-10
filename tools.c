@@ -213,8 +213,8 @@ static int same_file(const CInfoPBRec *a, const CInfoPBRec *b)
 }
 static void read(const char *s, const JsonToken *tokens, char *out, size_t cap)
 {
-    static char bytes[8193], utf8[2200];
-    char path[512], header[512], revision[80], quoted[1100], line_info[100];
+    static char bytes[8193], utf8[AGENT_RESULT_CAP * 3 + 1];
+    char path[512], header[512], revision[80], quoted[AGENT_RESULT_CAP], line_info[100];
     FSSpec spec;
     CInfoPBRec pb;
     short ref;
@@ -264,30 +264,36 @@ static void read(const char *s, const JsonToken *tokens, char *out, size_t cap)
     if (begin && begin < (size_t)size && bytes[begin] == 10 && bytes[begin - 1] == 13) begin++;
     end = begin;
     /* Keep results compact enough for guaranteed tool-result history reserve. */
-    while (end < (size_t)size && emitted < maximum && end - begin < 300) {
+    while (end < (size_t)size && emitted < maximum && end - begin < AGENT_RESULT_CAP) {
         char c = bytes[end++];
         if (c == 13 || (c == 10 && (end < 2 || bytes[end - 2] != 13))) emitted++;
     }
-    while (end > begin) {
-        if (text_to_utf8(bytes + begin, end - begin, utf8, sizeof(utf8)) >= 0 &&
-            json_quote(utf8, quoted, sizeof(quoted)) >= 0) break;
+    if (end > begin && end < (size_t)size && bytes[end - 1] == 13 && bytes[end] == 10) end++;
+    /* Measure the converted text and complete JSON envelope. Shrinking can
+     * change cursor digits and partial-line fields, so measure them together. */
+    for (;;) {
+        if (end > begin && end < (size_t)size && bytes[end - 1] == 13 && bytes[end] == 10) end--;
+        if (text_to_utf8(bytes + begin, end - begin, utf8, sizeof(utf8)) < 0 ||
+            json_quote(utf8, quoted, sizeof(quoted)) < 0) goto smaller;
+        emitted = 0;
+        for (i = begin; i < end; i++) if (bytes[i] == 13 || (bytes[i] == 10 && (!i || bytes[i - 1] != 13))) emitted++;
+        if (end > begin && bytes[end - 1] != 13 && bytes[end - 1] != 10) emitted++;
+        truncated = (long)end + base < pb.hFileInfo.ioFlLgLen;
+        if (base) strcpy(line_info, "\"start_line\":null,\"next_line\":null");
+        else if (end > begin && bytes[end - 1] != 10 && bytes[end - 1] != 13 && truncated)
+            snprintf(line_info, sizeof(line_info), "\"start_line\":%d,\"next_line\":null", start);
+        else snprintf(line_info, sizeof(line_info), "\"start_line\":%d,\"next_line\":%d", start, start + emitted);
+        snprintf(header, sizeof(header), "{\"status\":\"ok\",\"encoding\":\"MacRoman\",\"revision\":\"%s\",\"revision_scope\":\"%s\",\"editable\":%s,%s,\"text\":", revision, whole ? "whole_file" : "scan", editable ? "true" : "false", line_info);
+        at = 0;
+        if (append(out, cap, &at, header) || append(out, cap, &at, quoted)) goto smaller;
+        snprintf(header, sizeof(header), ",\"truncated\":%s,\"start_byte\":%ld,\"next_byte\":%ld,\"line_partial\":%s}",
+            truncated ? "true" : "false", base + (long)begin, base + (long)end,
+            end > begin && bytes[end - 1] != 10 && bytes[end - 1] != 13 && truncated ? "true" : "false");
+        if (!append(out, cap, &at, header)) return;
+smaller:
+        if (end == begin) { fail(out, cap, "LIMIT", "Text result exceeds output capacity.", 0); return; }
         end--;
     }
-    if (end == begin) strcpy(quoted, "\"\"");
-    emitted = 0;
-    for (i = begin; i < end; i++) if (bytes[i] == 13 || (bytes[i] == 10 && (!i || bytes[i - 1] != 13))) emitted++;
-    if (end > begin && bytes[end - 1] != 13 && bytes[end - 1] != 10) emitted++;
-    truncated = (long)end + base < pb.hFileInfo.ioFlLgLen;
-    if (base) strcpy(line_info, "\"start_line\":null,\"next_line\":null");
-    else if (end > begin && bytes[end - 1] != 10 && bytes[end - 1] != 13 && truncated)
-        snprintf(line_info, sizeof(line_info), "\"start_line\":%d,\"next_line\":null", start);
-    else snprintf(line_info, sizeof(line_info), "\"start_line\":%d,\"next_line\":%d", start, start + emitted);
-    snprintf(header, sizeof(header), "{\"status\":\"ok\",\"encoding\":\"MacRoman\",\"revision\":\"%s\",\"revision_scope\":\"%s\",\"editable\":%s,%s,\"text\":", revision, whole ? "whole_file" : "scan", editable ? "true" : "false", line_info);
-    if (append(out, cap, &at, header) || append(out, cap, &at, quoted)) { fail(out, cap, "LIMIT", "Text result exceeds output capacity.", 0); return; }
-    snprintf(header, sizeof(header), ",\"truncated\":%s,\"start_byte\":%ld,\"next_byte\":%ld,\"line_partial\":%s}",
-        truncated ? "true" : "false", base + (long)begin, base + (long)end,
-        end > begin && bytes[end - 1] != 10 && bytes[end - 1] != 13 && truncated ? "true" : "false");
-    if (append(out, cap, &at, header)) fail(out, cap, "LIMIT", "Text result exceeds output capacity.", 0);
 
 }
 /* AGENTS.md: one bounded whole-file read of <folder>:AGENTS.md with the same

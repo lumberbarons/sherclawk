@@ -124,3 +124,8 @@ The lobster artwork in `art/sherclawk.png` was generated with ChatGPT and is
 offered under the same MIT license to the extent the project holds rights in it.
 Macintosh, Mac OS and iMac are trademarks of Apple Inc. Sherclawk is an independent
 project and is not affiliated with or endorsed by Apple Inc.
+
+`read_text` fills pages against the 1536-byte JSON result budget after UTF-8
+conversion and escaping, within the requested line limit (default 20, maximum
+30). Continue with `next_byte` when a line is partial, or `next_line` when
+available. CRLF pairs stay together; revisions are independent of pagination.
