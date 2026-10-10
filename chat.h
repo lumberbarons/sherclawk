@@ -22,6 +22,9 @@ typedef struct {
     char tool_name[64];
 } Chat;
 void chat_reset(Chat *chat);
+/* Returns the entry offset, or -1 if its label cannot fit. Older display text
+ * may be replaced by a session-file notice; history is never changed. */
+long chat_append_message(Chat *chat, const char *label, const char *text);
 int chat_request(const Chat *chat, const char *model, const char *prompt,
                  char *out, size_t cap);
 /* Returns 0 reply, -1 API/protocol error; error is safe human-readable text. */

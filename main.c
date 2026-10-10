@@ -39,6 +39,7 @@
 #include "text.h"
 #include "config.h"
 #include "preferences.h"
+#include "display.h"
 #include "mcp_editor.h"
 #include "mcp_store.h"
 
@@ -60,8 +61,7 @@ enum {
 
     kPad       = 10,
     kFieldH    = 20,
-    kButtonW   = 64,
-    kScrollW   = 15
+    kButtonW   = 64
 };
 
 /* ── UI state ─────────────────────────────────────────────────────── */
@@ -1170,32 +1170,19 @@ static short PaneLineHeight(TEHandle te)
 
 static short PanePageHeight(TEHandle te)
 {
-    short lh = PaneLineHeight(te);
-    Rect  v  = (*te)->viewRect;
-    short visible_lines = (v.bottom - v.top) / lh;
-    return (visible_lines > 1) ? (short)((visible_lines - 1) * lh) : lh;
+    return ResponsePageHeight(PaneLineHeight(te), (*te)->viewRect.bottom - (*te)->viewRect.top);
 }
 
 static short PaneClamp(ControlHandle bar, long v)
 {
-    short max = GetControlMaximum(bar);
-    if (v < 0)   v = 0;
-    if (v > max) v = max;
-    return (short)v;
+    return ClampScroll(v, GetControlMaximum(bar));
 }
 
 static short PaneMaxScroll(TEHandle te)
 {
-    short lh, nLines;
-    Rect  view;
-    long  pixels;
     if (!te) return 0;
-    lh     = PaneLineHeight(te);
-    nLines = (*te)->nLines;
-    view   = (*te)->viewRect;
-    pixels = (long)nLines * lh - (view.bottom - view.top);
-    if (pixels < 0) return 0;
-    return (short)(pixels > 32767L ? 32767L : pixels);
+    return ComputeMaxScroll(PaneLineHeight(te), (*te)->nLines,
+                            (*te)->viewRect.bottom - (*te)->viewRect.top);
 }
 
 /* The control is an indicator, not the source of the text's position.
@@ -1593,40 +1580,33 @@ static int HandleMenu(long menuChoice)
 
 /* ── Layout, drawing, UI setup ────────────────────────────────────── */
 
-/* Compact OpenCode-style token counts: exact below 1000, else one decimal k/M. */
-static void FormatTokens(long tokens, char *out, size_t cap)
+static void SetDisplayRect(Rect *out, DisplayRect r)
 {
-    if (tokens < 1000) snprintf(out, cap, "%ld", tokens);
-    else if (tokens < 1000000) {
-        long tenths = (tokens + 50) / 100;
-        snprintf(out, cap, "%ld.%ldk", tenths / 10, tenths % 10);
-    } else {
-        long tenths = (tokens + 50000) / 100000;
-        snprintf(out, cap, "%ld.%ldM", tenths / 10, tenths % 10);
-    }
+    SetRect(out, r.left, r.top, r.right, r.bottom);
 }
 
-static void ComputeLayout(void)
+static void UILayout(void)
 {
-    SetRect(&gResponseLabelRect, 10, 52, 200, 68);
-    SetRect(&gResponseRect, 10, 70, 590, 252);
-    gResponseViewRect = gResponseRect; gResponseViewRect.right -= kScrollW;
-    SetRect(&gPromptLabelRect, 10, 258, 130, 274);
-    SetRect(&gPromptHintRect, 410, 258, 590, 274);
-    /* One TextEdit line shorter than the former 82-pixel composer. */
-    SetRect(&gPromptRect, 10, 278, 590, 348);
-    SetRect(&gInfoRect, 10, 356, 590, 398);
-    SetRect(&gStatusRect, 18, 358, 320, 376);
-    SetRect(&gModelRect, 328, 358, 582, 376);
-    SetRect(&gHistoryRect, 18, 380, 238, 396);
-    SetRect(&gMeterRect, 194, 384, 230, 392);
-    SetRect(&gUsageRect, 246, 380, 582, 396);
-    SetRect(&gContextRect, 254, 380, 450, 396);
-    SetRect(&gCostRect, 466, 380, 582, 396);
-    SetRect(&gNewRect, 10, 406, 98, 426);
-    SetRect(&gHandoffRect, 108, 406, 220, 426);
-    SetRect(&gStopRect, 438, 406, 502, 426);
-    SetRect(&gSendRect, 518, 406, 586, 426);
+    DisplayLayout layout;
+    ComputeLayout(&layout);
+    SetDisplayRect(&gResponseLabelRect, layout.ResponseLabelRect);
+    SetDisplayRect(&gResponseRect, layout.ResponseRect);
+    SetDisplayRect(&gResponseViewRect, layout.ResponseViewRect);
+    SetDisplayRect(&gPromptLabelRect, layout.PromptLabelRect);
+    SetDisplayRect(&gPromptHintRect, layout.PromptHintRect);
+    SetDisplayRect(&gPromptRect, layout.PromptRect);
+    SetDisplayRect(&gInfoRect, layout.InfoRect);
+    SetDisplayRect(&gStatusRect, layout.StatusRect);
+    SetDisplayRect(&gModelRect, layout.ModelRect);
+    SetDisplayRect(&gHistoryRect, layout.HistoryRect);
+    SetDisplayRect(&gMeterRect, layout.MeterRect);
+    SetDisplayRect(&gUsageRect, layout.UsageRect);
+    SetDisplayRect(&gContextRect, layout.ContextRect);
+    SetDisplayRect(&gCostRect, layout.CostRect);
+    SetDisplayRect(&gNewRect, layout.NewRect);
+    SetDisplayRect(&gHandoffRect, layout.HandoffRect);
+    SetDisplayRect(&gStopRect, layout.StopRect);
+    SetDisplayRect(&gSendRect, layout.SendRect);
 }
 
 /* QuickDraw chrome keeps the actual Window/Control Manager in charge of the
@@ -1772,7 +1752,7 @@ static void UIInit(void)
     TextFont(kFontIDGeneva);
     TextSize(10);
 
-    ComputeLayout();
+    UILayout();
     {
         Handle resource = Get1Resource('sART', 129);
         Rect bounds = { 0, 0, 52, 52 };
@@ -1999,32 +1979,11 @@ static void HandleEvent(const EventRecord *event)
 /* Returns where the entry starts in the transcript, or -1 when it was not shown. */
 static long ShowMessage(const char *label, const char *text)
 {
-    static char display[CHAT_TRANSCRIPT_CAP];
-    size_t at = strlen(gChat.transcript), len, i, lines = 0;
-    size_t prefix = (label && *label) ? strlen(label) + 2 : 0; /* "label:\r" */
-    chat_tool_forget(&gChat);
-    if (text_to_macroman(text, display, sizeof(display)) < 0) strcpy(display, "[Text exceeds display capacity; see session file.]");
-    len = strlen(display);
-    for (i = 0; i < at; i++) if (gChat.transcript[i] == 13) lines++;
-    {
-        size_t own_lines = 0;
-        for (i = 0; i < len; i++) if (display[i] == 13) own_lines++;
-        if (own_lines > 1000 || len > sizeof(gChat.transcript) - 256) {
-            strcpy(display, "[Text exceeds display limits; see the UTF-8 session file.]");
-            len = strlen(display); own_lines = 0;
-        }
-        lines += own_lines;
-    }
-    if (at + len + prefix + 8 >= sizeof(gChat.transcript) || lines > 1400) {
-        strcpy(gChat.transcript, "[Earlier conversation is saved in the session file.]\r\r");
-        at = strlen(gChat.transcript);
-    }
-    if (prefix + len + 5 >= sizeof(gChat.transcript) - at) return -1;
-    if (prefix) { strcpy(gChat.transcript + at, label); strcat(gChat.transcript, ":\r"); }
-    strcat(gChat.transcript, display); strcat(gChat.transcript, "\r\r");
+    long at = chat_append_message(&gChat, label, text);
+    if (at < 0) return at;
     ResponseSetText(gChat.transcript, strlen(gChat.transcript));
     ResponseScrollTo(GetControlMaximum(gResponseScroll));
-    return (long)at;
+    return at;
 }
 
 /* ── AGENTS.md ───────────────────────────────────────────────────── */
@@ -2075,76 +2034,10 @@ static int NoteProjectInstructions(void)
 /* ── Tool debug view (display only; the session file is unaffected) ─ */
 /* Journal event names emitted for the tool call being executed. */
 static char gToolEvents[192];
-static void ToolEventsReset(void) { gToolEvents[0] = 0; }
-static void ToolEventsAppend(const char *event)
-{
-    size_t at = strlen(gToolEvents), n = strlen(event);
-    if (!at) {
-        if (n < sizeof(gToolEvents)) memcpy(gToolEvents, event, n + 1);
-        return;
-    }
-    if (at + n + 3 > sizeof(gToolEvents)) return; /* keep what already fit */
-    gToolEvents[at] = ','; gToolEvents[at + 1] = ' ';
-    memcpy(gToolEvents + at + 2, event, n + 1);
-}
 static int ToolEventJournal(void *context, const char *event, const char *json)
 {
-    ToolEventsAppend(event);
+    ToolEventsAppend(gToolEvents, sizeof(gToolEvents), event);
     return session_journal(context, event, json);
-}
-
-static void AppendText(char *out, size_t cap, const char *s)
-{
-    size_t at = strlen(out), n = strlen(s);
-    if (at + n >= cap) return;
-    memcpy(out + at, s, n + 1);
-}
-
-/* "• name(arg: value, ...)" from the recorded arguments, the same JSON the
- * tool layer parses. Long strings and nesting are abbreviated, and the whole
- * header is display-bounded. */
-static void RenderToolCall(const AgentCall *call, char *out, size_t cap)
-{
-    static JsonToken tokens[256];
-    static char value[132];
-    size_t i;
-    int parsed, first = 1;
-
-    snprintf(out, cap, "\xE2\x80\xA2 %s(", call->name);
-    parsed = call->arguments[0] ? json_parse(call->arguments, strlen(call->arguments), tokens, 256) : -1;
-    if (parsed < 1 || tokens[0].type != JSON_OBJECT) {
-        size_t at = strlen(out), n = strlen(call->arguments);
-        if (at < cap - 1 && n > cap - at - 2) n = cap - at - 2;
-        if (at < cap - 1) { memcpy(out + at, call->arguments, n); out[at + n] = 0; }
-    } else {
-        for (i = 1; i < (size_t)tokens[0].next; i = (size_t)tokens[i + 1].next) {
-            int v = (int)i + 1;
-            char key[64];
-            if (!first) AppendText(out, cap, ", ");
-            first = 0;
-            if (json_string(call->arguments, tokens, (int)i, key, sizeof(key)) < 0) strcpy(key, "?");
-            AppendText(out, cap, key);
-            AppendText(out, cap, ": ");
-            switch (tokens[v].type) {
-            case JSON_STRING:
-                if (json_string(call->arguments, tokens, v, value, sizeof(value)) < 0) strcpy(value, "<long>");
-                AppendText(out, cap, "\""); AppendText(out, cap, value); AppendText(out, cap, "\"");
-                break;
-            case JSON_PRIMITIVE: {
-                int n = tokens[v].end - tokens[v].start;
-                if (n > 40) n = 40;
-                memcpy(value, call->arguments + tokens[v].start, (size_t)n); value[n] = 0;
-                AppendText(out, cap, value);
-                break;
-            }
-            default:
-                AppendText(out, cap, tokens[v].type == JSON_ARRAY ? "[...]" : "{...}");
-                break;
-            }
-            if (strlen(out) > cap - 12) { AppendText(out, cap, ", ..."); break; }
-        }
-    }
-    AppendText(out, cap, ")");
 }
 
 /* One tool message: the compact call line always; with the display toggle on,
@@ -2242,7 +2135,6 @@ static int PendingToolStep(const PendingTool *tool, int stop, int *result, char 
 static void StartHandoff(void)
 {
     int length;
-    size_t i;
     char attribution[256];
     if (RunBusy()) return;
     if (gLookupDrain) { SetStatus("The stopped lookup is still closing; try again in a moment."); return; }
@@ -2253,7 +2145,7 @@ static void StartHandoff(void)
     if (!gPrefs.api_key[0] || !*gRunModel) {
         SetStatus("A model and API key are needed for a handoff."); return;
     }
-    for (i = 0; gRunModel[i]; i++) if ((unsigned char)gRunModel[i] <= 32 || (unsigned char)gRunModel[i] >= 127) {
+    if (*gRunModel && !model_id_valid(gRunModel)) {
         SetStatus("Use an OpenRouter model ID without spaces."); return;
     }
     length = agent_handoff_request(&gAgent, gRunModel, gJSON, sizeof(gJSON));
@@ -2321,11 +2213,8 @@ static void AbortChat(const char *reason)
 static void PauseRunAtLimit(void)
 {
     char reason[256];
-    snprintf(reason, sizeof(reason),
-        "Run paused after %d model rounds and %d tools (configured limits: %d rounds, %d tools). "
-        "History is %lu%% full. Send Continue to resume.",
-        gAgent.rounds, gAgent.tool_count, gPrefs.max_rounds, gPrefs.max_tools,
-        (unsigned long)(gAgent.used * 100 / AGENT_HISTORY_CAP));
+    FormatPauseReason(gAgent.rounds, gAgent.tool_count, gPrefs.max_rounds,
+                      gPrefs.max_tools, gAgent.used, reason, sizeof(reason));
     AbortChat(reason);
 }
 /* agent_response rejects a bad body before recording it, so the history and
@@ -2379,18 +2268,6 @@ static void SendBegin(void)
     TESetText("", 0, gPromptTE); InvalRect(&gPromptRect);
     SetSendEnabled(0); StartModelRequest();
 }
-static int ModelLookupAllowed(const char *model)
-{
-    size_t i;
-    if (!*model) return 0;
-    for (i = 0; model[i]; i++) {
-        unsigned char c = (unsigned char)model[i];
-        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-              (c >= '0' && c <= '9') || c == '.' || c == '_' || c == ':' ||
-              c == '/' || c == '-')) return 0;
-    }
-    return 1;
-}
 static void StartContextLookup(void)
 {
     char path[CHAT_MODEL_CAP * 3 + 32];
@@ -2438,17 +2315,15 @@ static void FinishContextLookup(int completed)
 static void SendChat(void)
 {
     char prompt[CHAT_PROMPT_CAP];
-    size_t i;
     if (RunBusy()) return;
     if (gLookupDrain) { SetStatus("The stopped lookup is still closing; send again in a moment."); return; }
     if (!gPrefs.api_key[0]) { SetStatus("No API key: choose Preferences from the Edit menu."); return; }
     strcpy(gRunModel, gPrefs.model);
     if (TEGetTextInto(gPromptTE, prompt, sizeof(prompt)) < 0) { SetStatus("Message is too long."); return; }
-    for (i = 0; gRunModel[i]; i++) if ((unsigned char)gRunModel[i] <= 32 || (unsigned char)gRunModel[i] >= 127) {
+    if (*gRunModel && !model_id_valid(gRunModel)) {
         SetStatus("Use an OpenRouter model ID without spaces."); return;
     }
-    for (i = 0; prompt[i] && (prompt[i] == ' ' || prompt[i] == '\r' || prompt[i] == '\t'); i++) {}
-    if (!*gRunModel || !prompt[i]) { SetStatus("Enter a model and message first."); return; }
+    if (!*gRunModel || prompt_is_blank(prompt)) { SetStatus("Enter a model and message first."); return; }
     if (text_to_utf8(prompt, strlen(prompt), gPending, sizeof(gPending)) < 0) { SetStatus("Could not convert message to UTF-8."); return; }
     SendAdvance();
 }
@@ -2494,7 +2369,7 @@ static void StepTools(void)
     call = &gAgent.calls[gAgent.next];
     gToolStart = (uint32_t)TickCount();
     SetStatus("Running %s (%d/%d)...", call->name, gAgent.next + 1, gAgent.count);
-    ToolEventsReset();
+    ToolEventsReset(gToolEvents, sizeof(gToolEvents));
     {
         char id[800], name[400], started[1300];
         if (json_quote(call->id, id, sizeof(id)) < 0 || json_quote(call->name, name, sizeof(name)) < 0) {
@@ -2502,7 +2377,7 @@ static void StepTools(void)
         }
         snprintf(started, sizeof(started), "{\"call_id\":%s,\"name\":%s}", id, name);
         if (session_journal(&gSession, "tool_started", started)) { AbortChat("Could not record tool start; no tool executed."); return; }
-        ToolEventsAppend("tool_started");
+        ToolEventsAppend(gToolEvents, sizeof(gToolEvents), "tool_started");
     }
     view_image_set_vision(gModelInfoAttempted && !strcmp(gModelInfoModel, gRunModel) ? gModelInfo.vision : AGENT_VISION_UNKNOWN);
     pending = PendingToolForCall(call->name);
