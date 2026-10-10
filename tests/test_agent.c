@@ -19,11 +19,19 @@ static int journal(void *ctx, const char *event, const char *json)
     if (fail_record) return -1;
     records++; return 0;
 }
+/* The event name of the most recent record, pinned per scenario: user after
+ * begin, assistant after a response, tool after a result (including the
+ * interrupted results agent_stop records). */
+static void expect_event(const char *event)
+{
+    assert(!strcmp(last_event, event));
+}
 static void begin(void)
 {
     records = fail_record = 0;
     agent_reset(&a, journal, NULL);
     assert(!agent_begin(&a, "Inspect my files", error, sizeof(error)));
+    expect_event("user");
 }
 /* Every request body the tests build is parsed and pinned by structure, so a
  * wrong model, role, message order or tool schema cannot hide behind the
@@ -719,7 +727,9 @@ static void wire_shape(void)
     int messages, assistant, tool_calls, function;
     begin(); call("tool_calls");
     assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
+    expect_event("assistant");
     assert(!agent_tool_result(&a, "{\"status\":\"ok\",\"text\":\"caf\xc3\xa9\"}", error, sizeof(error)));
+    expect_event("tool");
     messages = parse_request(agent_request(&a, "vendor/other-model", req, sizeof(req)), "vendor/other-model");
     check_tool_schemas(member(0, "tools"));
     assert(length_of(messages) == 4);
@@ -738,6 +748,7 @@ static void wire_shape(void)
     assert(is_text(member(element(messages, 3), "content"), "{\"status\":\"ok\",\"text\":\"caf\xc3\xa9\"}"));
     /* The next turn follows the answer, in order. */
     assert(!agent_response(&a, final, strlen(final), 200, error, sizeof(error)));
+    expect_event("assistant");
     assert(!agent_begin(&a, "What did you find?", error, sizeof(error)));
     messages = parse_request(agent_request(&a, "model", req, sizeof(req)), "model");
     assert(length_of(messages) == 6);
@@ -802,6 +813,7 @@ int main(void)
     begin(); call("stop");
     assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)) && a.count == 1);
     assert(!agent_stop(&a, "user stopped"));
+    expect_event("tool");
     assert(!a.active && a.next == a.count && strstr(a.history, "interrupted") && strstr(a.history, "c1"));
     begin(); call("tool_calls"); used = a.used; fail_record = 1;
     assert(agent_response(&a, response, strlen(response), 200, error, sizeof(error)) == -1 && a.used == used && a.count == 0);
