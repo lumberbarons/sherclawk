@@ -122,6 +122,10 @@ services events while waiting, executes calls sequentially, displays tool
 results, and requests another model response until it gets a final answer.
 Stop or Command-Period prevents new execution and records interrupted results
 for pending calls; completed results remain in history. New Chat starts a fresh session.
+The stopped connection is not torn down mid-connect — that can crash OS 9 — so
+it closes in the background and Send, Save Handoff, Preferences and MCP Servers
+report that the stopped request is still closing until it does (bounded at 30
+seconds).
 
 ### Save Handoff
 

@@ -129,9 +129,10 @@ typedef enum {
 static RunState gRun = RUN_IDLE;
 static int RunBusy(void) { return gRun != RUN_IDLE; }
 static int gOTOpen = 0;
-static int gLookupDrain = 0;
+static int gExchangeDrain = 0;
 static char gHandoffSummary[8192], gHandoffPath[256];
 static uint32_t gStartTicks;
+static uint32_t gDrainStartTicks;  /* separate from the run timer, which aborts leave alone */
 static RoundTiming gRoundTiming;
 static uint32_t gToolStart;
 static void FocusSet(TEHandle te);
@@ -196,7 +197,7 @@ static const char *TLSVersionLabel(MacTLS_Version v)
 
 static void UpdateHandoffControls(void)
 {
-    int enabled = !RunBusy() && !gLookupDrain && gSession.open && gAgent.messages &&
+    int enabled = !RunBusy() && !gExchangeDrain && gSession.open && gAgent.messages &&
         !gAgent.active && gAgent.next >= gAgent.count;
     if (enabled == gHandoffEnabled) return;
     gHandoffEnabled = enabled;
@@ -356,9 +357,41 @@ static void CloseChatContext(void)
     YieldTicks(SHERCLAWK_OT_YIELD_TICKS);
 }
 
-/* Teardown after a cleanly completed model round. Errors, aborts and quit keep
- * using CloseChatContext; only this path may leave OT open for the next round
- * (SHERCLAWK_OT_KEEP_OPEN_AFTER_CLEAN). */
+/*
+ * Abort teardown. A live exchange is never torn down mid-connect: classic OT
+ * can fault when an async connect is outstanding (type-3 failures on Stop a
+ * fraction of a second after Send). While the connect or handshake is still
+ * pending, mark the exchange for the loop's bounded drain, which only lets it
+ * settle: it never writes the request or reads a response, so Stop does not
+ * finish sending the prompt. An exchange that is already connected or
+ * terminal has nothing outstanding and closes at once. One path for the
+ * lookup, send and handoff aborts.
+ */
+static int ExchangeConnecting(void)
+{
+    MacTLS_State state;
+    if (!gNet.ctx || gNet.result) return 0;
+    state = MacTLS_GetState(gNet.ctx);
+    return state == kMacTLS_Idle || state == kMacTLS_Connecting ||
+           state == kMacTLS_Handshaking;
+}
+
+static void BeginExchangeDrain(void)
+{
+    if (gExchangeDrain) return;
+    gExchangeDrain = 1;
+    gDrainStartTicks = (uint32_t)TickCount();
+}
+
+static void AbandonChatContext(void)
+{
+    if (ExchangeConnecting()) { BeginExchangeDrain(); return; }
+    if (gNet.ctx || gOTOpen) CloseChatContext();
+}
+
+/* Teardown after a cleanly completed model round. Only this path may leave OT
+ * open for the next round (SHERCLAWK_OT_KEEP_OPEN_AFTER_CLEAN); aborts and
+ * quit abandon a live exchange to the drain above. */
 static void FinishChatContext(void)
 {
 #if SHERCLAWK_OT_KEEP_OPEN_AFTER_CLEAN
@@ -1017,10 +1050,7 @@ static void ShowPreferences(void)
                  * classic OT can fault when a connect is torn down mid-flight.
                  * The main loop owns the exchange from here, so this pass must
                  * not step it again. */
-                if (d->fetch || d->draining) {
-                    gLookupDrain = 1;
-                    gStartTicks = (uint32_t)TickCount();
-                }
+                if (d->fetch || d->draining) BeginExchangeDrain();
                 done = 1;
             } else if (item == kPrefsFindItem) {
                 PrefsFind(d);
@@ -1555,13 +1585,13 @@ static int HandleMenu(long menuChoice)
     case kEditMenuID:
         if (item == kEditPrefsItem) {
             if (RunBusy()) SetStatus("Finish the current run before changing Preferences.");
-            else if (gLookupDrain) SetStatus("The stopped lookup is still closing; try again in a moment.");
+            else if (gExchangeDrain) SetStatus("The stopped request is still closing; try again in a moment.");
             else ShowPreferences();
             break;
         }
         if (item == kEditMcpItem) {
             if (RunBusy()) SetStatus("Finish the current run before changing MCP Servers.");
-            else if (gLookupDrain) SetStatus("The stopped lookup is still closing; try again in a moment.");
+            else if (gExchangeDrain) SetStatus("The stopped request is still closing; try again in a moment.");
             else ShowMcpServers();
             break;
         }
@@ -2137,7 +2167,7 @@ static void StartHandoff(void)
     int length;
     char attribution[256];
     if (RunBusy()) return;
-    if (gLookupDrain) { SetStatus("The stopped lookup is still closing; try again in a moment."); return; }
+    if (gExchangeDrain) { SetStatus("The stopped request is still closing; try again in a moment."); return; }
     if (!gSession.open || !gAgent.messages || gAgent.active || gAgent.next < gAgent.count) {
         SetStatus("Finish or stop the current run before saving a handoff."); return;
     }
@@ -2176,7 +2206,7 @@ static void AbortChat(const char *reason)
 {
     const PendingTool *pending = PendingToolForState(gRun);
     if (gRun == RUN_HANDOFF) {
-        if (gNet.ctx || gOTOpen) CloseChatContext();
+        AbandonChatContext();
         LogRoundTiming("abort");
         gRun = RUN_IDLE; SetSendEnabled(1); FocusSet(gPromptTE);
         ShowMessage("Handoff stopped; conversation retained", reason);
@@ -2186,10 +2216,7 @@ static void AbortChat(const char *reason)
         return;
     }
     if (gRun == RUN_CONTEXT_LOOKUP) {
-        /* Do not tear the TLS context down mid-connect: classic OT can fault
-         * when an async connect is outstanding. Keep the exchange draining and
-         * close it from the loop once network_step reaches a terminal state. */
-        gLookupDrain = 1; gStartTicks = (uint32_t)TickCount();
+        AbandonChatContext();
         gRun = RUN_IDLE; SetSendEnabled(1); FocusSet(gPromptTE);
         SetStatus("Model context lookup stopped. Send again shortly.");
         LogAbort("Model context lookup stopped. Reason", reason);
@@ -2200,7 +2227,7 @@ static void AbortChat(const char *reason)
         int result;
         PendingToolStep(pending, 1, &result, error, sizeof(error));
     }
-    if (gNet.ctx || gOTOpen) CloseChatContext();
+    AbandonChatContext();
     LogRoundTiming("abort");
     if (agent_stop(&gAgent, reason)) {
         SetStatus("Session recording failed. Start a new session before continuing.");
@@ -2316,7 +2343,7 @@ static void SendChat(void)
 {
     static char prompt[CHAT_PROMPT_CAP]; /* static: the application stack is small */
     if (RunBusy()) return;
-    if (gLookupDrain) { SetStatus("The stopped lookup is still closing; send again in a moment."); return; }
+    if (gExchangeDrain) { SetStatus("The stopped request is still closing; send again in a moment."); return; }
     if (!gPrefs.api_key[0]) { SetStatus("No API key: choose Preferences from the Edit menu."); return; }
     strcpy(gRunModel, gPrefs.model);
     if (TEGetTextInto(gPromptTE, prompt, sizeof(prompt)) < 0) { SetStatus("Message is too long."); return; }
@@ -2475,17 +2502,24 @@ static void DriveChatStep(void)
     case RUN_HANDOFF: StepModelExchange(); break;
     }
 }
-/* A stopped context lookup keeps its exchange alive until network_step reaches
- * a terminal state; closing it here avoids tearing OT down mid-connect. */
-static void DrainAbandonedLookup(void)
+/* An abandoned exchange keeps its context alive until its connect settles
+ * (connected, errored or closed); closing it here avoids tearing OT down
+ * mid-connect. It only pumps: no request is written and nothing is read. The
+ * deadline is the backstop for a connect that never settles; Certainly owns
+ * the connect timeout, so reaching it is logged as a forced close. */
+static void DrainAbandonedExchange(void)
 {
-    int result;
-    if (!gLookupDrain) return;
-    if ((uint32_t)TickCount() - gStartTicks > 30UL * 60UL) {
-        CloseChatContext(); gLookupDrain = 0; return;
+    int expired;
+    if (!gExchangeDrain) return;
+    expired = (uint32_t)TickCount() - gDrainStartTicks > 30UL * 60UL;
+    if (ExchangeConnecting() && !expired) {
+        MacTLS_Pump(gNet.ctx);
+        return;
     }
-    result = network_step(&gNet);
-    if (result != 0) { CloseChatContext(); gLookupDrain = 0; }
+    if (expired && ExchangeConnecting())
+        LogLine("Abandoned exchange still connecting after 30 s; forcing close.");
+    CloseChatContext();
+    gExchangeDrain = 0;
 }
 
 int main(void)
@@ -2509,7 +2543,7 @@ int main(void)
         WaitNextEvent(everyEvent, &event, RunBusy() ? 1 : 10, NULL);
         SetPort(gWindow); HandleEvent(&event);
         if (RunBusy()) DriveChatStep();
-        DrainAbandonedLookup();
+        DrainAbandonedExchange();
         selfbuild_drain((uint32_t)TickCount());
         UpdateHandoffControls();
         /* History changes during sends, tool results, New Chat and handoff.
@@ -2519,9 +2553,19 @@ int main(void)
             gDisplayedTokens != (gAgent.context_seen ? gAgent.context_tokens : -1) ||
             gDisplayedLimit != gModelInfo.context_length) InvalRect(&gUsageRect);
     }
-    if (gNet.ctx || gOTOpen) CloseChatContext();
     LogRoundTiming("abort");
     if (gAgent.active) AbortChat("Application quit.");
+    else AbandonChatContext();  /* a stopped lookup/handoff, or a pending drain */
+    if (gExchangeDrain) {
+        /* The window would go stale while the loop ignores events, so hide it;
+         * the drain is bounded by its own 30 s backstop. */
+        HideWindow(gWindow);
+        while (gExchangeDrain) {
+            WaitNextEvent(everyEvent, &event, 1, NULL);
+            DrainAbandonedExchange();
+        }
+    }
+    if (gNet.ctx || gOTOpen) CloseChatContext();
     selfbuild_close();
     session_close(&gSession);
     LogLine("Sherclawk session ended."); LogClose(); UIDispose();
