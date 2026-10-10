@@ -41,3 +41,18 @@ jobs:
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - name: Shell, C and Python checks
         run: tools/lint.sh
+
+  coverage:
+    name: Host coverage gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LLVM coverage tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-18 llvm-18
+      - name: Clone Certainly (fetch-only dependency)
+        run: git clone --recursive --depth 1 https://github.com/minorbug/certainly.git ../Certainly
+      - name: Line and branch coverage over the host suites
+        run: tools/check-coverage.sh

@@ -65,13 +65,28 @@ Certainly clone above:
 tools/check.sh
 tools/check-transport.sh
 tools/lint.sh
+tools/check-coverage.sh  # LLVM line/branch coverage gate; needs clang
 ```
 
 Set `CERTAINLY_DIR` if the clone is elsewhere. Without Certainly,
 `tools/check.sh` skips its network suite and `tools/check-transport.sh` fails.
 The host checks compile shared code with `cc` and regenerate
 `build/project-template.h`. The lint gate uses shellcheck, cppcheck and Ruff;
-CI installs all three. Full builds also regenerate `build/art.r`, so use
+CI installs all three.
+
+`tools/check-coverage.sh` measures line and branch coverage of the sources the
+host suites compile, using LLVM source-based coverage. It needs `clang` plus
+matching `llvm-profdata`/`llvm-cov` (macOS Command Line Tools, or
+`apt install clang-18 llvm-18`), runs the same `tools/check.sh` suites under
+`CHECK_COVERAGE=1`, and merges every suite into one per-file report. Coverage
+is the union over suites; the gate fails below the checked-in floors (92%
+lines, 67% branches over non-test sources; measured baseline 93.6% / 69.2%).
+Guest-only sources that cannot compile on the host (`main.c`) and staged
+Certainly code are excluded. Branch coverage is the emphasis because the
+suites exist for command and error paths; the report lists the weakest files
+first. Raise the floors deliberately.
+
+Full builds also regenerate `build/art.r`, so use
 `build.sh` rather than configuring CMake by hand in a fresh tree.
 
 ### Deployment
