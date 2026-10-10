@@ -4,6 +4,21 @@ Dated acceptance evidence for the OS 9 guest, host checks and live model runs,
 retained from earlier development. Entries describe the state on their recorded
 dates. Use the [current guides](../../README.md#documentation) for present behavior.
 
+Recorded October 10, 2026 (display extraction, issue #145): Clang and Linux
+GCC 13 ASan/UBSan host checks passed the extracted formatting, validation,
+transcript capping and scroll/layout fixtures. `tools/check-transport.sh` and
+`tools/lint.sh` passed. Docker `./build.sh` and `./build.sh all` built the app,
+large-text target and both diagnostics. In OS 9.2.2 on the AFP `Retro68` volume,
+`SherclawkScrollCheck.log` reported `RESULT failures=0` for focus/read-only
+behavior, arrows, pages, thumb tracking, stale-control correction, clamps,
+replacement/New Chat resets, wrapped 30,000-byte text and 1,500 separators.
+`SherclawkHandoffCheck.log` also reported `RESULT failures=0`: unsupported
+encoding and oversized summaries retained history, Markdown was saved and
+verified, the journal switched, a second handoff used a distinct file, and
+Continue resumed from the seed. The handoff diagnostic showed its PASS message
+through the extracted transcript appender. These diagnostics used synthetic text
+and summaries with no model requests.
+
 Recorded October 10, 2026: `move_to_trash` was exercised in OS 9.2.2 against
 the AFP `Retro68` volume. Real sessions had failed every move with `-43` because
 `FSpCatMove` was given a file-named destination instead of the Trash directory

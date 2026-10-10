@@ -17,7 +17,7 @@ add_application(SherclawkMCPCheck tools/mcp-check.c ${MCP_CORE} json.c text.c ve
 # Editor-side MCP code (config validation, text rules, staged store); the app
 # does not link the protocol client yet.
 set(MCP_EDITOR_SRC mcp_config.c mcp_editor.c mcp_store.c)
-set(CHAT_CORE chat.c json.c text.c network.c timing.c vendor/http.c)
+set(CHAT_CORE display.c chat.c json.c text.c network.c timing.c vendor/http.c)
 add_application(Sherclawk main.c agent.c session.c preferences.c ${MCP_EDITOR_SRC} ${TOOLS_SRC} view_image.c build_project.c selfbuild.c toolserver.c ae_dispatch.c run_application.c application_process.c jobs.c ${CHAT_CORE} hello.r build/art.r CREATOR ShCk)
 # Full-app acceptance target; shipping Sherclawk retains its verified 4 KiB cap.
 add_application(SherclawkLargeTextCheck main.c agent.c session.c preferences.c ${MCP_EDITOR_SRC} ${TOOLS_SRC} view_image.c build_project.c selfbuild.c toolserver.c ae_dispatch.c run_application.c application_process.c jobs.c ${CHAT_CORE} hello.r build/art.r CREATOR ShCk)
@@ -48,8 +48,8 @@ target_compile_definitions(SherclawkNativeBuildErrorCheck PRIVATE NATIVE_BUILD_E
 add_application(SherclawkInspectCheck tools/inspect-check.c ${TOOLS_SRC} json.c text.c hello.r)
 add_application(SherclawkViewImageCheck tools/view-image-check.c ${TOOLS_SRC} view_image.c json.c text.c hello.r)
 add_application(SherclawkTrashCheck tools/trash-check.c ${TOOLS_SRC} json.c text.c hello.r)
-add_application(SherclawkScrollCheck tools/scroll-check.c agent.c session.c preferences.c ${MCP_EDITOR_SRC} ${TOOLS_SRC} build_project.c selfbuild.c toolserver.c ae_dispatch.c run_application.c application_process.c jobs.c ${CHAT_CORE} hello.r build/art.r CREATOR ShCk)
-add_application(SherclawkHandoffCheck tools/handoff-check.c agent.c session.c preferences.c ${MCP_EDITOR_SRC} ${TOOLS_SRC} build_project.c selfbuild.c toolserver.c ae_dispatch.c run_application.c application_process.c jobs.c ${CHAT_CORE} hello.r build/art.r CREATOR ShCk)
+add_application(SherclawkScrollCheck tools/scroll-check.c view_image.c agent.c session.c preferences.c ${MCP_EDITOR_SRC} ${TOOLS_SRC} build_project.c selfbuild.c toolserver.c ae_dispatch.c run_application.c application_process.c jobs.c ${CHAT_CORE} hello.r build/art.r CREATOR ShCk)
+add_application(SherclawkHandoffCheck tools/handoff-check.c view_image.c agent.c session.c preferences.c ${MCP_EDITOR_SRC} ${TOOLS_SRC} build_project.c selfbuild.c toolserver.c ae_dispatch.c run_application.c application_process.c jobs.c ${CHAT_CORE} hello.r build/art.r CREATOR ShCk)
 foreach(app SherclawkLargeTextCheck SherclawkQuitCheck SherclawkMCPCheck SherclawkSelfBuildStopCheck SherclawkSelfBuildCheck SherclawkNativeBuildErrorCheck SherclawkNativeBuildCheck SherclawkToolServerCheck Sherclawk SherclawkProbe SherclawkScrollCheck SherclawkHandoffCheck SherclawkWriteCheck SherclawkEditCheck SherclawkSearchCheck SherclawkProjectCheck SherclawkBuildCheck SherclawkRunCheck SherclawkInspectCheck SherclawkViewImageCheck SherclawkTrashCheck)
     target_include_directories(${app} PRIVATE . vendor)
     target_link_libraries(${app} certainly FontManager)

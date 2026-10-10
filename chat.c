@@ -127,3 +127,32 @@ int chat_commit(Chat *c, const char *prompt, const char *reply, int limited)
     memcpy(c->history + c->used, reply, rn); c->used += rn;
     c->messages += 2; return 0;
 }
+
+/* Bounded transcript display; UTF-8 input, MacRoman/CR output. */
+long chat_append_message(Chat *chat, const char *label, const char *text)
+{
+    static char display[CHAT_TRANSCRIPT_CAP];
+    size_t at = strlen(chat->transcript), len, i, lines = 0;
+    size_t prefix = (label && *label) ? strlen(label) + 2 : 0; /* "label:\r" */
+    chat_tool_forget(chat);
+    if (text_to_macroman(text, display, sizeof(display)) < 0) strcpy(display, "[Text exceeds display capacity; see session file.]");
+    len = strlen(display);
+    for (i = 0; i < at; i++) if (chat->transcript[i] == 13) lines++;
+    {
+        size_t own_lines = 0;
+        for (i = 0; i < len; i++) if (display[i] == 13) own_lines++;
+        if (own_lines > 1000 || len > sizeof(chat->transcript) - 256) {
+            strcpy(display, "[Text exceeds display limits; see the UTF-8 session file.]");
+            len = strlen(display); own_lines = 0;
+        }
+        lines += own_lines;
+    }
+    if (at + len + prefix + 8 >= sizeof(chat->transcript) || lines > 1400) {
+        strcpy(chat->transcript, "[Earlier conversation is saved in the session file.]\r\r");
+        at = strlen(chat->transcript);
+    }
+    if (prefix + len + 5 >= sizeof(chat->transcript) - at) return -1;
+    if (prefix) { strcpy(chat->transcript + at, label); strcat(chat->transcript, ":\r"); }
+    strcat(chat->transcript, display); strcat(chat->transcript, "\r\r");
+    return (long)at;
+}

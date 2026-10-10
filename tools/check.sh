@@ -52,6 +52,14 @@ build_test test-core "${WARN[@]}" -DSHERCLAWK_APP=1 \
     "$HERE/vendor/http.c"
 run_test test-core
 
+build_test test-display "${WARN[@]}" -I"$HERE" \
+    "$HERE/tests/test_display.c" "$HERE/display.c" "$HERE/json.c"
+run_test test-display
+
+build_test test-chat-display "${WARN[@]}" -I"$HERE" \
+    "$HERE/tests/test_chat_display.c" "$HERE/chat.c" "$HERE/json.c" "$HERE/text.c"
+run_test test-chat-display
+
 build_test test-timing -Wall -Wextra -Werror -I"$HERE" \
     "$HERE/tests/test_timing.c" "$HERE/timing.c"
 run_test test-timing

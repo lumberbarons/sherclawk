@@ -8,6 +8,21 @@ OpenRouter HTTPS supplies inference. [Current tool contracts](tools.md),
 specified separately. Active work lives in the
 [issue tracker](https://github.com/lumberbarons/sherclawk/issues).
 
+## Display boundary
+
+`main.c` owns the Toolbox controls, TextEdit handles and drawing. `display.c`
+contains pure token/tool formatting, model and prompt validation, pause reasons,
+scroll calculations and layout rectangles. Its inputs and outputs use ordinary
+C values; the UI adapts the rectangles to QuickDraw and applies scroll offsets.
+The transcript and MCP editor share the same scroll calculations.
+
+`chat_append_message()` in `chat.c` converts UTF-8 to bounded MacRoman/CR display
+text, substitutes session-file notices for oversized entries, and caps accumulated
+transcript bytes and separators. It returns the entry offset for tool-line folding.
+The UI then refreshes TextEdit and scrolls to the bottom. Display capping leaves
+conversation history and the session journal intact. These helpers run in host
+ASan/UBSan checks; the scroll diagnostic still exercises the real guest controls.
+
 ## Harness direction
 
 The agent chooses application behavior, source organization and repair steps.

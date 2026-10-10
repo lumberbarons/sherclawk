@@ -72,7 +72,9 @@ cp config.example.h config.local.h  # optional local config; gitignored
 
 ## Layout
 
-- `main.c` Toolbox UI/event loop and run state (`RunState`); `session.c` journal and
+- `main.c` Toolbox UI/event loop and run state (`RunState`); `display.c` pure
+  formatting, validation and scroll/layout math; `chat.c` bounded transcript
+  capping and tool-line folding; `session.c` journal and
   handoff persistence (host-testable); `agent.c` provider loop; `tools.c` +
   `inspect.c` tool executors (shared with host tests via `TOOLS_SRC` in
   CMakeLists.txt); `chat.c`/`json.c`/`text.c`/`network.c`/`vendor/http.c` core.
