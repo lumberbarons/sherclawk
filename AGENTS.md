@@ -77,7 +77,9 @@ cp config.example.h config.local.h  # optional local config; gitignored
   capping and tool-line folding; `session.c` journal and
   handoff persistence (host-testable); `agent.c` provider loop; `tools.c` +
   `inspect.c` tool executors (shared with host tests via `TOOLS_SRC` in
-  CMakeLists.txt); `chat.c`/`json.c`/`text.c`/`network.c`/`vendor/http.c` core.
+  CMakeLists.txt); `registry.c` the one table defining every tool's name, wire
+  schema and `mutates`/`pending` classification (pure data so host suites that
+  link only `agent.c` can join the schemas without the executors); `chat.c`/`json.c`/`text.c`/`network.c`/`vendor/http.c` core.
 - Native build/run machinery: `build_project.c`, `selfbuild.c`, `toolserver.c`,
   `run_application.c`, `jobs.c`. MPW ToolServer is the only build backend; the
   queue's `worker-lock` and `STOP` names are kept for existing queues.

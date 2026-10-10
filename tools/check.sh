@@ -121,19 +121,21 @@ build_test test-base64 "${WARN[@]}" -I"$HERE" \
     "$HERE/tests/test_base64.c"
 run_test test-base64
 
-build_test test-agent "${WARN[@]}" -I"$HERE" \
-    "$HERE/tests/test_agent.c" "$HERE/agent.c" "$HERE/json.c" "$HERE/text.c"
+build_test test-agent "${WARN[@]}" -I"$HERE" -I"$HERE/tests/toolbox" \
+    "$HERE/tests/test_agent.c" "$HERE/agent.c" "$HERE/registry.c" "$HERE/json.c" "$HERE/text.c"
 run_test test-agent
 
 build_test test-tools "${WARN[@]}" -Wno-multichar \
     -I"$HERE/tests/toolbox" -I"$HERE" \
-    "$HERE/tests/test_tools.c" "$HERE/tools.c" "$HERE/mcp_guard.c" "$HERE/inspect.c" "$HERE/view_image.c" \
+    "$HERE/tests/test_tools.c" "$HERE/tools.c" "$HERE/registry.c" "$HERE/agent.c" \
+    "$HERE/mcp_guard.c" "$HERE/inspect.c" "$HERE/view_image.c" \
     "$HERE/json.c" "$HERE/text.c"
 run_test test-tools
 
 build_test test-text-gate "${WARN[@]}" -USHERCLAWK_LARGE_TEXT_CHECK -Wno-multichar \
     -I"$HERE/tests/toolbox" -I"$HERE" \
-    "$HERE/tests/test_text_gate.c" "$HERE/tools.c" "$HERE/mcp_guard.c" "$HERE/inspect.c" "$HERE/view_image.c" \
+    "$HERE/tests/test_text_gate.c" "$HERE/tools.c" "$HERE/registry.c" "$HERE/agent.c" \
+    "$HERE/mcp_guard.c" "$HERE/inspect.c" "$HERE/view_image.c" \
     "$HERE/json.c" "$HERE/text.c"
 run_test test-text-gate
 
@@ -146,7 +148,7 @@ build_test test-build-project "${WARN[@]}" -Wno-multichar \
     -I"$HERE/tests/toolbox" -I"$HERE" \
     "$HERE/tests/test_build_project.c" "$HERE/selfbuild.c" "$HERE/build_project.c" \
     "$HERE/run_application.c" "$HERE/application_process.c" "$HERE/ae_dispatch.c" \
-    "$HERE/jobs.c" "$HERE/tools.c" "$HERE/mcp_guard.c" "$HERE/inspect.c" "$HERE/view_image.c" \
+    "$HERE/jobs.c" "$HERE/tools.c" "$HERE/registry.c" "$HERE/agent.c" "$HERE/mcp_guard.c" "$HERE/inspect.c" "$HERE/view_image.c" \
     "$HERE/json.c" "$HERE/text.c"
 run_test test-build-project
 
@@ -154,7 +156,7 @@ build_test test-selfbuild "${WARN[@]}" -Wno-multichar \
     -I"$HERE/tests/toolbox" -I"$HERE" \
     "$HERE/tests/test_selfbuild.c" "$HERE/selfbuild.c" "$HERE/build_project.c" \
     "$HERE/run_application.c" "$HERE/application_process.c" "$HERE/ae_dispatch.c" \
-    "$HERE/jobs.c" "$HERE/tools.c" "$HERE/mcp_guard.c" "$HERE/inspect.c" "$HERE/view_image.c" \
+    "$HERE/jobs.c" "$HERE/tools.c" "$HERE/registry.c" "$HERE/agent.c" "$HERE/mcp_guard.c" "$HERE/inspect.c" "$HERE/view_image.c" \
     "$HERE/json.c" "$HERE/text.c"
 run_test test-selfbuild
 
@@ -162,13 +164,13 @@ build_test test-quit-application "${WARN[@]}" -Wno-multichar \
     -I"$HERE/tests/toolbox" -I"$HERE" \
     "$HERE/tests/test_quit_application.c" "$HERE/selfbuild.c" "$HERE/build_project.c" \
     "$HERE/run_application.c" "$HERE/application_process.c" "$HERE/ae_dispatch.c" \
-    "$HERE/toolserver.c" "$HERE/jobs.c" "$HERE/tools.c" "$HERE/mcp_guard.c" "$HERE/inspect.c" \
+    "$HERE/toolserver.c" "$HERE/jobs.c" "$HERE/tools.c" "$HERE/registry.c" "$HERE/agent.c" "$HERE/mcp_guard.c" "$HERE/inspect.c" \
     "$HERE/view_image.c" "$HERE/json.c" "$HERE/text.c"
 run_test test-quit-application
 
 build_test test-session "${WARN[@]}" -Wno-multichar \
     -I"$HERE/tests/toolbox" -I"$HERE" \
-    "$HERE/tests/test_session.c" "$HERE/session.c" "$HERE/agent.c" \
+    "$HERE/tests/test_session.c" "$HERE/session.c" "$HERE/agent.c" "$HERE/registry.c" \
     "$HERE/json.c" "$HERE/text.c"
 run_test test-session
 

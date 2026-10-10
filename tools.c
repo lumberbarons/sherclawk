@@ -116,20 +116,36 @@ static int valid_keys(const char *s, const JsonToken *tokens, const char *allowe
 }
 static void environment(char *out, size_t cap)
 {
-    char root[768], q[1024];
-    long system = 0; int length;
+    char root[768], q[1024], tail[512];
+    long system = 0; size_t at = 0; size_t i; int n;
     Gestalt(gestaltSystemVersion, &system);
     if (text_to_utf8(tools_workspace(), strlen(tools_workspace()), root, sizeof(root)) < 0 ||
         json_quote(root, q, sizeof(q)) < 0) { fail(out, cap, "CONFIG", "Invalid workspace encoding.", 0); return; }
-    length=snprintf(out, cap, "{\"status\":\"ok\",\"os\":\"classic Mac OS\",\"system_version_hex\":\"%04lx\","
-        "\"architecture\":\"PowerPC\",\"workspace\":%s,\"paths\":\"relative colon-separated\","
-        "\"encoding\":\"MacRoman data fork to UTF-8\",\"read_only\":false,\"free_heap_bytes\":%ld,"
-        "\"tools\":[\"get_environment\",\"list_files\",\"read_text\",\"search_text\",\"write_text\",\"edit_text\",\"create_folder\",\"move_to_trash\",\"create_project\",\"build_project\",\"read_build_log\",\"run_application\",\"quit_application\",\"get_file_info\",\"resolve_alias\",\"list_processes\",\"list_fonts\",\"measure_text\",\"list_resources\",\"read_resource\",\"view_image\"],"
-        "\"write_policy\":\"create_only_existing_parent\",\"folder_policy\":\"create_only_existing_parent\",\"write_max_bytes\":4096,"
+    /* The installed-tool list is the registry itself, in table order. */
+    if (append(out, cap, &at, "{\"status\":\"ok\",\"os\":\"classic Mac OS\",\"system_version_hex\":\"") ||
+        snprintf(tail, sizeof(tail), "%04lx", system) >= (int)sizeof(tail) ||
+        append(out, cap, &at, tail) ||
+        append(out, cap, &at, "\",\"architecture\":\"PowerPC\",\"workspace\":") ||
+        append(out, cap, &at, q) ||
+        append(out, cap, &at, ",\"paths\":\"relative colon-separated\","
+            "\"encoding\":\"MacRoman data fork to UTF-8\",\"read_only\":false,\"free_heap_bytes\":") ||
+        snprintf(tail, sizeof(tail), "%ld", (long)FreeMem()) >= (int)sizeof(tail) ||
+        append(out, cap, &at, tail) ||
+        append(out, cap, &at, ",\"tools\":[")) { fail(out, cap, "LIMIT", "Environment report exceeds result capacity.", 0); return; }
+    for (i = 0; i < tools_count(); i++) {
+        char name[80];
+        if (i && append(out, cap, &at, ",")) { fail(out, cap, "LIMIT", "Environment report exceeds result capacity.", 0); return; }
+        snprintf(name, sizeof(name), "\"%s\"", tools_at(i)->name);
+        if (append(out, cap, &at, name)) { fail(out, cap, "LIMIT", "Environment report exceeds result capacity.", 0); return; }
+    }
+    n = snprintf(tail, sizeof(tail),
+        "],\"write_policy\":\"create_only_existing_parent\",\"folder_policy\":\"create_only_existing_parent\",\"write_max_bytes\":%d,"
         "\"edit_policy\":\"unique_exact_whole_revision_CR_backup\",\"edit_max_bytes\":%ld,"
         "\"edit_string_max_bytes\":%d,\"build_input_max_bytes\":%ld,\"descriptor_max_bytes\":%d,\"total_snapshot_max_bytes\":%ld,"
-        "\"build_supported\":true,\"launch_supported\":true}", system, q, (long)FreeMem(), TOOLS_ACCEPTED_FILE_CAP, TOOLS_STRING_CAP, TOOLS_ACCEPTED_FILE_CAP, TOOLS_DESCRIPTOR_CAP, TOOLS_SNAPSHOT_CAP);
-    if(length<0 || (size_t)length>=cap)fail(out,cap,"LIMIT","Environment report exceeds result capacity.",0);
+        "\"build_supported\":true,\"launch_supported\":true}",
+        TOOLS_STRING_CAP, TOOLS_ACCEPTED_FILE_CAP, TOOLS_STRING_CAP, TOOLS_ACCEPTED_FILE_CAP, TOOLS_DESCRIPTOR_CAP, TOOLS_SNAPSHOT_CAP);
+    if (n < 0 || (size_t)n >= sizeof(tail) || append(out, cap, &at, tail))
+        fail(out, cap, "LIMIT", "Environment report exceeds result capacity.", 0);
 }
 static void list(const char *s, const JsonToken *tokens, char *out, size_t cap)
 {
@@ -786,7 +802,7 @@ static int write_text(const AgentCall *call, const JsonToken *tokens, char *out,
         fail(out, cap, "ARGUMENTS", "Expected only path and text strings.", 0); return 0;
     }
     length = text_to_macroman_strict(utf8, bytes, sizeof(bytes));
-    if (length < 0) { fail(out, cap, "ENCODING_LIMIT", "Text must be representable in MacRoman and at most 4096 encoded bytes.", 0); return 0; }
+    if (length < 0) { fail(out, cap, "ENCODING_LIMIT", "Text must be representable in MacRoman and at most " TOOLS_STRING_CAP_DESCRIPTION " encoded bytes.", 0); return 0; }
     for (i = 0; i < (size_t)length; i++) {
         unsigned char c = (unsigned char)bytes[i];
         if ((c < 32 && c != 9 && c != 13) || c == 127) { fail(out, cap, "NOT_TEXT", "Binary control bytes are refused.", 0); return 0; }
@@ -1710,26 +1726,42 @@ limit:
 int tools_execute_recorded(const AgentCall *call, char *out, size_t cap, AgentJournal journal, void *context)
 {
     JsonToken tokens[128];
+    const ToolDef *def = tools_lookup(call->name);
     if (cap < AGENT_RESULT_CAP) { if (cap) out[0] = 0; return 1; }
-    if(text_arguments(call,tokens,out,cap,!strcmp(call->name,"write_text") || !strcmp(call->name,"edit_text") ||
-        !strcmp(call->name,"create_folder") || !strcmp(call->name,"create_project")))return 0;
-    if (!strcmp(call->name, "get_environment")) {
+    if (!def) { fail(out, cap, "UNKNOWN_TOOL", "This tool is not installed.", 0); return 0; }
+    /* The queue guard is the registry's own mutates flag. */
+    if (text_arguments(call, tokens, out, cap, (int)def->mutates)) return 0;
+    switch (def->id) {
+    case TOOL_get_environment:
         if (tokens[0].next != 1) fail(out, cap, "ARGUMENTS", "get_environment takes no arguments.", 0);
         else environment(out, cap);
-    } else if (!strcmp(call->name, "list_files")) list(call->arguments, tokens, out, cap);
-    else if (!strcmp(call->name, "read_text")) return read_text_begin(call,out,cap,journal,context,(uint32_t)TickCount());
-    else if (!strcmp(call->name, "search_text")) search_text(call->arguments, tokens, out, cap);
-    else if (!strcmp(call->name, "write_text")) return write_text(call, tokens, out, cap, journal, context);
-    else if (!strcmp(call->name, "edit_text")) return edit_text_begin(call,out,cap,journal,context,(uint32_t)TickCount());
-    else if (!strcmp(call->name, "create_project")) return create_project(call, tokens, out, cap, journal, context);
-    else if (!strcmp(call->name, "create_folder")) return create_folder(call, tokens, out, cap, journal, context);
-    else if (!strcmp(call->name, "move_to_trash")) return move_to_trash(call, tokens, out, cap, journal, context);
-    else if (!strcmp(call->name, "get_file_info") || !strcmp(call->name, "resolve_alias") ||
-             !strcmp(call->name, "list_processes") || !strcmp(call->name, "list_fonts") ||
-             !strcmp(call->name, "measure_text") || !strcmp(call->name, "list_resources") ||
-             !strcmp(call->name, "read_resource")) inspect_execute(call, out, cap);
-    else fail(out, cap, "UNKNOWN_TOOL", "This tool is not installed.", 0);
-    return 0;
+        return 0;
+    case TOOL_list_files: list(call->arguments, tokens, out, cap); return 0;
+    case TOOL_read_text: return read_text_begin(call, out, cap, journal, context, (uint32_t)TickCount());
+    case TOOL_search_text: search_text(call->arguments, tokens, out, cap); return 0;
+    case TOOL_write_text: return write_text(call, tokens, out, cap, journal, context);
+    case TOOL_edit_text: return edit_text_begin(call, out, cap, journal, context, (uint32_t)TickCount());
+    case TOOL_create_project: return create_project(call, tokens, out, cap, journal, context);
+    case TOOL_create_folder: return create_folder(call, tokens, out, cap, journal, context);
+    case TOOL_move_to_trash: return move_to_trash(call, tokens, out, cap, journal, context);
+    case TOOL_get_file_info:
+    case TOOL_resolve_alias:
+    case TOOL_list_processes:
+    case TOOL_list_fonts:
+    case TOOL_measure_text:
+    case TOOL_list_resources:
+    case TOOL_read_resource:
+        inspect_execute(call, out, cap); return 0;
+    case TOOL_build_project:
+    case TOOL_read_build_log:
+    case TOOL_run_application:
+    case TOOL_quit_application:
+    case TOOL_view_image:
+        /* The app drives these through its pending-tool machinery; a host
+         * tools_execute call reaching this far is the old refusal. */
+        fail(out, cap, "UNKNOWN_TOOL", "This tool is not installed.", 0); return 0;
+    }
+    fail(out, cap, "UNKNOWN_TOOL", "This tool is not installed.", 0); return 0;
 }
 int tools_execute(const AgentCall *call, char *out, size_t cap)
 {

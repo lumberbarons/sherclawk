@@ -2072,48 +2072,48 @@ static void NewChat(void)
     ResponseSetText("", 0); TESetText("", 0, gPromptTE); InvalRect(&gPromptRect);
     FocusSet(gPromptTE); SetStatus("Ready. What shall we investigate?");
 }
-/* Long-running tools finish over many event-loop steps. A table row gives each
- * its run state, start and step functions and messages; Stop and normal
- * completion both finish it through PendingToolStep. A new one is a row here
- * plus a RunState value. */
+/* Long-running tools finish over many event-loop steps. A row here pairs a
+ * registry row with its run state, start and step functions and messages;
+ * Stop and normal completion both finish it through PendingToolStep. A new
+ * one is a registry row plus a RunState value plus a row here. */
 typedef struct {
     RunState state;
-    const char *name;
+    const ToolDef *def;   /* registry row that names the tool */
     int (*begin)(const AgentCall *, char *, size_t, AgentJournal, void *, uint32_t);
     int (*step)(char *, size_t, uint32_t, int stop);
     const char *status;  /* shown while it is pending */
     const char *failure; /* stop reason when the step reports failure */
-} PendingTool;
-static const PendingTool kPendingTools[] = {
-    { RUN_READ_TEXT, "read_text", read_text_begin, read_text_step,
+} PendingState;
+static const PendingState kPendingStates[] = {
+    { RUN_READ_TEXT, &kToolDefs[TOOL_read_text], read_text_begin, read_text_step,
       "Reading and verifying text...", "Text read stopped; no revision supplied." },
-    { RUN_EDIT_TEXT, "edit_text", edit_text_begin, edit_text_step,
+    { RUN_EDIT_TEXT, &kToolDefs[TOOL_edit_text], edit_text_begin, edit_text_step,
       "Staging and verifying exact edit...", "Edit stopped. Inspect retained recovery paths before continuing." },
-    { RUN_BUILD, "build_project", build_project_begin, build_project_step,
+    { RUN_BUILD, &kToolDefs[TOOL_build_project], build_project_begin, build_project_step,
       "Building snapshot with MPW ToolServer...",
       "Build observation stopped. Inspect retained snapshot and logs before another build." },
-    { RUN_LAUNCH, "run_application", run_application_begin, run_application_step,
+    { RUN_LAUNCH, &kToolDefs[TOOL_run_application], run_application_begin, run_application_step,
       "Verifying built application before launch...",
       "Launch outcome uncertain. Inspect the run journal; do not retry automatically." },
-    { RUN_QUIT, "quit_application", quit_application_begin, quit_application_step,
+    { RUN_QUIT, &kToolDefs[TOOL_quit_application], quit_application_begin, quit_application_step,
       "Requesting graceful quit; observing owned process...",
       "Quit outcome uncertain. The request may still take effect; do not retry." },
-    { RUN_VIEW_IMAGE, "view_image", view_image_begin, view_image_step,
+    { RUN_VIEW_IMAGE, &kToolDefs[TOOL_view_image], view_image_begin, view_image_step,
       "Reading image...",
       "Image read stopped. Nothing was attached." }
 };
-static const PendingTool *PendingToolForCall(const char *name)
+static const PendingState *PendingStateForDef(const ToolDef *def)
 {
     size_t i;
-    for (i = 0; i < sizeof(kPendingTools) / sizeof(kPendingTools[0]); i++)
-        if (!strcmp(kPendingTools[i].name, name)) return &kPendingTools[i];
+    for (i = 0; i < sizeof(kPendingStates) / sizeof(kPendingStates[0]); i++)
+        if (kPendingStates[i].def == def) return &kPendingStates[i];
     return NULL;
 }
-static const PendingTool *PendingToolForState(RunState state)
+static const PendingState *PendingStateForRun(RunState state)
 {
     size_t i;
-    for (i = 0; i < sizeof(kPendingTools) / sizeof(kPendingTools[0]); i++)
-        if (kPendingTools[i].state == state) return &kPendingTools[i];
+    for (i = 0; i < sizeof(kPendingStates) / sizeof(kPendingStates[0]); i++)
+        if (kPendingStates[i].state == state) return &kPendingStates[i];
     return NULL;
 }
 /* Advance the pending tool; `stop` makes it conclude now. Returns 2 while it
@@ -2121,15 +2121,15 @@ static const PendingTool *PendingToolForState(RunState state)
  * so a recording failure that aborts cannot finish the tool twice), the result
  * is recorded and shown, and 0 comes back with the tool's own status in
  * *result, or -1 with `error` if the result could not be recorded. */
-static int PendingToolStep(const PendingTool *tool, int stop, int *result, char *error, size_t cap)
+static int PendingToolStep(const PendingState *tool, int stop, int *result, char *error, size_t cap)
 {
     const AgentCall *call = gAgent.next < gAgent.count ? &gAgent.calls[gAgent.next] : NULL;
     *result = tool->step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), stop);
     if (!stop && *result == 2) return 2;
     gRun = RUN_TOOLS;
-    if (!stop) LogToolTiming(gAgent.next + 1, tool->name);
+    if (!stop) LogToolTiming(gAgent.next + 1, tool->def->name);
     if (agent_tool_result(&gAgent, gToolResult, error, cap)) return -1;
-    ShowToolResult(call, tool->name, gToolResult);
+    ShowToolResult(call, tool->def->name, gToolResult);
     return 0;
 }
 static void StartHandoff(void)
@@ -2174,7 +2174,7 @@ static void LogAbort(const char *prefix, const char *reason)
 }
 static void AbortChat(const char *reason)
 {
-    const PendingTool *pending = PendingToolForState(gRun);
+    const PendingState *pending = PendingStateForRun(gRun);
     if (gRun == RUN_HANDOFF) {
         if (gNet.ctx || gOTOpen) CloseChatContext();
         LogRoundTiming("abort");
@@ -2343,7 +2343,7 @@ static void StepContextLookup(void)
 }
 static void StepPendingTool(void)
 {
-    const PendingTool *tool = PendingToolForState(gRun);
+    const PendingState *tool = PendingStateForRun(gRun);
     char error[256];
     int result;
     int status = PendingToolStep(tool, 0, &result, error, sizeof(error));
@@ -2356,7 +2356,8 @@ static void StepTools(void)
     char error[256];
     int result;
     AgentCall *call;
-    const PendingTool *pending;
+    const ToolDef *def;
+    const PendingState *pending;
     if (gAgent.next == gAgent.count) {
         /* Tool messages cannot carry pixels: an image from this round follows
          * the last tool result, as a user message for the next request. */
@@ -2380,11 +2381,12 @@ static void StepTools(void)
         ToolEventsAppend(gToolEvents, sizeof(gToolEvents), "tool_started");
     }
     view_image_set_vision(gModelInfoAttempted && !strcmp(gModelInfoModel, gRunModel) ? gModelInfo.vision : AGENT_VISION_UNKNOWN);
-    pending = PendingToolForCall(call->name);
+    def = tools_lookup(call->name);
+    pending = def ? PendingStateForDef(def) : NULL;
     if (pending) {
         result = pending->begin(call, gToolResult, sizeof(gToolResult), ToolEventJournal, &gSession, (uint32_t)TickCount());
         if (result == 2) { gRun = pending->state; SetStatus("%s", pending->status); return; }
-    } else if (!strcmp(call->name, "read_build_log")) {
+    } else if (def && def->id == TOOL_read_build_log) {
         build_project_log(call, gToolResult, sizeof(gToolResult)); result = 0;
     } else result = tools_execute_recorded(call, gToolResult, sizeof(gToolResult), ToolEventJournal, &gSession);
     LogToolTiming(gAgent.next + 1, call->name);
