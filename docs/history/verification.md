@@ -362,6 +362,91 @@ reading an editor-written file. A synthetic click needs a held press
 (`TrackControl`) to scroll the pane. Host and guest results do not establish
 the integrated memory partition or any agent use of the configuration.
 
+## MCP Tavily diagnostic, October 10, 2026
+
+Issue #159's native diagnostic gate passed in the OS 9.2.2 UTM guest against
+the official Tavily endpoint. The owner had saved the private configuration
+through **Edit ▸ MCP Servers…** before this session. The diagnostic read
+`System Folder:Preferences:Sherclawk MCP Servers.json` directly; no host-written
+configuration or credential-bearing response dump was used. No additional
+trust anchor was needed.
+
+The final diagnostic was Docker-built from source commit
+`20c54ed8043c55436cce581dfb8fb2104ef0b0d9` and published with the usual AFP
+fork metadata. Local `build/SherclawkMCPCheck.APPL` and the published app had
+the same SHA-256:
+`d5bf8bc5c6e9df8a54a3a489c6ff85c0697a955e15a9f54acfcb15182f88092d`.
+After the guest was restarted, its log reported:
+
+```text
+PASS configuration
+PASS TLS initialize version=2025-11-25 pages=1 entries=5 eligible=2
+PASS Tavily search results=5 bytes=13470 (body deliberately omitted)
+END PASS
+```
+
+The search gate now checks for HTTP/HTTPS result URLs, rather than treating
+any non-empty content as successful search. It decodes into existing scratch
+and logs only the count and message length. The five discovered entries
+yielded two eligible tools; the diagnostic called `tavily_search` with its
+fixed query, five results, basic depth and images/raw content disabled.
+
+The first Escape attempt exposed a real Type 3 crash: initialization was in
+the TLS 1.3 handshake, but `MacTLS_Close` tried to close BearSSL's uninitialized
+T0 runner. `certainly-tls13-stop-handshake.patch` skips that runner during
+the separate TLS 1.3 handshake and closes the transport directly. The
+TLS 1.2 fallback still uses graceful close. Host transport tests assert both
+paths against the actual patched Certainly source.
+
+Two final-binary Escape runs then completed without that crash:
+
+```text
+STOP Escape phase=1 tls_state=1 pending_connect=1 request_id=1
+PASS Stop drained ticks=3 contexts=0 request_id_unchanged=1 (server cancellation unproven)
+FAIL stopped (cancellation best effort; no replay)
+END FAIL
+
+STOP Escape phase=1 tls_state=2 pending_connect=0 request_id=1
+PASS Stop drained ticks=1 contexts=0 request_id_unchanged=1 (server cancellation unproven)
+FAIL stopped (cancellation best effort; no replay)
+END FAIL
+```
+
+Here phase 1 is initialization; TLS state 1 is connecting and state 2 is
+handshaking. An intentional stop reports `END FAIL` because it did not finish
+the search. Both runs reached terminal cleanup with no retained contexts and
+an unchanged request ID. The host client fixtures cover no retry/replay; these
+guest observations do not prove cancellation of work on the server. A third
+run stopped an already connected initialization exchange and also drained
+with zero contexts.
+
+Editor acceptance used the existing guest `Sherclawk` app, SHA-256
+`a9e7cfcb0f94c25561bc3743f91400460825818d4d1c706cdb4cde3771ad4ae3`.
+After quitting and relaunching, opening the editor and pressing keypad Enter
+saved successfully. Replacing the text with `x` produced the fixed JSON-object
+validation alert when a save was attempted. After dismissing the alert, Escape
+closed the dialog; reopening and saving retained the valid configuration.
+The subsequent diagnostic passes, including after the VM restart, prove that
+the editor-written file persisted and was consumed. While a model response
+was active, Preferences and MCP Servers were visibly disabled in the Edit
+menu; clicking MCP Servers opened no dialog. Command-Period stopped the
+acceptance run afterward.
+
+Credential-free logs and UI evidence are retained locally under ignored
+`build/159-final-search-pass.log`, `build/159-final-connect-stop.log`,
+`build/159-final-handshake-stop.log`, `build/159-art-busy-menu.png` and
+`build/159-art-refusal.png`. The diagnostic omits bodies, header values and
+session IDs. No credentials were committed.
+
+`tools/check.sh`, `tools/check-transport.sh` and `tools/lint.sh` passed;
+the transport suite also passed under Linux GCC in the Retro68 image.
+Docker builds passed for `Sherclawk_APPL` and `SherclawkMCPCheck_APPL`.
+Still not exercised in the guest: the editor's 8 KiB limit messages, store
+failure branches (host fault tests only), Return-as-newline and Command-Period
+inside the editor, or refusal specifically during a stopped lookup's drain.
+This gate does not establish agent integration, credential redaction of
+model-visible results, minimum-partition headroom or release acceptance.
+
 Raised limits verification, October 10, 2026: the main `Sherclawk` build (Docker,
 history 1 MiB, tool results 4096 bytes, prompt 8 KiB, `SIZE` 10 MiB minimum / 16 MiB
 preferred) was published to the AFP share and run in the OS 9.2.2 UTM guest with
