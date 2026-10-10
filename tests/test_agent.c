@@ -237,6 +237,7 @@ static void truncation(void)
     size_t used;
     begin(); call("length"); used = a.used;
     assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
+    expect_event("truncated");
     assert(a.truncated && a.limited && a.active && !a.count && !a.next);
     assert(a.rounds == 1 && !a.tool_count && records == 2 && a.messages == 2);
     assert(a.used > used && !strstr(a.history, "get_environment") && strstr(a.history, "cut off"));
@@ -300,6 +301,7 @@ static void rejections(void)
     /* Arguments over the cap: nothing runs, the model is told to split the work. */
     begin(); used = a.used; big_call(big, sizeof(big), AGENT_ARGUMENT_CAP);
     assert(!agent_response(&a, big, strlen(big), 200, error, sizeof(error)));
+    expect_event("truncated");
     assert(a.discarded && strstr(a.discarded, "arguments") && !a.truncated && !a.limited);
     assert(a.active && !a.count && !a.next && a.rounds == 1 && !a.tool_count && records == 2);
     assert(a.used > used && !strstr(a.history, "c1") && strstr(a.history, "split"));
@@ -432,6 +434,7 @@ static void images(void)
     assert(a.used == before && !a.image_pending);
     image_fixture(&image, 100); records = 0;
     assert(!agent_attach_image(&a, &image) && a.image_pending && records == 1);
+    expect_event("image");
     /* History and journal carry only the note: no pixels, no base64. */
     assert(strstr(a.history + before, "view_image: Apps:Putt:frame1.png (390x150 PNG, 100 bytes)"));
     assert(!strstr(a.history, "image_url") && !strstr(a.history, "base64"));
@@ -905,6 +908,7 @@ int main(void)
     assert(!candidate.messages && !candidate.used && !memcmp(&a, &saved, sizeof(a)));
     fail_record = 0;
     assert(!agent_handoff_seed(&candidate, "# Goal\nBuild a prototype.", "old.jsonl", "handoff.md"));
+    expect_event("handoff_seed");
     assert(candidate.messages == 1 && !candidate.active && strstr(candidate.history, "old.jsonl") && strstr(candidate.history, "handoff.md"));
     assert(!agent_begin(&candidate, "Continue", error, sizeof(error)));
     assert(pin_handoff(agent_handoff_request(&candidate, "model", req, sizeof(req))) == -1);
