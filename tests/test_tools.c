@@ -545,7 +545,8 @@ static void large_text_checks(void)
         memset(files[f].bytes,'x',(size_t)sizes[k]);
         strcpy(call.name,"read_text");strcpy(call.arguments,"{\"path\":\"hello.c\"}");
         r=read_text_begin(&call,result,sizeof(result),NULL,NULL,0xfffffff0U);assert(r==2);
-        assert(edit_text_begin(&call,result,sizeof(result),journal,NULL,0xfffffff0U)==1 && strstr(result,"TEXT_BUSY"));
+        { int busy_result=edit_text_begin(&call,result,sizeof(result),journal,NULL,0xfffffff0U);
+          assert(busy_result==1 && strstr(result,"TEXT_BUSY")); }
         for(step=0;r==2;step++) { assert(step<200);r=read_text_step(result,sizeof(result),16U,0); }
         assert(!r && strstr(result,sizes[k]<=65536 ? "whole_file" : "scan"));
         handles_closed();
@@ -583,12 +584,12 @@ static void large_text_checks(void)
     edit_setup(source,"unique","y");assert(!run() && strstr(result,"AMBIGUOUS_MATCH") && !creates);
     /* Stop and deadline at every observable phase, including tick wrap. */
     memset(source,'x',4097);source[1023]='z';source[4097]=0;
-    edit_setup(source,"z","y");assert(edit_text_begin(&call,result,sizeof(result),journal,NULL,0xfffffff0U)==2);
+    edit_setup(source,"z","y");r=edit_text_begin(&call,result,sizeof(result),journal,NULL,0xfffffff0U);assert(r==2);
     r=2;limit=0;while(r==2) { r=edit_text_step(result,sizeof(result),16U,0);assert(++limit<100); }
     assert(!r);handles_closed();
     for(k=0;k<limit;k++)for(int timeout=0;timeout<2;timeout++) {
         f=edit_setup(source,"z","y");
-        assert(edit_text_begin(&call,result,sizeof(result),journal,NULL,0xfffffff0U)==2);
+        r=edit_text_begin(&call,result,sizeof(result),journal,NULL,0xfffffff0U);assert(r==2);
         for(step=0;step<k;step++)assert(edit_text_step(result,sizeof(result),16U,0)==2);
         assert(edit_text_step(result,sizeof(result),timeout ? 0xfffffff0U+3600U : 16U,!timeout)==1);
         assert(strstr(result,renames ? "uncertain" : "error"));
@@ -604,7 +605,8 @@ static void large_text_checks(void)
     }
     /* Pending entry points themselves enforce the execution-evidence guard. */
     reset();strcpy(call.arguments,"{\"path\":\"wOrKeR01:bUiLdJoBs:fake\"}");
-    assert(!edit_text_begin(&call,result,sizeof(result),journal,NULL,42) && strstr(result,"EXECUTION_EVIDENCE_READ_ONLY"));
+    r=edit_text_begin(&call,result,sizeof(result),journal,NULL,42);
+    assert(!r && strstr(result,"EXECUTION_EVIDENCE_READ_ONLY"));
     /* Fail every transfer/open/close/flush, including later chunks. */
     edit_setup(source,"z","y");io_reads=io_writes=io_closes=io_flushes=io_opens=0;largest_transfer=0;
     assert(!run() && largest_transfer<=TOOLS_WORK_CHUNK);
@@ -642,7 +644,7 @@ static void large_text_checks(void)
     reset();f=add(10,"hello.c",0);files[f].info.fdType='TEXT';files[f].size=1;files[f].bytes[0]='x';
     strcpy(call.arguments,"{\"path\":\"hello.c\"}");assert(read_text_begin(&call,result,sizeof(result),NULL,NULL,42)==2);
     assert(read_text_step(result,1,43,0)==1);handles_closed();
-    edit_setup("one\r","one","two");assert(edit_text_begin(&call,result,sizeof(result),journal,NULL,42)==2);
+    edit_setup("one\r","one","two");r=edit_text_begin(&call,result,sizeof(result),journal,NULL,42);assert(r==2);
     assert(edit_text_step(result,1,43,0)==1);handles_closed();
     /* Fresh readback tokens remain independent of a byte cursor. */
     edit_setup("one\r","one","two");field("revision",revision,sizeof(revision));
