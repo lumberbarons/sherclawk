@@ -39,13 +39,16 @@
 #include "text.h"
 #include "config.h"
 #include "preferences.h"
+#include "mcp_editor.h"
+#include "mcp_store.h"
 
 /* ── Menu IDs ─────────────────────────────────────────────────────── */
 enum {
     kAppleMenuID = 128,
     kFileMenuID  = 129,
     kEditMenuID  = 130,
-    kEditPrefsItem = 10   /* Edit menu: last item ("Preferences…") */
+    kEditPrefsItem = 10,  /* Edit menu: "Preferences…" */
+    kEditMcpItem   = 11   /* Edit menu: last item ("MCP Servers…") */
 };
 
 /* ── Layout ───────────────────────────────────────────────────────── */
@@ -216,8 +219,8 @@ static void SetSendEnabled(int enabled)
         else DisableItem(gFileMenu, 1);
     }
     if (gEditMenu) {
-        if (enabled) EnableItem(gEditMenu, kEditPrefsItem);
-        else DisableItem(gEditMenu, kEditPrefsItem);
+        if (enabled) { EnableItem(gEditMenu, kEditPrefsItem); EnableItem(gEditMenu, kEditMcpItem); }
+        else { DisableItem(gEditMenu, kEditPrefsItem); DisableItem(gEditMenu, kEditMcpItem); }
     }
     UpdateHandoffControls();
     if (gStopBtn) HiliteControl(gStopBtn, enabled ? 255 : 0);
@@ -1154,36 +1157,43 @@ static int TEGetTextInto(TEHandle te, char *buf, size_t cap)
 
 /* ── Response pane scrollbar ──────────────────────────────────────── */
 
-static short ResponseLineHeight(void)
+/* The scroll helpers work on any TextEdit record plus its scroll bar so the
+ * MCP editor shares them. ResponseScrollTo stays for the pane and
+ * tools/scroll-check.c. */
+static short PaneLineHeight(TEHandle te)
 {
-    if (!gResponseTE) return 12;
-    short lh = (*gResponseTE)->lineHeight;
+    short lh;
+    if (!te) return 12;
+    lh = (*te)->lineHeight;
     return lh > 0 ? lh : 12;
 }
 
-static short ResponsePageHeight(void)
+static short PanePageHeight(TEHandle te)
 {
-    short lh = ResponseLineHeight();
-    Rect  v  = (*gResponseTE)->viewRect;
+    short lh = PaneLineHeight(te);
+    Rect  v  = (*te)->viewRect;
     short visible_lines = (v.bottom - v.top) / lh;
     return (visible_lines > 1) ? (short)((visible_lines - 1) * lh) : lh;
 }
 
-static short ClampScroll(long v)
+static short PaneClamp(ControlHandle bar, long v)
 {
-    short max = GetControlMaximum(gResponseScroll);
+    short max = GetControlMaximum(bar);
     if (v < 0)   v = 0;
     if (v > max) v = max;
     return (short)v;
 }
 
-static short ComputeMaxScroll(void)
+static short PaneMaxScroll(TEHandle te)
 {
-    if (!gResponseTE) return 0;
-    short lh     = ResponseLineHeight();
-    short nLines = (*gResponseTE)->nLines;
-    Rect  view   = (*gResponseTE)->viewRect;
-    long pixels = (long)nLines * lh - (view.bottom - view.top);
+    short lh, nLines;
+    Rect  view;
+    long  pixels;
+    if (!te) return 0;
+    lh     = PaneLineHeight(te);
+    nLines = (*te)->nLines;
+    view   = (*te)->viewRect;
+    pixels = (long)nLines * lh - (view.bottom - view.top);
     if (pixels < 0) return 0;
     return (short)(pixels > 32767L ? 32767L : pixels);
 }
@@ -1192,28 +1202,39 @@ static short ComputeMaxScroll(void)
  * TESetText preserves destRect, and TESelView does nothing unless TEAutoView
  * is enabled. Always move from the actual destination to the requested offset
  * so a reply, thumb drag, or reset cannot leave the two out of sync. */
-static void ResponseScrollTo(long pixels)
+static void PaneScrollTo(TEHandle te, ControlHandle bar, long pixels)
 {
-    short after = ClampScroll(pixels);
-    long before = (long)(*gResponseTE)->viewRect.top - (*gResponseTE)->destRect.top;
-    TEScroll(0, (short)(before - after), gResponseTE);
-    SetControlValue(gResponseScroll, after);
+    short after = PaneClamp(bar, pixels);
+    long before = (long)(*te)->viewRect.top - (*te)->destRect.top;
+    TEScroll(0, (short)(before - after), te);
+    SetControlValue(bar, after);
 }
+
+static void PaneScrollStep(TEHandle te, ControlHandle bar, short part)
+{
+    short delta = 0;
+    long before;
+
+    switch (part) {
+    case kControlUpButtonPart:   delta = -PaneLineHeight(te); break;
+    case kControlDownButtonPart: delta =  PaneLineHeight(te); break;
+    case kControlPageUpPart:     delta = -PanePageHeight(te); break;
+    case kControlPageDownPart:   delta =  PanePageHeight(te); break;
+    default: return;
+    }
+    before = (long)(*te)->viewRect.top - (*te)->destRect.top;
+    PaneScrollTo(te, bar, before + delta);
+}
+
+static TEHandle gMcpTE = NULL;            /* MCP editor pane; set only while it is open */
+static ControlHandle gMcpScroll = NULL;
+
+static void ResponseScrollTo(long pixels) { PaneScrollTo(gResponseTE, gResponseScroll, pixels); }
 
 static pascal void ScrollActionProc(ControlHandle c, short part)
 {
-    short delta = 0;
-
-    if (c != gResponseScroll) return;
-    switch (part) {
-    case kControlUpButtonPart:   delta = -ResponseLineHeight(); break;
-    case kControlDownButtonPart: delta =  ResponseLineHeight(); break;
-    case kControlPageUpPart:     delta = -ResponsePageHeight(); break;
-    case kControlPageDownPart:   delta =  ResponsePageHeight(); break;
-    default: return;
-    }
-    long before = (long)(*gResponseTE)->viewRect.top - (*gResponseTE)->destRect.top;
-    ResponseScrollTo(before + delta);
+    if (gMcpScroll && c == gMcpScroll) PaneScrollStep(gMcpTE, c, part);
+    else if (c == gResponseScroll) PaneScrollStep(gResponseTE, c, part);
 }
 
 static void ResponseSetText(const char *text, size_t len)
@@ -1226,10 +1247,300 @@ static void ResponseSetText(const char *text, size_t len)
     (*gResponseTE)->destRect = (*gResponseTE)->viewRect;
     TESetText(text, l, gResponseTE);
     if (gResponseScroll) {
-        SetControlMaximum(gResponseScroll, ComputeMaxScroll());
+        SetControlMaximum(gResponseScroll, PaneMaxScroll(gResponseTE));
         SetControlValue(gResponseScroll, 0);
     }
     InvalRect(&gResponseRect);
+}
+
+/* ── MCP Servers… editor ──────────────────────────────────────────── */
+
+/* Cut, Copy, Paste, Clear and Select All (Edit items 3-6 and 8) on one
+ * TextEdit record. Returns 1 when a paste was refused for size. */
+static int TEEditCommand(TEHandle te, short item, long maximum)
+{
+    switch (item) {
+    case 3: ZeroScrap(); TECut(te);  TEToScrap(); break;
+    case 4: ZeroScrap(); TECopy(te); TEToScrap(); break;
+    case 5: {
+        long incoming = 0;
+        Handle scrap = NewHandle(0);
+        long offset = 0;
+        long remaining;
+        if (scrap) incoming = GetScrap(scrap, 'TEXT', &offset);
+        if (scrap) DisposeHandle(scrap);
+        remaining = (*te)->teLength - ((*te)->selEnd - (*te)->selStart);
+        if (incoming > 0 && incoming <= maximum - remaining) {
+            TEFromScrap(); TEPaste(te);
+        } else return 1;
+        break;
+    }
+    case 6: TEDelete(te);              break;
+    case 8: TESetSelect(0, 32767, te); break;
+    default: break;   /* Undo: not implemented */
+    }
+    return 0;
+}
+
+enum {
+    kMcpDialogID = 131,
+    kMcpSaveItem = 1,
+    kMcpCancelItem = 2,
+    kMcpFrameItem = 3,
+    kMcpHintItem = 4
+};
+/* Static: they hold the file, which can carry credentials, and the app stack
+ * is small. Wiped when the editor closes. */
+static char gMcpText[MCP_EDITOR_TEXT_CAP + 1];
+static char gMcpUtf8[MCP_EDITOR_UTF8_CAP];
+static char gMcpFile[MCP_STORE_CAP + 1];
+static char gMcpError[256];
+
+static OSErr McpSpec(FSSpec *spec)
+{
+    short vRefNum;
+    long  dirID;
+    Str255 name;
+    OSErr err = FindFolder(kOnSystemDisk, kPreferencesFolderType, kCreateFolder,
+                           &vRefNum, &dirID);
+    if (err) return err;
+    PStr(name, MCP_CONFIG_FILENAME);
+    return FSMakeFSSpec(vRefNum, dirID, name, spec);
+}
+
+/* An alert before the editor exists; PrefsProblem is the one for an open dialog. */
+static void McpAlert(const char *message)
+{
+    Str255 p;
+    PStr(p, message);
+    ParamText(p, NULL, NULL, NULL);
+    StopAlert(kPrefsAlertID, NULL);
+    if (gWindow) SetPort(gWindow);
+}
+
+static void McpHint(DialogPtr dlg, const char *text)
+{
+    short  type;
+    Handle handle;
+    Rect   rect;
+    SetPrefsText(dlg, kMcpHintItem, text);
+    GetDialogItem(dlg, kMcpHintItem, &type, &handle, &rect);
+    InvalRect(&rect);
+}
+
+/* Keep the scroll bar's range and thumb in step with the text after any edit. */
+static void McpSyncScroll(void)
+{
+    long top = (long)(*gMcpTE)->viewRect.top - (*gMcpTE)->destRect.top;
+    SetControlMaximum(gMcpScroll, PaneMaxScroll(gMcpTE));
+    SetControlValue(gMcpScroll, PaneClamp(gMcpScroll, top));
+}
+
+static const char *McpRecoverText =
+    "An interrupted save left only \"" MCP_CONFIG_FILENAME ".old\". Rename it to restore the file.";
+
+static const char *McpSaveFailure(McpStoreResult r)
+{
+    switch (r) {
+    case MCP_STORE_RECOVER:  return McpRecoverText;
+    case MCP_STORE_RESTORED: return "Could not publish the new file; the previous file was restored.";
+    case MCP_STORE_LOST:
+        return "The save failed and the previous file is now named \"" MCP_CONFIG_FILENAME ".old\". Rename it to restore it.";
+    default: return "Could not save the MCP file. The previous file was not changed.";
+    }
+}
+
+static void ShowMcpServers(void)
+{
+    FSSpec spec;
+    DialogPtr dlg;
+    short type;
+    Handle item_handle;
+    Rect frame, view, bar;
+    size_t file_len = 0;
+    int text_len, done = 0, saved = 0;
+    McpStoreResult loaded;
+    OSErr err = McpSpec(&spec);
+
+    if (err && err != fnfErr) { SetStatus("Could not find the Preferences folder."); return; }
+    loaded = mcp_store_load(&spec, gMcpFile, MCP_STORE_CAP, &file_len);
+    if (loaded == MCP_STORE_ABSENT) {
+        text_len = mcp_editor_display(mcp_editor_template, strlen(mcp_editor_template),
+                                      gMcpText, sizeof(gMcpText));
+    } else if (loaded == MCP_STORE_OK) {
+        text_len = mcp_editor_display(gMcpFile, file_len, gMcpText, sizeof(gMcpText));
+    } else {
+        text_len = -1;
+    }
+    memset(gMcpFile, 0, sizeof(gMcpFile));
+    if (text_len < 0) {
+        /* Never open an editor that could overwrite what it cannot show. */
+        McpAlert(loaded == MCP_STORE_RECOVER ? McpRecoverText :
+                 "The MCP file cannot be shown (too large, unreadable or not Mac text). It was not changed.");
+        memset(gMcpText, 0, sizeof(gMcpText));
+        return;
+    }
+
+    dlg = GetNewDialog(kMcpDialogID, NULL, (WindowPtr)-1L);
+    if (!dlg) { SetStatus("Could not open the MCP Servers dialog."); memset(gMcpText, 0, sizeof(gMcpText)); return; }
+    SetPort(dlg);
+    GetDialogItem(dlg, kMcpFrameItem, &type, &item_handle, &frame);
+    bar = frame;  bar.left = frame.right - 16;
+    view = frame; view.right = bar.left; InsetRect(&view, 3, 2);
+    TextFont(kFontIDMonaco); TextSize(9);
+    gMcpTE = TENew(&view, &view);
+    TextFont(systemFont); TextSize(0);   /* dialog items keep the system font */
+    gMcpScroll = NewControl(dlg, &bar, (ConstStr255Param)"\p", true, 0, 0, 0, scrollBarProc, 0);
+    if (!gMcpTE || !gMcpScroll) {
+        if (gMcpTE) TEDispose(gMcpTE);
+        if (gMcpScroll) DisposeControl(gMcpScroll);
+        gMcpTE = NULL; gMcpScroll = NULL;
+        CloseDialog(dlg);
+        memset(gMcpText, 0, sizeof(gMcpText));
+        if (gWindow) SetPort(gWindow);
+        SetStatus("Could not create the MCP editor.");
+        return;
+    }
+    TEAutoView(true, gMcpTE);
+    TESetText(gMcpText, text_len, gMcpTE);
+    TESetSelect(0, 0, gMcpTE);
+    memset(gMcpText, 0, sizeof(gMcpText));
+    TEActivate(gMcpTE);
+    McpSyncScroll();
+    SetDialogDefaultItem(dlg, kMcpSaveItem);
+    SetDialogCancelItem(dlg, kMcpCancelItem);
+    if (loaded == MCP_STORE_ABSENT) McpHint(dlg, "No MCP file yet. Edit the template, then press Save.");
+
+    while (!done) {
+        EventRecord event;
+        short item = 0;
+        int hit = 0;
+        WaitNextEvent(everyEvent, &event, 10, NULL);
+        SetPort(dlg);
+        do {
+            if (event.what == updateEvt) {
+                if ((WindowPtr)event.message == dlg) {
+                    BeginUpdate(dlg);
+                    TextFont(systemFont); TextSize(0);
+                    DrawDialog(dlg);
+                    DrawControls(dlg);
+                    FrameRect(&frame);
+                    TEUpdate(&view, gMcpTE);
+                    EndUpdate(dlg);
+                } else if ((WindowPtr)event.message == gWindow) {
+                    UpdateMainWindow();
+                    SetPort(dlg);
+                }
+                break;
+            }
+            if (event.what == activateEvt) {
+                if ((WindowPtr)event.message == dlg) {
+                    if (event.modifiers & activeFlag) TEActivate(gMcpTE);
+                    else TEDeactivate(gMcpTE);
+                }
+                break;
+            }
+            if (event.what == kHighLevelEvent) { AEProcessAppleEvent(&event); break; }
+            if (event.what == mouseDown) {
+                WindowPtr which = NULL;
+                short part = FindWindow(event.where, &which);
+                if (part == inMenuBar) {
+                    long choice = MenuSelect(event.where);
+                    if (HiWord(choice) == kEditMenuID &&
+                        TEEditCommand(gMcpTE, LoWord(choice), MCP_EDITOR_TEXT_CAP))
+                        McpHint(dlg, "Paste is empty or exceeds the 8 KiB limit.");
+                    HiliteMenu(0);
+                    SetPort(dlg);
+                    break;
+                }
+                if (which == dlg && part == inDrag) {
+                    Rect screen = (*GetGrayRgn())->rgnBBox;
+                    DragWindow(dlg, event.where, &screen);
+                    SetPort(dlg);
+                    break;
+                }
+                if (which == dlg && part == inContent) {
+                    ControlHandle ctl = NULL;
+                    Point local = event.where;
+                    short cpart;
+                    GlobalToLocal(&local);
+                    cpart = FindControl(local, dlg, &ctl);
+                    if (cpart && ctl == gMcpScroll) {
+                        if (cpart == kControlIndicatorPart) {
+                            TrackControl(ctl, local, NULL);
+                            PaneScrollTo(gMcpTE, gMcpScroll, GetControlValue(ctl));
+                        } else {
+                            TrackControl(ctl, local, gScrollActionUPP);
+                        }
+                        break;
+                    }
+                    if (!cpart && PtInRect(local, &view)) {
+                        TEClick(local, (event.modifiers & shiftKey) != 0, gMcpTE);
+                        break;
+                    }
+                }
+            }
+            if (event.what == keyDown || event.what == autoKey) {
+                char c = (char)(event.message & charCodeMask);
+                if (event.modifiers & cmdKey) {
+                    if (c == '.') { if (event.what == keyDown) item = kMcpCancelItem; }
+                    else {
+                        long choice = MenuKey(c);
+                        if (HiWord(choice) == kEditMenuID &&
+                            TEEditCommand(gMcpTE, LoWord(choice), MCP_EDITOR_TEXT_CAP))
+                            McpHint(dlg, "Paste is empty or exceeds the 8 KiB limit.");
+                        HiliteMenu(0);
+                    }
+                } else if (c == 3) {
+                    if (event.what == keyDown) item = kMcpSaveItem;   /* Enter; Return is a newline */
+                } else if (c == 27) {
+                    if (event.what == keyDown) item = kMcpCancelItem;
+                } else {
+                    long remaining = (*gMcpTE)->teLength - ((*gMcpTE)->selEnd - (*gMcpTE)->selStart);
+                    if (c == 8 || ((unsigned char)c >= 0x1c && (unsigned char)c <= 0x1f) ||
+                        remaining < MCP_EDITOR_TEXT_CAP) {
+                        TEKey(c, gMcpTE); TESelView(gMcpTE);
+                    } else McpHint(dlg, "8 KiB limit reached.");
+                }
+                hit = item != 0;
+                break;
+            }
+            hit = DialogSelect(&event, &dlg, &item);
+        } while (0);
+
+        if (hit && item == kMcpCancelItem) {
+            done = 1;
+        } else if (hit && item == kMcpSaveItem) {
+            int n = TEGetTextInto(gMcpTE, gMcpText, sizeof(gMcpText));
+            int u = n < 0 ? -1 : mcp_editor_validate(gMcpText, (size_t)n, gMcpUtf8, sizeof(gMcpUtf8),
+                                                     gMcpError, sizeof(gMcpError));
+            if (n < 0) {
+                PrefsProblem(dlg, "Too much text for the MCP file (8 KiB limit).");
+            } else if (u < 0) {
+                PrefsProblem(dlg, gMcpError);   /* names the field, never a value */
+            } else {
+                McpStoreResult r = mcp_store_save(&spec, gMcpUtf8, (size_t)u);
+                if (r == MCP_STORE_OK) { saved = 1; done = 1; }
+                else PrefsProblem(dlg, McpSaveFailure(r));
+            }
+            memset(gMcpText, 0, sizeof(gMcpText));
+            memset(gMcpUtf8, 0, sizeof(gMcpUtf8));
+            memset(gMcpError, 0, sizeof(gMcpError));
+        }
+        if (done) break;
+        TEIdle(gMcpTE);
+        McpSyncScroll();
+    }
+
+    TESetSelect(0, 32767, gMcpTE);
+    TEDelete(gMcpTE);                    /* do not leave credentials in the freed record */
+    TEDispose(gMcpTE);
+    DisposeControl(gMcpScroll);
+    gMcpTE = NULL; gMcpScroll = NULL;
+    CloseDialog(dlg);
+    if (gWindow) SetPort(gWindow);
+    if (saved) SetStatus("MCP configuration saved. The agent does not use it yet.");
+    FocusSet(gPromptTE);
 }
 
 /* ── Menu handling ────────────────────────────────────────────────── */
@@ -1261,29 +1572,16 @@ static int HandleMenu(long menuChoice)
             else ShowPreferences();
             break;
         }
+        if (item == kEditMcpItem) {
+            if (RunBusy()) SetStatus("Finish the current run before changing MCP Servers.");
+            else if (gLookupDrain) SetStatus("The stopped lookup is still closing; try again in a moment.");
+            else ShowMcpServers();
+            break;
+        }
         if (gFocusedTE && (item == 4 || item == 8 ||
             (!RunBusy() && gFocusedTE != gResponseTE))) {
-            switch (item) {
-            case 3: ZeroScrap(); TECut(gFocusedTE);   TEToScrap(); break;
-            case 4: ZeroScrap(); TECopy(gFocusedTE);  TEToScrap(); break;
-            case 5: {
-                long incoming = 0;
-                Handle scrap = NewHandle(0);
-                long offset = 0;
-                if (scrap) incoming = GetScrap(scrap, 'TEXT', &offset);
-                if (scrap) DisposeHandle(scrap);
-                long maximum = CHAT_PROMPT_CAP - 1;
-                long remaining = (*gFocusedTE)->teLength -
-                    ((*gFocusedTE)->selEnd - (*gFocusedTE)->selStart);
-                if (incoming > 0 && incoming <= maximum - remaining) {
-                    TEFromScrap(); TEPaste(gFocusedTE);
-                } else SetStatus("Paste is empty or exceeds the field limit.");
-                break;
-            }
-            case 6: TEDelete(gFocusedTE);                          break;
-            case 8: TESetSelect(0, 32767, gFocusedTE); break;
-            default: break;   /* Undo: not implemented */
-            }
+            if (TEEditCommand(gFocusedTE, item, CHAT_PROMPT_CAP - 1))
+                SetStatus("Paste is empty or exceeds the field limit.");
         }
         break;
 

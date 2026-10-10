@@ -17,7 +17,7 @@ aliases are refused by text tools; metadata and resources have separate
 [inspection tools](tools.md#inspecting-resources-and-identity).
 Tool arguments never pass through lossy UI conversion.
 
-**Preferences** (Edit menu, last item) sets the model, API key, workspace,
+**Preferences** (Edit menu) sets the model, API key, workspace,
 per-run limits and a *Show tool debug in Conversation* toggle. Values are saved
 as clear `key=value` MacRoman text with CR line endings at
 `System Folder:Preferences:Sherclawk Preferences` (file type `pref`, creator
@@ -46,6 +46,17 @@ Conversation. Consecutive calls to the same tool fold into one counted line
 toggle on, every call stays on its own line and the result and the call's
 journal event names follow it. The session JSONL is byte-identical either way, and the
 API key never appears in status text, logs, prompts or results.
+
+## MCP Servers
+
+**MCP Servers…** (Edit menu, after Preferences) edits the remote MCP
+configuration, `System Folder:Preferences:Sherclawk MCP Servers.json`, in a
+scrolling text pane. Save is refused, with a message naming the offending field,
+unless the JSON is a valid single-server configuration; Cancel discards your
+edits. Header values such as bearer tokens are stored and shown as clear text,
+so protect the file and guest disk images. The agent does not use this
+configuration yet. The [MCP guide](mcp.md#configuration-editor) has the format,
+limits and how saves are staged.
 
 ## Project instructions (AGENTS.md)
 

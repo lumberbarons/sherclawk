@@ -312,3 +312,25 @@ Main app, template and Quit diagnostic Docker builds passed; clang ASan/UBSan
 host suites and Linux GCC 13 ASan/UBSan suites passed. The successful guest
 logs are retained locally under ignored `build/quit-check-verified.log` and
 `build/quit-ignore-verified.log`. The schema/discovery gate is now open.
+
+MCP Servers editor verification, October 9, 2026: the main `Sherclawk` build
+(Docker, with the configuration editor) was published to the AFP share and run
+in the OS 9.2.2 UTM guest. **Edit ▸ MCP Servers…** opened the dialog with the
+disabled template and the no-file hint. Saving the template plus a stray `x`
+showed `Invalid MCP configuration: JSON object.` and wrote nothing; removing
+the `x` saved (first create) and the status line reported the save. Reopening
+showed the saved text. Select All and typing replaced it with a Tavily-shaped
+configuration (a placeholder key) followed by blank lines; the scroll bar
+gained a thumb only once the text overflowed, auto-scrolled to the caret, and
+page-up and page-down tracked with the thumb in step. Saving again (replace)
+and reopening showed the new text. Cut emptied the pane and Paste restored it;
+Cancel after edits discarded them on reopen. `Retro68:Sherclawk.log` held no MCP
+or credential text. The file was then reset to the disabled template and the app
+quit.
+
+Not exercised in the guest: the 8 KiB limit messages, store failure branches
+(covered by `tests/test_mcp_store.c` only), refusal while a run is active,
+Enter/Escape key shortcuts, an application restart, and `SherclawkMCPCheck`
+reading an editor-written file. A synthetic click needs a held press
+(`TrackControl`) to scroll the pane. Host and guest results do not establish
+the integrated memory partition or any agent use of the configuration.

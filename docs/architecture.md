@@ -117,9 +117,22 @@ changing the dialog.
 The storage choice was an app-owned `pref` file rather than `TEXT` or
 resources. Per-key compiled fallbacks, immediate workspace changes for new work
 and a display-only debug toggle were intentional. Classic conventions place
-Preferences last in the Edit menu, separated from editing commands; Return
+Preferences in the Edit menu, separated from editing commands, with
+**MCP Servers…** after it; Return
 accepts and Escape or Command-. cancels. The model chooser uses Preferences as
 the sole source. Remaining follow-ups are tracked as issues.
+
+## MCP configuration editor notes
+
+The editor is a modal dialog with its own `TextEdit` record and scroll bar
+rather than a dialog edit item, because an edit item is limited to 255
+characters. It shares the pane scroll helpers and the Cut/Copy/Paste handler
+with the main window, and runs its own event loop like Preferences. The
+text rules (`mcp_editor.c`) and persistence (`mcp_store.c`) have no Toolbox
+dependency beyond the File Manager, so host tests exercise them against a
+fault-injecting model. Saves stage, verify and swap rather than truncating in
+place: the file is hand-edited and holds credentials, so a failed save must
+never cost the previous version.
 
 ## Model catalog and context display
 

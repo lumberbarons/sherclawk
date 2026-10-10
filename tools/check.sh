@@ -67,6 +67,21 @@ build_test test-mcp "${WARN[@]}" -I"$HERE" -I"$HERE/vendor" \
     "$HERE/mcp_stream.c" "$HERE/json.c" "$HERE/text.c" "$HERE/vendor/http.c"
 run_test test-mcp
 
+# MCP editor text rules and the staged-replace store (File Manager fault model).
+"${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" \
+    -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -I"$HERE" -I"$HERE/vendor" \
+    "$HERE/tests/test_mcp_editor.c" "$HERE/mcp_editor.c" "$HERE/mcp_config.c" \
+    "$HERE/json.c" "$HERE/text.c" "$HERE/vendor/http.c" \
+    -o "$HERE/build/tests/test-mcp-editor"
+"$HERE/build/tests/test-mcp-editor"
+"${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" -Wno-multichar \
+    -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -I"$HERE" -I"$HERE/tests/toolbox" \
+    "$HERE/tests/test_mcp_store.c" "$HERE/mcp_store.c" \
+    -o "$HERE/build/tests/test-mcp-store"
+"$HERE/build/tests/test-mcp-store"
+
 # The network test needs a Certainly clone (fetch-only, see README).
 CERTAINLY_DIR="${CERTAINLY_DIR:-$HERE/../Certainly}"
 if [ -d "$CERTAINLY_DIR/include" ]; then

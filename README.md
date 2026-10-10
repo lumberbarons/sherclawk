@@ -27,8 +27,9 @@ but are not automatically reloaded after quitting. Stop prevents further work;
 it does not undo completed operations or prove cancellation of a published
 build. Launch observation does not establish functional or visual correctness.
 
-Remote MCP has a protocol core and a native diagnostic, but the main app does
-not expose MCP tools or a configuration editor yet. Reasoning-effort metadata
+Remote MCP has a protocol core, a native diagnostic and a configuration editor
+(Edit ▸ MCP Servers…), but the agent does not use the configuration or expose
+MCP tools yet. Reasoning-effort metadata
 is displayed in Preferences; effort is not yet saved or sent. Follow active
 work in [GitHub issues](https://github.com/lumberbarons/sherclawk/issues).
 
@@ -106,7 +107,7 @@ Host success alone is not guest acceptance.
 | [Development](docs/development.md) | Build, deploy, check and diagnose the application |
 | [Architecture](docs/architecture.md) | Native execution and persistence principles |
 | [Limits](docs/limits.md) | Buffer, token, memory and deadline relationships |
-| [MCP](docs/mcp.md) | Protocol diagnostic and remaining integration gates |
+| [MCP](docs/mcp.md) | Configuration editor, protocol diagnostic and remaining integration gates |
 | [PowerPC template](templates/ppc-toolbox/README.md) | Starter UI, native compilation, runtime logging and self-render |
 | [OS 9 guest setup](docs/macos9-qemu.md) | Optional QEMU/UTM testbed notes |
 | [Verification history](docs/history/verification.md) | Dated acceptance evidence |
