@@ -1,6 +1,9 @@
-/* Streaming HTTP framing and SSE lines. No whole-exchange accumulation or
- * close-delimited SSE wait; caller yields after at most 8 KiB fed bytes. */
+/* Streaming HTTP framing and SSE fields. No whole-exchange accumulation or
+ * close-delimited SSE wait; every byte costs constant work, the caller yields
+ * after at most 8 KiB fed bytes, and a completed message is handed back
+ * unprocessed (see mcp_stream_feed). */
 #include "mcp.h"
+#include <stddef.h>
 #include <string.h>
 #include <stdlib.h>
 static int fail(McpStream *s) { s->failed = 1; return -1; }
@@ -89,38 +92,55 @@ static int headers(McpStream *s)
     s->headers_done = 1;
     return 0;
 }
-void mcp_stream_init(McpStream *s, int ack, McpMessage cb, void *context)
+void mcp_stream_init(McpStream *s, int ack)
 {
-    memset(s, 0, sizeof(*s)); s->acknowledgment = ack;
-    s->callback = cb; s->context = context;
+    /* The large buffers are not cleared: each is terminated before use. */
+    memset((char *)s + offsetof(McpStream, session), 0, sizeof(*s) - offsetof(McpStream, session));
+    s->acknowledgment = ack;
 }
+/* A completed message waits in s->message until mcp_stream_resume. */
 static int dispatch(McpStream *s)
 {
-    int r;
     if (!s->message_len) return 0; /* SSE stream-priming event. */
     s->message[s->message_len] = 0;
-    if (!s->callback) return fail(s);
-    r = s->callback(s->context, s->message);
-    s->message_len = 0;
-    if (r < 0) return fail(s);
-    if (r > 0) s->done = 1;
-    return r;
+    s->ready = 1;
+    return 2;
+}
+/* A data field joins earlier ones with a newline. */
+static int data_separator(McpStream *s)
+{
+    if (!s->message_len) return 0;
+    if (s->message_len == MCP_MESSAGE_CAP) return fail(s);
+    s->message[s->message_len++] = '\n';
+    return 0;
 }
 static int sse_line(McpStream *s)
 {
-    char *v;
-    size_t n;
     if (!s->line_len) return dispatch(s);
-    s->line[s->line_len] = 0;
-    if (s->line[0] == ':') return 0;
-    v = strchr(s->line, ':');
-    if (v) { *v++ = 0; if (*v == ' ') v++; }
-    else v = s->line + s->line_len;
-    if (strcmp(s->line, "data")) return 0;
-    n = strlen(v);
-    if (n + (s->message_len ? 1 : 0) > MCP_MESSAGE_CAP - s->message_len) return fail(s);
-    if (s->message_len) s->message[s->message_len++] = '\n';
-    memcpy(s->message + s->message_len, v, n); s->message_len += n;
+    /* A field with no colon is its whole line and has an empty value. */
+    if (!s->in_value && s->field_len == 4 && !memcmp(s->field, "data", 4)) return data_separator(s);
+    return 0;
+}
+/* SSE bytes are consumed one at a time: the field name into a small buffer,
+ * and a data value straight into the message, so a long line never needs a
+ * second pass. */
+static int sse_byte(McpStream *s, unsigned char c)
+{
+    if (!c || s->line_len == MCP_MESSAGE_CAP) return fail(s);
+    s->line_len++;
+    if (!s->in_value) {
+        if (c != ':') {
+            if (s->field_len < (int)sizeof(s->field)) s->field[s->field_len++] = (char)c;
+            return 0;
+        }
+        s->in_value = 1; s->skip_space = 1;
+        s->data_field = s->field_len == 4 && !memcmp(s->field, "data", 4);
+        return s->data_field ? data_separator(s) : 0;
+    }
+    if (!s->data_field) return 0;
+    if (s->skip_space) { s->skip_space = 0; if (c == ' ') return 0; }
+    if (s->message_len == MCP_MESSAGE_CAP) return fail(s);
+    s->message[s->message_len++] = (char)c;
     return 0;
 }
 static int body_byte(McpStream *s, unsigned char c)
@@ -139,14 +159,16 @@ static int body_byte(McpStream *s, unsigned char c)
     }
     if (s->skip_lf) { s->skip_lf = 0; if (c == '\n') return 0; }
     if (c == '\r' || c == '\n') {
-        r = sse_line(s); s->line_len = 0; s->skip_lf = c == '\r'; return r;
+        r = sse_line(s);
+        s->line_len = 0; s->field_len = 0; s->in_value = 0; s->data_field = 0;
+        s->skip_lf = c == '\r';
+        return r;
     }
-    if (!c || s->line_len == MCP_MESSAGE_CAP) return fail(s);
-    s->line[s->line_len++] = (char)c; return 0;
+    return sse_byte(s, c);
 }
 static int finish(McpStream *s)
 {
-    if (!s->sse && dispatch(s) > 0) return 1;
+    if (!s->sse && dispatch(s) > 0) return 2;
     return fail(s); /* A notification or EOF is not a request response. */
 }
 static int chunk_byte(McpStream *s, unsigned char c)
@@ -197,10 +219,12 @@ int mcp_stream_feed(McpStream *s, const char *bytes, size_t len)
     size_t i;
     if (s->failed) return -1;
     if (s->done) return 1;
+    if (s->ready) return fail(s); /* The caller must process the message first. */
     if (len > 8192 || len > MCP_TRAFFIC_CAP - s->traffic) return fail(s);
-    s->traffic += len;
+    s->used = 0;
     for (i = 0; i < len && !s->done && !s->failed; i++) {
         unsigned char c = (unsigned char)bytes[i];
+        int r = 0;
         if (!s->headers_done) {
             size_t n;
             if (!c || (c < 32 && c != '\r' && c != '\n' && c != '\t') || c == 127 || s->header_len == MCP_HEADER_CAP) return fail(s);
@@ -211,19 +235,30 @@ int mcp_stream_feed(McpStream *s, const char *bytes, size_t len)
                 if (headers(s) < 0) return -1;
             }
         } else if (s->chunked) {
-            if (chunk_byte(s, c) < 0) return -1;
+            r = chunk_byte(s, c);
         } else {
             if (s->has_length && !s->remaining) return fail(s);
-            if (body_byte(s, c) < 0) return -1;
-            if (s->has_length && !--s->remaining && !s->done) return finish(s);
+            r = body_byte(s, c);
+            if (r >= 0 && s->has_length && !--s->remaining && !r) r = finish(s);
         }
+        if (r < 0) return -1;
+        if (r == 2) { s->used = i + 1; s->traffic += i + 1; return 2; }
     }
+    s->traffic += i;
     return s->failed ? -1 : s->done;
 }
 int mcp_stream_eof(McpStream *s)
 {
     if (s->failed) return -1;
     if (s->done) return 1;
-    if (!s->headers_done || s->chunked || (s->has_length && s->remaining)) return fail(s);
+    if (s->ready || !s->headers_done || s->chunked || (s->has_length && s->remaining)) return fail(s);
     return finish(s);
+}
+void mcp_stream_resume(McpStream *s, int matched)
+{
+    if (!s->ready) return;
+    s->ready = 0;
+    if (matched) s->done = 1;
+    else if (!s->sse) s->failed = 1; /* The only message of the body is not the response. */
+    else s->message_len = 0;
 }

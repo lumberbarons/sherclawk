@@ -30,30 +30,10 @@ static int fail(McpClient *c, const char *message)
     snprintf(c->error, sizeof(c->error), "MCP unavailable: %s.", message);
     int pending;
     c->registry.count = 0; c->registry.schema_len = 0; c->registry.schemas[0] = 0;
+    c->working = 0; c->pending_len = 0;
     pending = mcp_client_close(c);
     c->state = pending ? MCP_FAIL_DRAIN : MCP_FAILED;
     return pending ? 0 : -1;
-}
-static int receive(void *context, const char *s)
-{
-    McpClient *c = context;
-    char reply[2048];
-    int r;
-    if (c->state == MCP_INITIALIZE && c->exchange.stream.session[0])
-        strcpy(c->session, c->exchange.stream.session);
-    r = mcp_rpc(s, c->id, reply, sizeof(reply));
-    if (r == 1) {
-        size_t len = strlen(s);
-        if (len > MCP_MESSAGE_CAP) return -1;
-        memcpy(c->response, s, len + 1);
-        return 1;
-    }
-    if (r == 2) {
-        if (c->reply_count == 4) return -1;
-        strcpy(c->replies[c->reply_count++], reply);
-        return 0;
-    }
-    return r;
 }
 static int start(McpClient *c, McpExchange *e, const char *body, int ack)
 {
@@ -63,12 +43,15 @@ static int start(McpClient *c, McpExchange *e, const char *body, int ack)
                  body, e->request, sizeof(e->request));
     if (n < 0) return -1;
     e->length = (size_t)n; e->sent = 0;
-    mcp_stream_init(&e->stream, ack, ack ? NULL : receive, c);
+    mcp_stream_init(&e->stream, ack);
+    if (e == &c->exchange) c->pending_len = 0;
     e->ctx = MacTLS_Create(c->config.host, c->config.port);
     if (!e->ctx) { memset(e->request, 0, sizeof(e->request)); return -1; }
     return 0;
 }
-static int step_exchange(McpExchange *e)
+/* -1 failure, 0 nothing yet, 1 exchange complete, 3 a message is ready in the
+ * stream and is processed by later steps. */
+static int step_exchange(McpClient *c, McpExchange *e)
 {
     MacTLS_State state;
     int i, drained = 0;
@@ -86,17 +69,36 @@ static int step_exchange(McpExchange *e)
     }
     if (state != kMacTLS_Connected && state != kMacTLS_Closed) return 0;
     for (i = 0; i < 4; i++) {
-        int read = MacTLS_Read(e->ctx, bytes, sizeof(bytes)), r;
-        if (read < 0) return -1;
-        if (!read) { drained = 1; break; }
-        if ((size_t)read > sizeof(bytes)) return -1;
-        r = mcp_stream_feed(&e->stream, bytes, (size_t)read);
+        size_t len;
+        int r;
+        if (e == &c->exchange && c->pending_len) {
+            len = c->pending_len;
+            memcpy(bytes, c->pending, len); c->pending_len = 0;
+        } else {
+            int read = MacTLS_Read(e->ctx, bytes, sizeof(bytes));
+            if (read < 0) return -1;
+            if (!read) { drained = 1; break; }
+            if ((size_t)read > sizeof(bytes)) return -1;
+            len = (size_t)read;
+        }
+        r = mcp_stream_feed(&e->stream, bytes, len);
         if (r < 0) return -1;
+        if (r == 2) {
+            /* Bytes after the message wait for it to be processed. */
+            c->pending_len = len - e->stream.used;
+            memcpy(c->pending, bytes + e->stream.used, c->pending_len);
+            return 3;
+        }
         if (r > 0) return e->sent == e->length ? 1 : -1;
     }
     /* A closed connection may still hold buffered plaintext; only an empty
      * read means the stream truly ended. */
-    if (state == kMacTLS_Closed && drained) return e->sent == e->length ? mcp_stream_eof(&e->stream) : -1;
+    if (state == kMacTLS_Closed && drained) {
+        int r;
+        if (e->sent != e->length) return -1;
+        r = mcp_stream_eof(&e->stream);
+        return r == 2 ? 3 : r;
+    }
     return 0;
 }
 int mcp_client_discover(McpClient *c, const McpConfig *config, unsigned long ticks)
@@ -129,7 +131,7 @@ int mcp_client_call(McpClient *c, const char *name, const char *arguments, unsig
     for (i = 0; i < c->registry.count; i++) if (!strcmp(c->registry.tools[i].name, name)) break;
     if (i == c->registry.count || strlen(arguments) > 8192 || json_parse(arguments, strlen(arguments), t, 2048) < 1 ||
         t[0].type != JSON_OBJECT) return -1;
-    c->id++; c->started = ticks; c->call_error = 0; c->response[0] = 0;
+    c->id++; c->started = ticks; c->call_error = 0; c->working = 0; c->pending_len = 0;
     n = snprintf(body, sizeof(body), "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"method\":\"tools/call\",\"params\":{\"name\":\"%s\",\"arguments\":%s}}",
         c->id, c->registry.tools[i].original, arguments);
     if (n < 0 || (size_t)n >= sizeof(body)) return -1;
@@ -141,6 +143,11 @@ void mcp_client_stop(McpClient *c, unsigned long ticks)
     if (c->state == MCP_STOPPING || c->state == MCP_STOPPED) return;
     c->cancel_pending = c->state == MCP_LIST || c->state == MCP_CALL;
     c->reply_count = 0; c->stop_started = ticks;
+    /* Abandon any message being processed, and a discovery it half built. */
+    if (c->state == MCP_INITIALIZE || c->state == MCP_INITIALIZED || c->state == MCP_LIST) {
+        c->registry.count = 0; c->registry.schema_len = 0; c->registry.schemas[0] = 0;
+    }
+    c->working = 0; c->pending_len = 0;
     c->stop_phase = 0; c->state = MCP_STOPPING;
     /* Never free a context with an asynchronous OT connect outstanding. */
     close_exchange(&c->exchange); close_exchange(&c->auxiliary);
@@ -172,7 +179,7 @@ int mcp_client_step(McpClient *c, unsigned long ticks)
             }
             mcp_client_close(c); c->state = MCP_STOPPED; return -1;
         }
-        r = step_exchange(&c->auxiliary);
+        r = step_exchange(c, &c->auxiliary);
         if (r || (unsigned long)(ticks - c->stop_started) >= 5UL * 60UL) {
             if (mcp_client_close(c)) return 0;
             c->state = MCP_STOPPED; return -1;
@@ -183,7 +190,7 @@ int mcp_client_step(McpClient *c, unsigned long ticks)
     /* Server requests are acknowledged on a separate POST, while keeping the
      * originating response stream alive. Only one exchange is read per step. */
     if (c->auxiliary.ctx) {
-        r = step_exchange(&c->auxiliary);
+        r = step_exchange(c, &c->auxiliary);
         if (r < 0) return fail(c, "server-request acknowledgment failed");
         if (r > 0) close_exchange(&c->auxiliary);
         return 0;
@@ -195,37 +202,60 @@ int mcp_client_step(McpClient *c, unsigned long ticks)
         memset(c->replies[c->reply_count], 0, sizeof(c->replies[0]));
         return 0;
     }
-    /* Matching response can arrive in the same read as a server request;
-     * honor pending replies before transitioning to the next RPC. */
-    r = c->exchange.stream.done ? 1 : step_exchange(&c->exchange);
+    /* A received message is processed in budgeted steps, which a Stop between
+     * steps abandons. */
+    if (c->working) {
+        if (!mcp_work_step(&c->work, MCP_WORK_BUDGET)) return 0;
+        c->working = 0;
+        if (c->work.rpc < 0) return fail(c, "connection, HTTP framing or RPC failure (no retry)");
+        if (c->work.rpc == 2) {
+            if (c->reply_count == 4) return fail(c, "connection, HTTP framing or RPC failure (no retry)");
+            strcpy(c->replies[c->reply_count++], c->reply);
+        }
+        mcp_stream_resume(&c->exchange.stream, c->work.rpc == 1);
+        if (c->exchange.stream.failed || (c->work.rpc == 1 && c->exchange.sent != c->exchange.length))
+            return fail(c, "connection, HTTP framing or RPC failure (no retry)");
+        if (c->work.rpc != 1) return 0;
+        r = 1;
+    } else {
+        /* Matching response can arrive in the same read as a server request;
+         * honor pending replies before transitioning to the next RPC. */
+        r = c->exchange.stream.done ? 1 : step_exchange(c, &c->exchange);
+        if (r == 3) {
+            const char *session = c->exchange.stream.session;
+            int stages = MCP_STAGE_CLASSIFY | (c->state == MCP_INITIALIZE ? MCP_STAGE_INITIALIZE :
+                c->state == MCP_LIST ? MCP_STAGE_DISCOVER : c->state == MCP_CALL ? MCP_STAGE_CALL : 0);
+            if (session[0]) {
+                if (c->state == MCP_INITIALIZE) strcpy(c->session, session);
+                else if (strcmp(c->session, session)) return fail(c, "session changed unexpectedly");
+            }
+            mcp_work_init(&c->work, stages, &c->config, &c->registry, c->exchange.stream.message,
+                c->exchange.stream.message_len, c->id, c->reply, sizeof(c->reply), c->version, sizeof(c->version));
+            c->working = 1;
+            return 0;
+        }
+    }
     if (r < 0) return fail(c, "connection, HTTP framing or RPC failure (no retry)");
     if (c->reply_count || r == 0) return 0;
-    if (c->exchange.stream.session[0]) {
-        if (c->state == MCP_INITIALIZE) strcpy(c->session, c->exchange.stream.session);
-        else if (strcmp(c->session, c->exchange.stream.session)) return fail(c, "session changed unexpectedly");
-    }
     close_exchange(&c->exchange);
     if (c->state == MCP_INITIALIZE) {
-        if (mcp_initialize_result(c->response, c->version, sizeof(c->version))) return fail(c, "unsupported initialization/version");
+        if (c->work.status < 0) return fail(c, "unsupported initialization/version");
         c->state = MCP_INITIALIZED;
         return start(c, &c->exchange, "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}", 1) < 0 ? fail(c, "initialized notification failed") : 0;
     }
     if (c->state == MCP_INITIALIZED) return list(c);
     if (c->state == MCP_LIST) {
-        r = mcp_discover_page(&c->config, &c->registry, c->response);
-        if (r < 0) return fail(c, "invalid or over-budget discovery");
-        if (!r) return list(c);
-        c->state = MCP_READY; c->response[0] = 0; return 1;
+        if (c->work.status < 0) return fail(c, "invalid or over-budget discovery");
+        if (c->work.more) return list(c);
+        c->state = MCP_READY; return 1;
     }
     if (c->state == MCP_CALL) {
-        static JsonToken t[8192];
-        int result, hint;
-        if (json_parse(c->response, strlen(c->response), t, 8192) < 1) return fail(c, "invalid tool response");
-        c->call_error = json_member(c->response, t, 0, "error") >= 0;
-        result = json_member(c->response, t, 0, "result");
-        hint = result >= 0 && t[result].type == JSON_OBJECT ? json_member(c->response, t, result, "isError") : -1;
-        if (hint >= 0 && t[hint].end - t[hint].start == 4 && !memcmp(c->response + t[hint].start, "true", 4)) c->call_error = 1;
+        c->call_error = c->work.call_error;
         c->state = MCP_COMPLETE; return 1;
     }
     return fail(c, "invalid client state");
+}
+const char *mcp_client_response(const McpClient *c)
+{
+    return c->state == MCP_COMPLETE ? c->exchange.stream.message : "";
 }

@@ -156,9 +156,6 @@ servers add a second host with its own chain.
 
 - Integrate frozen per-run discovery, schemas and remote calls into the event
   loop, history/journal notices, native-only fallback and Stop.
-- Make JSON parsing, duplicate validation and schema/result processing
-  resumable within the 8 KiB parsing budget. The diagnostic currently bounds
-  I/O per step but parses each completed message synchronously.
 - Redact decoded credential values and JSON-escaped reflections across all
   model-visible schemas, results and server messages. The diagnostic's
   body-free logging avoids that exposure; its plain-text redaction helper

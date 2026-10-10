@@ -247,13 +247,14 @@ by the same 8 KiB configuration cap.
 | Discovery | 8 pages / 64 entries | Entire discovery; duplicates or budget exhaustion invalidate it. |
 | Exposed tools | 8 / 16 KiB schemas | Frozen registry; original and mapped names bounded to 63 bytes. |
 | Selection | 8 names | Explicit configuration selection; empty selects none. |
-| JSON object keys | 8 KiB / 4096 per object | Duplicates are found by sorting decoded keys, not by pairwise comparison. |
+| JSON object keys | 8 KiB / 4096 per object | Duplicates are found by hashing decoded keys into a per-object table, not by pairwise comparison. |
 | Server replies | 4 × 2 KiB | Pending ping/error replies; overflow fails rather than dropping. |
 | Session / cursor | 1023 bytes | Session visible ASCII; cursor encoded as JSON. |
 | Discovery deadline | 30 s total | Initialize, acknowledgment and all pages. |
 | Call deadline | 120 s | One sequential call, no retry. |
 | Cancellation grace | 5 s | Best-effort notification; never claims server work stopped. |
 | Network work | 4 × 2 KiB reads / step | Only one exchange is read per step. |
+| Processing work | 8 KiB units / step (`MCP_WORK_BUDGET`) | One received message is parsed, key-checked, classified and then initialized, discovered or call-checked. A step either reads or processes. |
 
 Stop/deadline cleanup drains an outstanding OT connect before freeing its
 context, to avoid the known #34 early-abort crash. This cleanup may outlast the
@@ -266,9 +267,25 @@ configuration parsing.
 
 The streaming decoder retains a bounded current line/message rather than the
 whole HTTP exchange, and finishes as soon as the matching response arrives.
-The protocol diagnostic still parses a completed JSON message synchronously;
-resumable parsing and result processing within 8 KiB per step are required
-before application integration. The separate acknowledgment connection adds
+Message processing is resumable (`McpWork` in `mcp.h`; `json.h` for the
+parser, key checker, member picker and decoder). A unit is an input byte, a
+token, key or hash-table slot touched, or a byte copied; a step stops before
+an atom that would overrun the budget (atoms are at most 24 units; a member
+scan reserves `JSON_PICK_NEED`, 1536) but always completes one, so no step
+exceeds 8 KiB. Duplicate keys are found with one hash table per object
+(`JSON_UNIQUE_SLOTS`, 16 KiB of `uint16_t`, owned by the `McpWork`), so the
+work is linear in key bytes. Descriptions are decoded, redacted
+(`McpRedact`, one comparison per unit) and quoted, and schemas are copied
+256 bytes per atom after their size is checked, so a schema that cannot fit
+is refused unread. The SSE decoder keeps no line buffer: each byte is O(1)
+and a `data` value goes straight into the 64 KiB message, which is handed back
+unprocessed. The matching response stays in that message buffer until the next
+exchange (`mcp_client_response`), replacing the former 64 KiB copy, the 64 KiB
+line buffer and two static token arrays. Stop abandons the work between steps
+and clears a half-built registry; pending OT connects drain exactly as before.
+Request construction still touches at most the 8 KiB of arguments and the 8 KiB
+header block once per exchange, and the diagnostic's own final summary of a
+search result remains synchronous. The separate acknowledgment connection adds
 TLS allocations, so its footprint must also be measured on the guest.
 The future retained-result cap is 128 KiB, while the existing tool
 result and 8 KiB argument caps will remain unchanged. Result artifacts and
