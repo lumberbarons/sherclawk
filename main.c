@@ -132,6 +132,7 @@ static int gOTOpen = 0;
 static int gExchangeDrain = 0;
 static char gHandoffSummary[8192], gHandoffPath[256];
 static uint32_t gStartTicks;
+static uint32_t gDrainStartTicks;  /* separate from the run timer, which aborts leave alone */
 static RoundTiming gRoundTiming;
 static uint32_t gToolStart;
 static void FocusSet(TEHandle te);
@@ -359,20 +360,33 @@ static void CloseChatContext(void)
 /*
  * Abort teardown. A live exchange is never torn down mid-connect: classic OT
  * can fault when an async connect is outstanding (type-3 failures on Stop a
- * fraction of a second after Send). Mark it for the loop's bounded drain
- * instead; DrainAbandonedExchange closes it once network_step reaches a
- * terminal state. One path for the lookup, send and handoff aborts.
+ * fraction of a second after Send). While the connect or handshake is still
+ * pending, mark the exchange for the loop's bounded drain, which only lets it
+ * settle: it never writes the request or reads a response, so Stop does not
+ * finish sending the prompt. An exchange that is already connected or
+ * terminal has nothing outstanding and closes at once. One path for the
+ * lookup, send and handoff aborts.
  */
+static int ExchangeConnecting(void)
+{
+    MacTLS_State state;
+    if (!gNet.ctx || gNet.result) return 0;
+    state = MacTLS_GetState(gNet.ctx);
+    return state == kMacTLS_Idle || state == kMacTLS_Connecting ||
+           state == kMacTLS_Handshaking;
+}
+
+static void BeginExchangeDrain(void)
+{
+    if (gExchangeDrain) return;
+    gExchangeDrain = 1;
+    gDrainStartTicks = (uint32_t)TickCount();
+}
+
 static void AbandonChatContext(void)
 {
-    if (gNet.ctx) {
-        if (!gExchangeDrain) {
-            gExchangeDrain = 1;
-            gStartTicks = (uint32_t)TickCount();
-        }
-        return;
-    }
-    if (gOTOpen) CloseChatContext();  /* no live exchange: teardown is safe */
+    if (ExchangeConnecting()) { BeginExchangeDrain(); return; }
+    if (gNet.ctx || gOTOpen) CloseChatContext();
 }
 
 /* Teardown after a cleanly completed model round. Only this path may leave OT
@@ -1036,10 +1050,7 @@ static void ShowPreferences(void)
                  * classic OT can fault when a connect is torn down mid-flight.
                  * The main loop owns the exchange from here, so this pass must
                  * not step it again. */
-                if (d->fetch || d->draining) {
-                    gExchangeDrain = 1;
-                    gStartTicks = (uint32_t)TickCount();
-                }
+                if (d->fetch || d->draining) BeginExchangeDrain();
                 done = 1;
             } else if (item == kPrefsFindItem) {
                 PrefsFind(d);
@@ -2491,18 +2502,24 @@ static void DriveChatStep(void)
     case RUN_HANDOFF: StepModelExchange(); break;
     }
 }
-/* An abandoned exchange keeps its context alive until network_step reaches a
- * terminal state; closing it here avoids tearing OT down mid-connect. The
- * deadline is the backstop for an exchange that never terminalizes. */
+/* An abandoned exchange keeps its context alive until its connect settles
+ * (connected, errored or closed); closing it here avoids tearing OT down
+ * mid-connect. It only pumps: no request is written and nothing is read. The
+ * deadline is the backstop for a connect that never settles; Certainly owns
+ * the connect timeout, so reaching it is logged as a forced close. */
 static void DrainAbandonedExchange(void)
 {
-    int result;
+    int expired;
     if (!gExchangeDrain) return;
-    result = network_step(&gNet);
-    if (result != 0 || (uint32_t)TickCount() - gStartTicks > 30UL * 60UL) {
-        CloseChatContext();
-        gExchangeDrain = 0;
+    expired = (uint32_t)TickCount() - gDrainStartTicks > 30UL * 60UL;
+    if (ExchangeConnecting() && !expired) {
+        MacTLS_Pump(gNet.ctx);
+        return;
     }
+    if (expired && ExchangeConnecting())
+        LogLine("Abandoned exchange still connecting after 30 s; forcing close.");
+    CloseChatContext();
+    gExchangeDrain = 0;
 }
 
 int main(void)
@@ -2539,9 +2556,14 @@ int main(void)
     LogRoundTiming("abort");
     if (gAgent.active) AbortChat("Application quit.");
     else AbandonChatContext();  /* a stopped lookup/handoff, or a pending drain */
-    while (gExchangeDrain) {
-        WaitNextEvent(everyEvent, &event, 1, NULL);
-        DrainAbandonedExchange();
+    if (gExchangeDrain) {
+        /* The window would go stale while the loop ignores events, so hide it;
+         * the drain is bounded by its own 30 s backstop. */
+        HideWindow(gWindow);
+        while (gExchangeDrain) {
+            WaitNextEvent(everyEvent, &event, 1, NULL);
+            DrainAbandonedExchange();
+        }
     }
     if (gNet.ctx || gOTOpen) CloseChatContext();
     selfbuild_close();

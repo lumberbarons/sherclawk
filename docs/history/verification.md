@@ -544,10 +544,13 @@ Preferences. Command-Return sends and Command-Period stops; the tightest stops
 were two QMP `send-key` chords 15 ms apart, so the abort could land at tick 1,
 before the first TCP connect mark.
 
-The session log's abort lines show Stop landing at tick 17, 4, 1 and 2 after a
-send, the handoff stop at tick 4, and quit at tick 1. The `connect=-` lines are
-the pre-fix crash window — the close was deferred while the DNS/TCP connect was
-still outstanding:
+The session log's abort lines show the close landing at tick 4, 1 and 2 after
+the round aborts, tick 4 after the handoff stop and tick 1 after quit. The
+`connect=-` lines are the window where the connect had not yet been marked; the
+close was deferred until it settled. The pre-fix crash was not re-run as a
+control. These lines predate the pump-only drain (no request is sent while
+draining; connected exchanges close at once), so that guest gate needs a rerun
+before it is treated as covering the current code:
 
 ```text
 round=1 init=0 connect=3 handshake=- sent=- first_byte=- done=- close=4 up=0 down=0 end=abort

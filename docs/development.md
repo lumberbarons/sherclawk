@@ -328,7 +328,9 @@ tightest reproducible stop is two QMP `send-key` chords about 15 ms apart. The
 abort line should carry `end=abort` with no `sent` tick (`connect=-` when the
 stop landed before the first TCP connect mark), the app must stay running, and
 a later request must still complete. Save Handoff and Command-Q during a
-request take the same drain. The recorded guest outcome is in the
+request take the same drain. It applies only while the connect or handshake
+is pending and never sends the request; Command-Q hides the window while it
+waits. The recorded guest outcome is in the
 [verification history](history/verification.md#abort-mid-connect-drain-october-10-2026).
 
 ### Owned application Quit diagnostic
