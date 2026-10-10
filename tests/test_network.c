@@ -37,9 +37,10 @@ int MacTLS_Read(MacTLS_Context *c, void *out, size_t len)
     return (int)n;
 }
 void MacTLS_Close(MacTLS_Context *c) { assert(c == &context); closes++; }
+/* Distinguishable sentinels: the formatted error must carry all three fields. */
 MacTLS_Error MacTLS_GetError(const MacTLS_Context *c) { (void)c; return kMacTLS_ErrRead; }
-int MacTLS_GetBearSSLError(const MacTLS_Context *c) { (void)c; return 0; }
-OSStatus MacTLS_GetOTError(const MacTLS_Context *c) { (void)c; return 0; }
+int MacTLS_GetBearSSLError(const MacTLS_Context *c) { (void)c; return -4242; }
+OSStatus MacTLS_GetOTError(const MacTLS_Context *c) { (void)c; return -3155; }
 MacTLS_Version MacTLS_GetVersion(const MacTLS_Context *c) { (void)c; return kMacTLS_Version12; }
 static void reset(void)
 {
@@ -51,9 +52,10 @@ int main(void)
 {
     int i;
     reset(); assert(network_start(&net, "request", 7) == 0);
-    state = kMacTLS_Handshaking; assert(network_step(&net) == 0 && !writes);
+    state = kMacTLS_Handshaking;
+    assert(network_step(&net) == 0 && !writes && pumps == 1);
     state = kMacTLS_Connected;
-    assert(network_step(&net) == 0 && net.sent == 3);
+    assert(network_step(&net) == 0 && net.sent == 3 && pumps == 2);
     write_result = 0; assert(network_step(&net) == 0 && net.sent == 3);
     write_result = 3; assert(network_step(&net) == 0 && net.sent == 6);
     response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}";
@@ -63,9 +65,11 @@ int main(void)
     network_close(&net); assert(closes == 1 && !net.ctx);
     for (i = 0; i < (int)sizeof(net.request); i++) assert(!net.request[i]);
     reset(); assert(network_start(&net, "x", 1) == 0); write_result = -1;
-    assert(network_step(&net) == -1 && strstr(net.error, "write")); network_close(&net);
+    assert(network_step(&net) == -1 && strstr(net.error, "write") && pumps == 1); network_close(&net);
     assert(network_start(&net, "x", 1) == 0); /* Reuse after failure. */
-    state = kMacTLS_Error; assert(network_step(&net) == -1 && strstr(net.error, "TLS error")); network_close(&net);
+    state = kMacTLS_Error;
+    assert(network_step(&net) == -1 && pumps == 2);
+    assert(strstr(net.error, "TLS error: code=6 bssl=-4242 OT=-3155")); network_close(&net);
     reset(); create_fail = 1; assert(network_start(&net, "x", 1) == -1);
     reset(); assert(network_start(&net, "x", 1) == 0);
     state = kMacTLS_Closed; assert(network_step(&net) == -1); network_close(&net);
