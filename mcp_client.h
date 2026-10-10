@@ -36,7 +36,8 @@ int mcp_client_call(McpClient *c, const char *mapped_name, const char *arguments
 int mcp_client_step(McpClient *c, unsigned long ticks);
 void mcp_client_stop(McpClient *c, unsigned long ticks);
 /* The verified JSON-RPC response of a completed call, valid until the next
- * call or close; empty in every other state. */
+ * call or close; empty in every other state. Its result or error has been
+ * redacted in place: no configured credential or session ID remains. */
 const char *mcp_client_response(const McpClient *c);
 /* Returns 1 while an outstanding OT connect must drain. Continue step until
  * terminal before shutting down Open Transport or reusing this client. */

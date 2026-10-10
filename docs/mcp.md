@@ -3,7 +3,8 @@
 The protocol core and native diagnostic for #76 are implemented, and the
 application has a configuration editor (**Edit ▸ MCP Servers…**). The agent
 does not use the configuration yet: discovery, tools and results are not wired
-into the run loop. The OS 9.2.2 Tavily diagnostic gate passed on October 10,
+into the run loop. The client already redacts credentials from everything it
+would hand on (see [Credential redaction](#credential-redaction)). The OS 9.2.2 Tavily diagnostic gate passed on October 10,
 2026 (see [guest evidence](history/verification.md#mcp-tavily-diagnostic-october-10-2026)).
 Agent integration and release acceptance remain separate gates.
 
@@ -143,6 +144,53 @@ annotations are server claims, not proof of safety. Native schemas are not yet
 combined with these schemas. Unsupported individual tools are skipped with a
 registry notice; ambiguous or over-budget discovery clears the whole registry.
 
+## Credential redaction
+
+A server can reflect what it was sent: a header value in an error, the session
+ID in a description, the API key inside a JSON document echoed as tool content.
+Everything the client keeps for the model is redacted first, in place and
+length-preserving (`*` for each replaced byte), by the resumable `McpRedact`
+in `mcp_config.c`.
+
+**What counts as a credential.** Every configured header value, and the part of
+it after the first space (so `Bearer abc` also redacts `abc`), every query
+value of at least eight characters, and the session ID. Values shorter than
+that in a query are left alone because redacting them would mangle unrelated
+text; a short *header* value is still redacted wherever it appears, so give
+headers distinctive values.
+
+**Which spellings.** Plain text; the credential as a JSON string spells it
+(`\"`, `\\`, `\/`, or `\u00XX` in either hex case for any character); and, in
+raw JSON, as a JSON document inside a string spells it (the same escaping
+applied twice). Other encodings (URL, base64, case changes, text split by the
+server) and deeper nesting are not recognised. This is protection against
+reflection, not against a server that is trying to smuggle the key out.
+
+**Where it applies.**
+
+| Text | Treatment |
+|---|---|
+| Tool descriptions | Decoded, redacted as text, then quoted. |
+| Input schemas | Copied verbatim, then redacted as raw JSON before they are published: nested descriptions, defaults, enums and property names. |
+| Tool names | A name containing a credential is skipped with a registry notice; a name cannot be rewritten because the call uses it verbatim. |
+| Call results and errors | `MCP_STAGE_CALL` rewrites the `result` or `error` member of the response in the stream's message buffer, so `mcp_client_response` never holds the original. Server errors, tool content, structured content and `isError` payloads are all inside that member. |
+| Server instructions, `serverInfo`, notifications, server requests | Never retained or shown; instructions are not propagated. |
+
+Raw JSON is searched only inside strings and a match is made of whole escape
+sequences, so a redacted message has exactly the same tokens at the same
+offsets and never gains or loses a quote. Object keys are strings too, so a
+credential used as a key is replaced there as well. The classification and the
+`isError` flag are read before the rewrite. `mcp_client_response` is empty
+unless the call completed, so a Stop or the call deadline during the rewrite
+never exposes a partly redacted message, and closing the client clears the
+buffer. The envelope (`jsonrpc`, `id`) is outside the rewritten member.
+
+Cost is message length times the credentials times the spellings searched, in
+steps of `MCP_WORK_BUDGET` units; see [limits](limits.md#mcp-diagnostic-limits-mcph-mcp_clienth).
+The fixtures are `tests/test_mcp_redact.c` (against an independent reference
+matcher, with decode-and-search oracles for escaped and nested spellings) and
+the reflection case in `tests/test_mcp_client.c`.
+
 ## TLS trust anchors
 
 Certainly bakes a fixed set of root CA certificates into the build; they are
@@ -156,10 +204,6 @@ servers add a second host with its own chain.
 
 - Integrate frozen per-run discovery, schemas and remote calls into the event
   loop, history/journal notices, native-only fallback and Stop.
-- Redact decoded credential values and JSON-escaped reflections across all
-  model-visible schemas, results and server messages. The diagnostic's
-  body-free logging avoids that exposure; its plain-text redaction helper
-  alone is not sufficient for production result retention.
 - Add immutable verified result artifacts, session-scoped IDs and
   `read_mcp_result`, with UTF-8/escaped-output pagination and fault tests.
 - Demonstrate model-triggered search with source links, extraction and
