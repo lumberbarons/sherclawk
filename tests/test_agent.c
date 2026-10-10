@@ -25,6 +25,117 @@ static void begin(void)
     agent_reset(&a, journal, NULL);
     assert(!agent_begin(&a, "Inspect my files", error, sizeof(error)));
 }
+/* Every request body the tests build is parsed and pinned by structure, so a
+ * wrong model, role, message order or tool schema cannot hide behind the
+ * substrings the individual assertions look for. */
+static JsonToken wire[65536];
+static char decoded[CHAT_REQUEST_CAP];
+static const char *const tool_names[] = {
+    "get_environment", "list_files", "read_text", "search_text", "write_text", "edit_text",
+    "create_folder", "create_project", "build_project", "read_build_log", "run_application",
+    "quit_application", "get_file_info", "resolve_alias", "list_processes", "list_fonts",
+    "measure_text", "list_resources", "read_resource", "view_image",
+};
+static int member(int object, const char *key)
+{
+    int at = json_member(req, wire, object, key);
+    assert(at >= 0);
+    return at;
+}
+static int element(int array, int n)
+{
+    int at = array + 1;
+    assert(wire[array].type == JSON_ARRAY);
+    while (n-- > 0) { assert(at < wire[array].next); at = wire[at].next; }
+    assert(at < wire[array].next);
+    return at;
+}
+static int length_of(int array)
+{
+    int at, n = 0;
+    assert(wire[array].type == JSON_ARRAY);
+    for (at = array + 1; at < wire[array].next; at = wire[at].next) n++;
+    return n;
+}
+static int is_text(int at, const char *want)
+{
+    return json_string(req, wire, at, decoded, sizeof(decoded)) >= 0 && !strcmp(decoded, want);
+}
+static int is_primitive(int at, const char *want)
+{
+    return wire[at].type == JSON_PRIMITIVE && (size_t)(wire[at].end - wire[at].start) == strlen(want) &&
+           !memcmp(req + wire[at].start, want, strlen(want));
+}
+static int message(int messages, int n, const char *role)
+{
+    int at = element(messages, n);
+    assert(wire[at].type == JSON_OBJECT && is_text(member(at, "role"), role));
+    return at;
+}
+/* Parses req as a request for `model`; returns its messages array. */
+static int parse_request(int length, const char *model)
+{
+    int messages;
+    assert(length > 0 && json_parse(req, (size_t)length, wire, 65536) > 0 && wire[0].type == JSON_OBJECT);
+    assert(is_text(member(0, "model"), model) && is_primitive(member(0, "stream"), "false"));
+    messages = member(0, "messages");
+    assert(wire[messages].type == JSON_ARRAY && length_of(messages) > 0);
+    return messages;
+}
+/* Each registered tool appears exactly once, whatever the order, as a function
+ * with a description and an object parameter schema. */
+static void check_tool_schemas(int tools)
+{
+    enum { TOOLS = sizeof(tool_names) / sizeof(*tool_names) };
+    int seen[TOOLS] = {0}, i, j;
+    assert(wire[tools].type == JSON_ARRAY && length_of(tools) == TOOLS);
+    for (i = 0; i < TOOLS; i++) {
+        int tool = element(tools, i), function = member(tool, "function"), parameters = member(function, "parameters");
+        assert(is_text(member(tool, "type"), "function"));
+        assert(json_string(req, wire, member(function, "name"), decoded, sizeof(decoded)) > 0);
+        for (j = 0; j < TOOLS && strcmp(decoded, tool_names[j]); j++) {}
+        assert(j < TOOLS && !seen[j]);
+        seen[j] = 1;
+        assert(json_string(req, wire, member(function, "description"), decoded, sizeof(decoded)) > 0 && *decoded);
+        assert(is_text(member(parameters, "type"), "object") && wire[member(parameters, "properties")].type == JSON_OBJECT);
+    }
+}
+/* The shape every agent_request / agent_request_image body shares: the system
+ * message first, only known roles after it, every tool result tied to a call id
+ * and the full tool schema list. Returns `length` so asserts can wrap a build. */
+static int pin(int length)
+{
+    int messages, i, n;
+    if (length <= 0) return length;
+    messages = parse_request(length, "model");
+    assert(is_primitive(member(0, "parallel_tool_calls"), "false") && wire[member(0, "max_tokens")].type == JSON_PRIMITIVE);
+    n = length_of(messages);
+    assert(n >= 2);
+    message(messages, 0, "system");
+    assert(json_string(req, wire, member(element(messages, 0), "content"), decoded, sizeof(decoded)) > 0);
+    for (i = 1; i < n; i++) {
+        int at = element(messages, i), role = member(at, "role");
+        assert(!is_text(role, "system"));
+        assert(is_text(role, "user") || is_text(role, "assistant") || is_text(role, "tool"));
+        if (is_text(role, "tool")) assert(json_string(req, wire, member(at, "tool_call_id"), decoded, sizeof(decoded)) > 0);
+    }
+    check_tool_schemas(member(0, "tools"));
+    return length;
+}
+/* A handoff request carries the history, no tools, and asks for the summary last. */
+static int pin_handoff(int length)
+{
+    int messages, n;
+    if (length <= 0) return length;
+    messages = parse_request(length, "model");
+    n = length_of(messages);
+    assert(n >= 3 && json_member(req, wire, 0, "tools") < 0 && json_member(req, wire, 0, "parallel_tool_calls") < 0);
+    message(messages, 0, "system");
+    assert(json_string(req, wire, member(element(messages, 0), "content"), decoded, sizeof(decoded)) > 0 &&
+           strstr(decoded, "Summarize this conversation"));
+    assert(is_text(member(message(messages, n - 1, "user"), "content"), "Write the handoff summary now."));
+    return length;
+}
 static void named_call(const char *finish, const char *name, const char *arguments)
 {
     char quoted[2048];
@@ -121,7 +232,7 @@ static void truncation(void)
     assert(a.truncated && a.limited && a.active && !a.count && !a.next);
     assert(a.rounds == 1 && !a.tool_count && records == 2 && a.messages == 2);
     assert(a.used > used && !strstr(a.history, "get_environment") && strstr(a.history, "cut off"));
-    assert(agent_request(&a, "model", req, sizeof(req)) > 0 && strstr(req, "output token limit"));
+    assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0 && strstr(req, "output token limit"));
     /* The retry is an ordinary round and clears the flag. */
     call("tool_calls");
     assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
@@ -184,7 +295,7 @@ static void rejections(void)
     assert(a.discarded && strstr(a.discarded, "arguments") && !a.truncated && !a.limited);
     assert(a.active && !a.count && !a.next && a.rounds == 1 && !a.tool_count && records == 2);
     assert(a.used > used && !strstr(a.history, "c1") && strstr(a.history, "split"));
-    assert(agent_request(&a, "model", req, sizeof(req)) > 0 && strstr(req, "4096"));
+    assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0 && strstr(req, "4096"));
     /* The retry is an ordinary round and clears the flag. */
     call("tool_calls");
     assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
@@ -296,7 +407,6 @@ static void image_fixture(AgentImage *image, size_t length)
  * right after it, and is journalled and summarized as a short note. */
 static void images(void)
 {
-    static JsonToken wire[8192];
     static char encoded[AGENT_IMAGE_CAP * 2], expected[256];
     AgentImage image;
     const char *tool, *picture, *note;
@@ -319,9 +429,8 @@ static void images(void)
     assert(!strstr(a.history, "image_url") && !strstr(a.history, "base64"));
     assert(a.image_length == a.used - before - 1);
     /* The request after the attach splices the real image in place of the note. */
-    parsed = agent_request_image(&a, "model", &image, req, sizeof(req));
+    parsed = pin(agent_request_image(&a, "model", &image, req, sizeof(req)));
     assert(parsed > 0);
-    assert(json_parse(req, (size_t)parsed, wire, 8192) > 0);
     assert(base64_encode(png_bytes, 100, encoded, sizeof(encoded)) == BASE64_LENGTH(100));
     snprintf(expected, sizeof(expected), "\"url\":\"data:image/png;base64,%.8s", encoded);
     picture = strstr(req, "\"type\":\"image_url\"");
@@ -330,23 +439,34 @@ static void images(void)
     note = strstr(req, "\"type\":\"text\",\"text\":\"view_image: Apps:Putt:frame1.png");
     assert(tool && note && tool < note && note < picture);
     assert(strstr(req, "\"role\":\"user\",\"content\":[{\"type\":\"text\""));
+    {
+        int messages = member(0, "messages"), count = length_of(messages);
+        int content = member(message(messages, count - 1, "user"), "content"), text = element(content, 0), image_part = element(content, 1);
+        assert(count == 5 && length_of(content) == 2);
+        message(messages, count - 2, "tool");
+        assert(is_text(member(text, "type"), "text") && json_string(req, wire, member(text, "text"), decoded, sizeof(decoded)) > 0);
+        assert(!strncmp(decoded, "view_image: Apps:Putt:frame1.png", 32));
+        assert(is_text(member(image_part, "type"), "image_url") &&
+               json_string(req, wire, member(member(image_part, "image_url"), "url"), decoded, sizeof(decoded)) > 0);
+        assert(!strncmp(decoded, "data:image/png;base64,", 22) && !strcmp(decoded + 22, encoded));
+    }
     /* Only one image per request and it is the last message. */
     assert(!strstr(picture + 10, "\"type\":\"image_url\"") && strstr(picture, "\"}}]}],\"tools\":"));
     /* Without the pixels at hand the note is sent as plain text. */
-    assert(agent_request_image(&a, "model", NULL, req, sizeof(req)) > 0 && !strstr(req, "image_url"));
-    assert(agent_request(&a, "model", req, sizeof(req)) > 0 && !strstr(req, "image_url") && strstr(req, "frame1.png"));
+    assert(pin(agent_request_image(&a, "model", NULL, req, sizeof(req))) > 0 && !strstr(req, "image_url"));
+    assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0 && !strstr(req, "image_url") && strstr(req, "frame1.png"));
     /* A request too small for the encoded image fails rather than truncating. */
-    parsed = agent_request(&a, "model", req, sizeof(req));
+    parsed = pin(agent_request(&a, "model", req, sizeof(req)));
     assert(parsed > 0 && agent_request_image(&a, "model", &image, req, (size_t)parsed + 10) == -1);
     /* Once the model has answered, later requests keep the note only. */
     assert(!agent_response(&a, "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"A green.\"}}]}",
                            strlen("{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"A green.\"}}]}"),
                            200, error, sizeof(error)));
     assert(!a.image_pending);
-    assert(agent_handoff_request(&a, "model", req, sizeof(req)) > 0);
+    assert(pin_handoff(agent_handoff_request(&a, "model", req, sizeof(req))) > 0);
     assert(!strstr(req, "image_url") && !strstr(req, "base64") && strstr(req, "frame1.png"));
     assert(!agent_begin(&a, "And now?", error, sizeof(error)));
-    assert(agent_request_image(&a, "model", &image, req, sizeof(req)) > 0 && !strstr(req, "image_url") && strstr(req, "frame1.png"));
+    assert(pin(agent_request_image(&a, "model", &image, req, sizeof(req))) > 0 && !strstr(req, "image_url") && strstr(req, "frame1.png"));
     /* Stop and a fresh user turn both drop a pending image. */
     begin(); named_call("tool_calls", "view_image", "{\"path\":\"x\"}");
     assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
@@ -519,11 +639,11 @@ static void instructions(void)
     int i;
     begin();
     agent_set_instructions(NULL);
-    baseline = agent_request(&a, "model", req, sizeof(req));
+    baseline = pin(agent_request(&a, "model", req, sizeof(req)));
     assert(baseline > 0 && !strstr(req, "Prefer tabs") && !strstr(req, "Workspace instructions"));
     /* Set text lands inside the one system message, JSON-escaped, before any history. */
     assert(agent_set_instructions(rules) == 0);
-    with = agent_request(&a, "model", req, sizeof(req));
+    with = pin(agent_request(&a, "model", req, sizeof(req)));
     assert(with > baseline);
     system = strstr(req, "\"role\":\"system\""); first = strstr(req, "Inspect my files");
     assert(system && first && strstr(req, "Workspace instructions") && strstr(req, "Prefer tabs over spaces.\\u000aKeep functions short."));
@@ -534,17 +654,17 @@ static void instructions(void)
     assert(agent_request(&a, "model", req, with - 1) == -1);
     /* It survives New Chat (agent_reset) and handoff; the app reloads it per chat. */
     begin();
-    assert(agent_request(&a, "model", req, sizeof(req)) == with);
+    assert(pin(agent_request(&a, "model", req, sizeof(req))) == with);
     assert(!agent_stop(&a, "done") && !a.active);
-    assert(agent_handoff_request(&a, "model", req, sizeof(req)) > 0 && !strstr(req, "Prefer tabs"));
+    assert(pin_handoff(agent_handoff_request(&a, "model", req, sizeof(req))) > 0 && !strstr(req, "Prefer tabs"));
     /* Empty and NULL clear; an over-long text is refused and leaves the old one. */
     memset(text, 'x', AGENT_INSTRUCTIONS_CAP); text[AGENT_INSTRUCTIONS_CAP] = 0;
     assert(agent_set_instructions(text) == 0);
     text[AGENT_INSTRUCTIONS_CAP] = 'x'; text[AGENT_INSTRUCTIONS_CAP + 1] = 0;
     assert(agent_set_instructions(text) == -1);
-    begin(); assert(agent_request(&a, "model", req, sizeof(req)) > 0 && strstr(req, "xxxxxxxx") && !strstr(req, "Prefer tabs"));
+    begin(); assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0 && strstr(req, "xxxxxxxx") && !strstr(req, "Prefer tabs"));
     assert(agent_set_instructions("") == 0);
-    assert(agent_request(&a, "model", req, sizeof(req)) == baseline);
+    assert(pin(agent_request(&a, "model", req, sizeof(req))) == baseline);
     /* The policy says what the file may not do. */
     assert(strstr(req, "cannot override these rules") && strstr(req, "AGENTS.md"));
     /* ...and tells the model to keep an existing file current without inventing one. */
@@ -560,7 +680,7 @@ static void instructions(void)
     assert(agent_project_note(&a, "Putt", "Use Dialog Manager.\nNo globals.") == 0 && records == 1);
     assert(!strcmp(last_event, "project_instructions") && agent_project_seen(&a, "Putt") == 1);
     assert(agent_project_note(&a, "Putt", "Other text.") == 0 && records == 1 && !strstr(a.history, "Other text."));
-    assert(agent_request(&a, "model", req, sizeof(req)) > 0);
+    assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0);
     tool = strstr(req, "\"tool_call_id\":\"c1\""); note = strstr(req, "Putt:AGENTS.md");
     assert(tool && note && tool < note && strstr(req, "Use Dialog Manager.\\u000aNo globals."));
     assert(strstr(req, "{\"role\":\"user\",\"content\":\"Project instructions from Putt:AGENTS.md"));
@@ -591,21 +711,63 @@ static void instructions(void)
     assert(!agent_tool_result(&a, "ok", error, sizeof(error)));
     assert(agent_project_seen(&a, name) == 1 && agent_project_seen(&a, "") == 1);
 }
+/* One tool round, read back from the parsed wire body: the literal model, the
+ * roles in order, the call id echoed by the tool result, and the schemas. */
+static void wire_shape(void)
+{
+    const char *final = "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Inspected.\"}}]}";
+    int messages, assistant, tool_calls, function;
+    begin(); call("tool_calls");
+    assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
+    assert(!agent_tool_result(&a, "{\"status\":\"ok\",\"text\":\"caf\xc3\xa9\"}", error, sizeof(error)));
+    messages = parse_request(agent_request(&a, "vendor/other-model", req, sizeof(req)), "vendor/other-model");
+    check_tool_schemas(member(0, "tools"));
+    assert(length_of(messages) == 4);
+    assert(json_string(req, wire, member(message(messages, 0, "system"), "content"), decoded, sizeof(decoded)) > 0 && *decoded);
+    assert(is_text(member(message(messages, 1, "user"), "content"), "Inspect my files"));
+    /* The assistant turn is sent back as received: no text, one call with its id. */
+    assistant = message(messages, 2, "assistant");
+    assert(is_primitive(member(assistant, "content"), "null"));
+    tool_calls = member(assistant, "tool_calls");
+    assert(length_of(tool_calls) == 1);
+    function = member(element(tool_calls, 0), "function");
+    assert(is_text(member(element(tool_calls, 0), "id"), "c1") && is_text(member(function, "name"), "get_environment"));
+    assert(is_text(member(function, "arguments"), "{}"));
+    /* The result answers that id as a tool message, never a user one. */
+    assert(is_text(member(message(messages, 3, "tool"), "tool_call_id"), "c1"));
+    assert(is_text(member(element(messages, 3), "content"), "{\"status\":\"ok\",\"text\":\"caf\xc3\xa9\"}"));
+    /* The next turn follows the answer, in order. */
+    assert(!agent_response(&a, final, strlen(final), 200, error, sizeof(error)));
+    assert(!agent_begin(&a, "What did you find?", error, sizeof(error)));
+    messages = parse_request(agent_request(&a, "model", req, sizeof(req)), "model");
+    assert(length_of(messages) == 6);
+    message(messages, 0, "system"); message(messages, 1, "user"); message(messages, 2, "assistant");
+    message(messages, 3, "tool"); message(messages, 4, "assistant"); message(messages, 5, "user");
+    assert(is_text(member(element(messages, 4), "content"), "Inspected."));
+    assert(is_text(member(element(messages, 5), "content"), "What did you find?"));
+    /* A handoff request replays that history without tools, then asks for the summary. */
+    assert(!agent_stop(&a, "done"));
+    messages = parse_request(agent_handoff_request(&a, "vendor/other-model", req, sizeof(req)), "vendor/other-model");
+    assert(length_of(messages) == 7 && json_member(req, wire, 0, "tools") < 0);
+    message(messages, 0, "system"); message(messages, 3, "tool");
+    assert(is_text(member(message(messages, 6, "user"), "content"), "Write the handoff summary now."));
+}
 int main(void)
 {
     const char *final = "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Inspected.\"}}]}";
     size_t used, i;
     instructions();
+    wire_shape();
     begin();
-    assert(agent_request(&a, "model", req, sizeof(req)) > 0);
+    assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0);
     assert(strstr(req, "\"tools\"") && strstr(req, "\"role\":\"system\"") && strstr(req, "write_text") && strstr(req, "create_project") && strstr(req, "create_folder") && strstr(req, "edit_text") && strstr(req, "search_text") && strstr(req,"build_project") && strstr(req,"read_build_log") && strstr(req,"view_image") && strstr(req,"at most 131072 bytes;") && !strstr(req,"131072L"));
     call("tool_calls");
     assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
     assert(a.count == 1 && !a.next && a.active && records == 2);
     assert(!strcmp(a.calls[0].id, "c1") && !strcmp(a.calls[0].arguments, "{}"));
-    assert(agent_request(&a, "model", req, sizeof(req)) == -1);
+    assert(pin(agent_request(&a, "model", req, sizeof(req))) == -1);
     assert(!agent_tool_result(&a, "{\"status\":\"ok\",\"text\":\"caf\xc3\xa9\"}", error, sizeof(error)));
-    assert(agent_request(&a, "model", req, sizeof(req)) > 0);
+    assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0);
     assert(strstr(req, "\"tool_call_id\":\"c1\"") && strstr(req, "caf\xc3\xa9"));
     assert(!agent_response(&a, final, strlen(final), 200, error, sizeof(error)));
     assert(!a.active && a.messages == 4 && records == 4);
@@ -613,6 +775,14 @@ int main(void)
     assert(strstr(a.history, "Inspected."));
     used = a.used;
     assert(agent_response(&a, "{}", 2, 503, error, sizeof(error)) == -1 && a.used == used);
+    /* A well-formed completion is still rejected on a non-2xx status... */
+    assert(agent_response(&a, final, strlen(final), 503, error, sizeof(error)) == -1);
+    assert(strstr(error, "503") && a.used == used);
+    /* ...and an "error" object is rejected on a 2xx status, message preserved. */
+    assert(agent_response(&a, "{\"error\":{\"code\":429,\"message\":\"Upstream rate limited\"}}",
+                          strlen("{\"error\":{\"code\":429,\"message\":\"Upstream rate limited\"}}"),
+                          200, error, sizeof(error)) == -1);
+    assert(strstr(error, "200") && strstr(error, "Upstream rate limited") && a.used == used);
     assert(!agent_stop(&a, "network failed") && a.used == used);
     truncation();
     begin(); call("stop");
@@ -672,7 +842,7 @@ int main(void)
     memset(req, 'x', sizeof(a.history) - a.used - 128);
     req[sizeof(a.history) - a.used - 128] = 0;
     assert(!agent_begin(&a, req, error, sizeof(error)));
-    assert(agent_request(&a, "model", req, sizeof(req)) > AGENT_HISTORY_CAP);
+    assert(pin(agent_request(&a, "model", req, sizeof(req))) > AGENT_HISTORY_CAP);
     assert(strstr(req, "\"tools\"") && strstr(req, "read_build_log"));
     call("tool_calls"); used = a.used;
     assert(agent_response(&a, response, strlen(response), 200, error, sizeof(error)) == -1);
@@ -681,8 +851,16 @@ int main(void)
      * only between runs, and failed candidate persistence cannot clear it. */
     assert(!agent_stop(&a, "history full"));
     saved = a;
-    assert(agent_handoff_request(&a, "model", req, sizeof(req)) > AGENT_HISTORY_CAP);
+    assert(pin_handoff(agent_handoff_request(&a, "model", req, sizeof(req))) > AGENT_HISTORY_CAP);
     assert(!strstr(req, "\"tools\":") && strstr(req, "Write the handoff summary now"));
+    {
+        JsonToken request_tokens[4096];
+        long max_tokens;
+        assert(json_parse(req, strlen(req), request_tokens, 4096) > 0);
+        assert(!json_integer(req, request_tokens,
+            json_member(req, request_tokens, 0, "max_tokens"), &max_tokens));
+        assert(max_tokens == 6000);
+    }
     assert(!memcmp(&a, &saved, sizeof(a)));
     assert(!agent_handoff_response(final, strlen(final), 200, req, sizeof(req), error, sizeof(error)));
     assert(!strcmp(req, "Inspected."));
@@ -691,6 +869,9 @@ int main(void)
     assert(agent_handoff_response(response, strlen(response), 200, req, sizeof(req), error, sizeof(error)) == -1);
     call("length");
     assert(agent_handoff_response(response, strlen(response), 200, req, sizeof(req), error, sizeof(error)) == -1);
+    assert(!*req && strstr(error, "output token limit") && strstr(error, "Conversation retained"));
+    assert(agent_handoff_response(reasoning_only, strlen(reasoning_only), 200, req, sizeof(req), error, sizeof(error)) == -1);
+    assert(!*req && strstr(error, "output token limit") && !memcmp(&a, &saved, sizeof(a)));
     for (i = 0; i < strlen(final); i++)
         assert(agent_handoff_response(final, i, 200, req, sizeof(req), error, sizeof(error)) == -1);
     agent_reset(&candidate, journal, NULL); fail_record = 1;
@@ -700,8 +881,8 @@ int main(void)
     assert(!agent_handoff_seed(&candidate, "# Goal\nBuild a prototype.", "old.jsonl", "handoff.md"));
     assert(candidate.messages == 1 && !candidate.active && strstr(candidate.history, "old.jsonl") && strstr(candidate.history, "handoff.md"));
     assert(!agent_begin(&candidate, "Continue", error, sizeof(error)));
-    assert(agent_handoff_request(&candidate, "model", req, sizeof(req)) == -1);
-    assert(agent_request(&candidate, "model", req, sizeof(req)) > 0 && strstr(req, "Build a prototype"));
+    assert(pin_handoff(agent_handoff_request(&candidate, "model", req, sizeof(req))) == -1);
+    assert(pin(agent_request(&candidate, "model", req, sizeof(req))) > 0 && strstr(req, "Build a prototype"));
     begin(); call("tool_calls");
     a.used = sizeof(a.history) - 10;
     assert(agent_response(&a, response, strlen(response), 200, error, sizeof(error)) == -1);
@@ -720,7 +901,7 @@ int main(void)
     }
     /* The wire request carries the named cap, so docs and code share one value. */
     begin();
-    assert(agent_request(&a, "model", req, sizeof(req)) > 0 && strstr(req, "\"max_tokens\":6000,"));
+    assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0 && strstr(req, "\"max_tokens\":6000,"));
     rejections();
     model_metadata();
     vision_flag();
