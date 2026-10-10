@@ -31,7 +31,7 @@ in the headers today; the headers win if this drifts.
 
 | Limit | Value | Bounds |
 |---|---|---|
-| `CHAT_TRANSCRIPT_CAP` | 30,001 bytes | The TextEdit transcript. Classic TextEdit stops at 32,000 bytes, so this cannot simply be raised. A reply too long for it is journaled but shown as a "see the session file" placeholder. When the next entry does not fit (bytes, or the 1400-line cap), `chat_append_message` drops the oldest text up to a blank line, behind one session-file notice; if no cut makes room, only the notice stays. History and the journal are never touched. |
+| `CHAT_TRANSCRIPT_CAP` | 30,001 bytes | The TextEdit transcript. Classic TextEdit stops at 32,000 bytes, so this cannot simply be raised. A reply too long for it is journaled but shown as a "see the session file" placeholder. When the next entry does not fit (bytes, the 1400-line cap, or `CHAT_ENTRY_MAX` recorded entries), `chat_append_message` drops the oldest whole entries behind one session-file notice; if no cut makes room, only the notice stays. Text with no recorded entry start counts as one entry. History and the journal are never touched. |
 | Request deadline | 120 s | One HTTPS exchange (`StepModelExchange`). |
 | Model catalog deadline | 30 s | The model context-window query and each Preferences catalog fetch (popular page, Find, OK validation). Dragging the dialog restarts it. |
 | Catalog page rows | 10 | `AGENT_MODEL_ROWS_MAX`; the popular, search and validation queries all send `limit=10`. |
