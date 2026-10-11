@@ -5,6 +5,7 @@
 #include "base64.h"
 #include "chat.h"
 #include "json.h"
+#include "mcp.h"
 #include "tools.h"
 #include <stdio.h>
 #include <string.h>
@@ -28,6 +29,8 @@ LIMIT_CHECK(request_holds_history, CHAT_REQUEST_CAP >= AGENT_HISTORY_CAP + 16384
  * history must cover them all (see docs/limits.md). */
 LIMIT_CHECK(request_holds_mcp_schemas,
     CHAT_REQUEST_CAP - AGENT_HISTORY_CAP >= AGENT_MCP_SCHEMA_CAP + AGENT_INSTRUCTIONS_CAP + 16384);
+/* Discovery never admits more rows than the freeze can hold. */
+LIMIT_CHECK(frozen_tools_match_registry, AGENT_MCP_TOOL_MAX == MCP_TOOL_MAX);
 /* A prompt is composed in MacRoman and recorded as UTF-8, up to three bytes each. */
 LIMIT_CHECK(prompt_fits_text, (CHAT_PROMPT_CAP - 1) * 3 + 64 <= AGENT_TEXT_CAP);
 
@@ -173,9 +176,12 @@ int agent_mcp_tool_count(void)
 {
     return mcp_count;
 }
-const char *agent_mcp_tool_name(int i)
+int agent_mcp_tool_frozen(const char *name)
 {
-    return i >= 0 && i < mcp_count ? mcp_names[i] : NULL;
+    int i;
+    for (i = 0; i < mcp_count; i++)
+        if (!strcmp(name, mcp_names[i])) return 1;
+    return 0;
 }
 static int quote(char *out, size_t cap, size_t *at, const char *s)
 {

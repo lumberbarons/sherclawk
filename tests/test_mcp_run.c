@@ -1,9 +1,11 @@
-/* Integration fixture for the MCP run choreography main.c drives: parse the
- * saved configuration, discover eligible tools, freeze the admitted schemas
- * into the model advertisement, dispatch a model-selected remote call with
- * its arguments verbatim, retain the redacted response and page it back. No
- * API key; the fake TLS serves independently authored fixtures and the File
- * Manager model lives in test_mcp_run_fm.c. */
+/* Integration fixture for the run controller main.c drives (mcp_run.c):
+ * load the saved configuration, discover eligible tools, freeze the admitted
+ * schemas into the model advertisement, dispatch a model-selected remote call
+ * with its arguments verbatim, retain the redacted response and page it back,
+ * and stop and drain at each phase. No API key; the fake TLS serves
+ * independently authored fixtures and the File Manager model lives in
+ * test_mcp_run_fm.c. */
+#include "mcp_run.h"
 #include "mcp_client.h"
 #include "mcp_result.h"
 #include "agent.h"
@@ -32,8 +34,6 @@ struct MacTLS_Context {
     MacTLS_State state;
 };
 static struct MacTLS_Context contexts[2];
-static McpClient client;
-static McpConfig config;
 static int creates, closes, lists, calls, cancels;
 static int bad_version, reflect;
 static char error[256];
@@ -145,42 +145,78 @@ int MacTLS_Read(MacTLS_Context *c, void *bytes, size_t len)
 MacTLS_State MacTLS_GetState(const MacTLS_Context *c) { return c->state; }
 void MacTLS_Close(MacTLS_Context *c) { assert(c->used && c->state != kMacTLS_Connecting); c->used = 0; closes++; }
 
-/* ---- Client driver ---- */
+/* ---- Host callbacks ---- */
 static unsigned long ticks = 1;
-static int step(void)
+static int opens, journal_calls;
+static McpRunLoad load_result;
+static const char *config_text;
+static char last_event[64], last_body[512], events[2048];
+
+static const char *tavily_config(void)
 {
-    int r, guard = 0;
-    do {
-        r = mcp_client_step(&client, ++ticks);
-        assert(++guard < 100000);
-    } while (r == 0);
-    return r;
+    return "{\"mcpServers\":{\"tavily\":{\"url\":\"https://mcp.tavily.com/mcp/\",\"headers\":{\"Authorization\":\"Bearer client-secret-key\"}}}}";
 }
-static void parse_config(void)
+static McpRunLoad host_load(char *bytes, size_t cap, size_t *len)
 {
-    const char *s = "{\"mcpServers\":{\"tavily\":{\"url\":\"https://mcp.tavily.com/mcp/\",\"headers\":{\"Authorization\":\"Bearer client-secret-key\"}}}}";
-    memset(&config, 0, sizeof(config));
-    assert(!mcp_config_parse(s, strlen(s), &config, error, sizeof(error)));
+    if (load_result == MCP_RUN_LOAD_OK) {
+        assert(strlen(config_text) < cap);
+        memcpy(bytes, config_text, strlen(config_text) + 1);
+        *len = strlen(config_text);
+    }
+    return load_result;
+}
+static const char *host_workspace(void) { return "Retro68:"; }
+static void host_open(void) { opens++; }
+static unsigned long host_ticks(void) { return ++ticks; }
+static int journal(void *context, const char *event, const char *json)
+{
+    JsonToken tokens[512];
+    (void)context;
+    assert(json_parse(json, strlen(json), tokens, 512) > 0);
+    /* No journal body, notice or retention event may carry a credential. */
+    assert(!strstr(json, "client-secret-key") && !strstr(json, "opaque-session"));
+    journal_calls++;
+    snprintf(last_event, sizeof(last_event), "%s", event);
+    snprintf(last_body, sizeof(last_body), "%s", json);
+    if (strlen(events) + strlen(event) + 2 < sizeof(events)) { strcat(events, event); strcat(events, " "); }
+    return 0;
+}
+static const McpRunHost host = { host_load, host_workspace, host_open, host_ticks, journal, NULL };
+
+/* Settle the client after Stop or a failure, as the event loop's drain does. */
+static void drain(void)
+{
+    int guard = 0;
+    while (mcp_run_drain_pending()) {
+        mcp_run_drain_step();
+        assert(++guard < 10000);
+    }
+    assert(!mcp_run_draining());
 }
 static void reset(void)
 {
-    memset(&client, 0, sizeof(client));
+    mcp_run_end();
+    drain();
     memset(contexts, 0, sizeof(contexts));
-    creates = closes = lists = calls = cancels = 0;
+    creates = closes = lists = calls = cancels = opens = journal_calls = 0;
     bad_version = reflect = 0;
+    events[0] = last_event[0] = last_body[0] = 0;
     assert(agent_set_mcp_schemas(NULL) == 0);
     mcp_result_new_session();
     mcp_run_reset();
-    parse_config();
+    load_result = MCP_RUN_LOAD_OK;
+    config_text = tavily_config();
 }
-/* Discover to READY, mirroring the run loop's discovery state. */
-static void discover_ready(void)
+/* Start the run and step discovery to its end. */
+static McpDiscovery discover(void)
 {
-    int i;
-    assert(mcp_client_discover(&client, &config, ++ticks) == 0);
-    for (i = 0; i < 1600 && !mcp_client_step(&client, ++ticks); i++) {}
-    assert(client.state == MCP_READY && client.registry.count == 2);
-    assert(lists == 2 && !strcmp(client.session, "opaque-session"));
+    McpDiscovery d;
+    int guard = 0;
+    assert(mcp_run_start() == 1 && mcp_run_phase() == MCP_RUN_DISCOVERING);
+    while ((d = mcp_run_discover_step()) == MCP_DISCOVERY_PENDING)
+        assert(++guard < 100000);
+    assert(mcp_run_phase() == MCP_RUN_IDLE);
+    return d;
 }
 
 /* ---- Model round helpers ---- */
@@ -188,17 +224,6 @@ static Agent agent;
 static char req[CHAT_REQUEST_CAP], response[4096], result[AGENT_RESULT_CAP];
 static JsonToken wire[65536];
 static char decoded[16384];
-static int journal_calls;
-static char last_event[64];
-static int journal(void *context, const char *event, const char *json)
-{
-    JsonToken tokens[512];
-    (void)context;
-    assert(json_parse(json, strlen(json), tokens, 512) > 0);
-    journal_calls++;
-    snprintf(last_event, sizeof(last_event), "%s", event);
-    return 0;
-}
 /* The tools array of the latest request carries every native row plus each
  * wanted remote row exactly once. */
 static void request_pins(const char *const *wanted, int count)
@@ -231,36 +256,30 @@ static void model_calls(const char *name, const char *arguments)
     assert(json_quote(arguments, quoted, sizeof(quoted)) > 0);
     n = snprintf(response, sizeof(response), "{\"choices\":[{\"finish_reason\":\"tool_calls\",\"message\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"%s\",\"arguments\":%s}}]}}]}", name, quoted);
     assert(n > 0 && (size_t)n < sizeof(response));
+    assert(!agent_response(&agent, response, strlen(response), 200, error, sizeof(error)));
+    assert(agent.count == 1 && !strcmp(agent.calls[0].name, name));
+    assert(!strcmp(agent.calls[0].arguments, arguments));
 }
 static void begin_run(const char *prompt)
 {
     assert(agent_begin(&agent, prompt, error, sizeof(error)) == 0);
     assert(agent_request(&agent, "model", req, sizeof(req)) > 0);
 }
-/* Retain the completed, redacted client response and hand the model the
- * retention summary, as the run loop's retention state does. */
-static void retain_response(void)
+/* Dispatch the model's call and step it to its end: returns the phases seen
+ * on the way (bit 0 calling, bit 1 retaining). */
+static int run_call(void)
 {
-    McpResultRetain in;
-    const char *body = mcp_client_response(&client);
-    int r, guard = 0;
-    memset(&in, 0, sizeof(in));
-    in.response = body;
-    in.response_len = strlen(body);
-    in.folder = "Retro68:Sherclawk MCP Results:";
-    in.config = &client.config;
-    in.session = client.session;
-    in.journal = journal;
-    in.journal_context = NULL;
-    assert(*body);
-    r = mcp_result_retain_begin(&in, result, sizeof(result));
-    while (r == 2) {
+    int seen = 0, guard = 0;
+    assert(mcp_run_owns(agent.calls[0].name));
+    assert(mcp_run_call(&agent.calls[0], result, sizeof(result)) == 1);
+    assert(mcp_run_phase() == MCP_RUN_CALLING);
+    for (;;) {
+        seen |= mcp_run_phase() == MCP_RUN_CALLING ? 1 : 2;
+        if (mcp_run_call_step(result, sizeof(result))) break;
         assert(++guard < 100000);
-        r = mcp_result_retain_step(result, sizeof(result), 0);
     }
-    assert(r == 0);
-    assert(!strcmp(last_event, "mcp_result_retained"));
-    assert(!agent_tool_result(&agent, result, error, sizeof(error)));
+    assert(mcp_run_phase() == MCP_RUN_IDLE);
+    return seen;
 }
 /* Field helper over the JSON envelopes in `result`. */
 static const char *result_str(const char *key)
@@ -322,37 +341,44 @@ int main(void)
     char id[32], text[4096];
     int n;
 
-    /* ---- Run start: parse, discover, freeze. ---- */
+    mcp_run_init(&host);
+
+    /* ---- Run start: load, discover, freeze. ---- */
     reset();
     reflect = 1;
     begin_run("Search the web for Mac OS 9 notes.");
-    discover_ready();
-    assert(agent_set_mcp_schemas(client.registry.schemas) == 0);
-    assert(agent_mcp_tool_count() == 2);
-    assert(!strcmp(agent_mcp_tool_name(0), "mcp_tavily_tavily_search"));
-    assert(!strcmp(agent_mcp_tool_name(1), "mcp_tavily_tavily_extract"));
+    assert(discover() == MCP_DISCOVERY_ADMITTED);
+    assert(opens == 1 && lists == 2 && mcp_run_admitted() == 2);
+    assert(!strcmp(last_event, "mcp_discovery") || strstr(events, "mcp_discovery"));
+    assert(mcp_run_owns("mcp_tavily_tavily_search") && mcp_run_owns("mcp_tavily_tavily_extract"));
+    assert(!mcp_run_owns("get_environment") && !mcp_run_owns("mcp_tavily_other"));
     names[0] = "mcp_tavily_tavily_search"; names[1] = "mcp_tavily_tavily_extract";
     assert(agent_request(&agent, "model", req, sizeof(req)) > 0);
     request_pins(names, 2);
 
     /* ---- A model-selected remote call, dispatched sequentially. ---- */
     model_calls("mcp_tavily_tavily_search", "{\"query\":\"mac os 9\"}");
-    assert(!agent_response(&agent, response, strlen(response), 200, error, sizeof(error)));
-    assert(agent.count == 1 && !strcmp(agent.calls[0].name, "mcp_tavily_tavily_search"));
-    assert(!strcmp(agent.calls[0].arguments, "{\"query\":\"mac os 9\"}"));
-    assert(mcp_client_call(&client, agent.calls[0].name, agent.calls[0].arguments, ++ticks) == 0);
-    /* Only one remote call is in flight at a time. */
-    assert(mcp_client_call(&client, agent.calls[0].name, "{}", ++ticks) == -1);
-    assert(step() == 1);
-    assert(client.state == MCP_COMPLETE && calls == 1);
-    /* The completed response is redacted before anything else sees it. */
-    assert(!strstr(mcp_client_response(&client), "client-secret-key"));
-    assert(!strstr(mcp_client_response(&client), "opaque-session"));
+    assert(mcp_run_call(&agent.calls[0], result, sizeof(result)) == 1);
+    /* Only one remote call is in flight at a time: a second is refused with
+     * an explicit result, sends nothing and leaves the first running. */
+    assert(mcp_run_call(&agent.calls[0], result, sizeof(result)) == 0);
+    assert(strstr(result, "\"code\":\"MCP_UNAVAILABLE\"") && calls == 0);
+    assert(mcp_run_phase() == MCP_RUN_CALLING);
+    {
+        int seen = 0, guard = 0;
+        for (;;) {
+            seen |= mcp_run_phase() == MCP_RUN_CALLING ? 1 : 2;
+            if (mcp_run_call_step(result, sizeof(result))) break;
+            assert(++guard < 100000);
+        }
+        /* The call is retained over further steps, not in the one that
+         * completed it. */
+        assert(seen == 3 && calls == 1);
+    }
 
     /* ---- Retention: the summary is the model-facing tool result. ---- */
-    n = journal_calls;
-    retain_response();
-    assert(journal_calls == n + 1);
+    assert(!strcmp(last_event, "mcp_result_retained"));
+    assert(!agent_tool_result(&agent, result, error, sizeof(error)));
     assert(!strcmp(result_str("status"), "ok"));
     assert(result_long("bytes") > 512 && result_long("items") == 1);
     snprintf(id, sizeof(id), "%s", result_str("result_id"));
@@ -375,37 +401,33 @@ int main(void)
 
     /* ---- A second, sequential call: ordering is one call, one result. ---- */
     model_calls("mcp_tavily_tavily_extract", "{\"url\":\"https://example.com/mac-os-9\"}");
-    assert(!agent_response(&agent, response, strlen(response), 200, error, sizeof(error)));
-    assert(mcp_client_call(&client, agent.calls[0].name, agent.calls[0].arguments, ++ticks) == 0);
-    assert(step() == 1);
+    run_call();
     assert(calls == 2);
-    retain_response();
+    assert(!agent_tool_result(&agent, result, error, sizeof(error)));
     assert(mcp_run_file_count() == 2 && mcp_run_file_count_suffix(".new") == 0);
     /* The next request still carries the frozen remote schemas. */
     assert(agent_request(&agent, "model", req, sizeof(req)) > 0);
     request_pins(names, 2);
 
     /* ---- Stop during a call: no further calls, drained contexts, and the
-     * cancellation is best-effort (one notification, no replay). ---- */
+     * cancellation is best-effort (one notification, no replay). The
+     * interrupted call's result says so and is handed back to be recorded. ---- */
     model_calls("mcp_tavily_tavily_search", "{\"query\":\"stopped\"}");
-    assert(!agent_response(&agent, response, strlen(response), 200, error, sizeof(error)));
-    assert(mcp_client_call(&client, agent.calls[0].name, agent.calls[0].arguments, ++ticks) == 0);
-    mcp_client_stop(&client, ++ticks);
-    {
-        int r, guard = 0;
-        do {
-            r = mcp_client_step(&client, ++ticks);
-            assert(++guard < 10000);
-        } while (r == 0);
-        assert(r == -1);
-    }
-    assert(client.state == MCP_STOPPED && cancels == 1);
-    assert(!mcp_client_response(&client)[0]);
-    assert(mcp_client_call(&client, "mcp_tavily_tavily_search", "{}", ++ticks) == -1);
+    assert(mcp_run_call(&agent.calls[0], result, sizeof(result)) == 1);
+    assert(mcp_run_stop(result, sizeof(result)) == 1);
+    assert(strstr(result, "\"code\":\"STOPPED\"") && strstr(result, "result is unknown"));
+    assert(!agent_tool_result(&agent, result, error, sizeof(error)));
+    assert(mcp_run_phase() == MCP_RUN_IDLE);
+    assert(mcp_run_draining() && mcp_run_drain_pending());
+    drain();
+    assert(cancels == 1 && creates == closes);
+    assert(strstr(last_body, "nothing was retried"));
+    /* Stop clears the frozen advertisement and the client takes no more
+     * calls; the next run re-discovers. */
+    assert(agent_mcp_tool_count() == 0 && !mcp_run_owns("mcp_tavily_tavily_search"));
+    assert(mcp_run_call(&agent.calls[0], result, sizeof(result)) == 0);
+    assert(strstr(result, "MCP_UNAVAILABLE") && calls == 2);
     assert(mcp_run_file_count() == 2);
-    assert(creates == closes);
-    /* Stop clears the frozen advertisement; the next run re-discovers. */
-    assert(agent_set_mcp_schemas(NULL) == 0 && agent_mcp_tool_count() == 0);
     assert(!agent_stop(&agent, "stopped"));
 
     /* ---- Stop during result publication: the stage is deleted, nothing is
@@ -413,64 +435,93 @@ int main(void)
     reset();
     begin_run("Another search.");
     reflect = 1;
-    discover_ready();
-    assert(agent_set_mcp_schemas(client.registry.schemas) == 0);
+    assert(discover() == MCP_DISCOVERY_ADMITTED);
     model_calls("mcp_tavily_tavily_search", "{\"query\":\"mac os 9\"}");
-    assert(!agent_response(&agent, response, strlen(response), 200, error, sizeof(error)));
-    assert(mcp_client_call(&client, agent.calls[0].name, agent.calls[0].arguments, ++ticks) == 0);
-    assert(step() == 1);
+    assert(mcp_run_call(&agent.calls[0], result, sizeof(result)) == 1);
     {
-        McpResultRetain in;
-        int r;
-        memset(&in, 0, sizeof(in));
-        in.response = mcp_client_response(&client);
-        in.response_len = strlen(in.response);
-        in.folder = "Retro68:Sherclawk MCP Results:";
-        in.config = &client.config;
-        in.session = client.session;
-        in.journal = journal;
-        in.journal_context = NULL;
-        assert(mcp_result_retain_begin(&in, result, sizeof(result)) == 2);
-        r = mcp_result_retain_step(result, sizeof(result), 1);
-        assert(r == 1);
-        assert(strstr(result, "\"code\":\"STOPPED\""));
-        assert(mcp_run_file_count() == 0 && mcp_run_file_count_suffix(".new") == 0);
-        assert(!agent_tool_result(&agent, result, error, sizeof(error)));
+        int guard = 0;
+        while (mcp_run_phase() != MCP_RUN_RETAINING) {
+            assert(!mcp_run_call_step(result, sizeof(result)));
+            assert(++guard < 100000);
+        }
     }
-    assert(mcp_client_close(&client) == 0);
-    assert(creates == closes);
+    assert(mcp_run_stop(result, sizeof(result)) == 1);
+    assert(strstr(result, "\"code\":\"STOPPED\""));
+    assert(mcp_run_file_count() == 0 && mcp_run_file_count_suffix(".new") == 0);
+    assert(!agent_tool_result(&agent, result, error, sizeof(error)));
+    assert(!mcp_run_draining() && creates == closes && agent_mcp_tool_count() == 0);
     assert(!agent_stop(&agent, "stopped during retention"));
+
+    /* ---- Stop during discovery: nothing to record, no call ever sent, the
+     * connect drains and the run goes on natively. ---- */
+    reset();
+    begin_run("Stopped early.");
+    assert(mcp_run_start() == 1);
+    assert(mcp_run_discover_step() == MCP_DISCOVERY_PENDING);
+    assert(mcp_run_stop(result, sizeof(result)) == 0);
+    assert(mcp_run_phase() == MCP_RUN_IDLE);
+    drain();
+    assert(calls == 0 && creates == closes && agent_mcp_tool_count() == 0);
+    assert(mcp_run_stop(result, sizeof(result)) == 0); /* idle: nothing to stop */
+    assert(!agent_stop(&agent, "stopped during discovery"));
+
+    /* ---- An abort between calls (model error, limit, Stop in the tool
+     * queue) ends the run with no remote work in flight: the idle client is
+     * closed, its credentials wiped and nothing stays advertised. ---- */
+    reset();
+    begin_run("Aborted between calls.");
+    assert(discover() == MCP_DISCOVERY_ADMITTED);
+    assert(mcp_run_stop(result, sizeof(result)) == 0); /* nothing in flight */
+    assert(agent_mcp_tool_count() == 2);
+    mcp_run_end();
+    assert(!mcp_run_draining() && creates == closes && agent_mcp_tool_count() == 0);
+    mcp_run_end(); /* idempotent */
+    model_calls("mcp_tavily_tavily_search", "{\"query\":\"mac os 9\"}");
+    assert(mcp_run_call(&agent.calls[0], result, sizeof(result)) == 0);
+    assert(strstr(result, "MCP_UNAVAILABLE") && calls == 0);
+    assert(!agent_stop(&agent, "aborted"));
 
     /* ---- Failed discovery: safe native-only fallback, no freeze. ---- */
     reset();
     bad_version = 1;
     begin_run("Search again.");
-    assert(mcp_client_discover(&client, &config, ++ticks) == 0);
-    assert(step() == -1);
-    assert(client.state == MCP_FAILED && client.registry.count == 0 && !client.registry.schemas[0]);
-    assert(strstr(client.error, "unsupported initialization"));
+    assert(discover() == MCP_DISCOVERY_NATIVE);
+    assert(strstr(mcp_run_alert(), "unsupported initialization"));
+    assert(strstr(mcp_run_alert(), "Continuing with native tools only."));
+    assert(!strcmp(last_event, "mcp_notice"));
+    drain();
+    assert(creates == closes);
     /* No remote schemas are frozen; the request is native-only. */
+    assert(agent_mcp_tool_count() == 0 && !mcp_run_owns("mcp_tavily_tavily_search"));
+    assert(agent_request(&agent, "model", req, sizeof(req)) > 0);
+    request_pins(NULL, 0);
+    assert(!agent_stop(&agent, "discovery failed"));
+
+    /* ---- Missing, disabled, invalid or unreadable configuration causes no
+     * MCP traffic and no transport: a notice and a native-only run. ---- */
+    reset();
+    begin_run("Native only.");
+    load_result = MCP_RUN_LOAD_ABSENT;
+    assert(mcp_run_start() == 0 && strstr(last_body, "No MCP configuration"));
+    load_result = MCP_RUN_LOAD_NO_FOLDER;
+    assert(mcp_run_start() == 0 && strstr(last_body, "Preferences folder"));
+    load_result = MCP_RUN_LOAD_RECOVER;
+    assert(mcp_run_start() == 0 && strstr(last_body, ".old file"));
+    load_result = MCP_RUN_LOAD_UNREADABLE;
+    assert(mcp_run_start() == 0 && strstr(last_body, "unreadable"));
+    load_result = MCP_RUN_LOAD_OK;
+    config_text = "{\"mcpServers\":{}}";
+    assert(mcp_run_start() == 0 && strstr(last_body, "disabled"));
+    config_text = "{\"mcpServers\":[";
+    assert(mcp_run_start() == 0 && strstr(last_body, "invalid"));
+    assert(journal_calls == 6);
+    n = journal_calls;
+    assert(opens == 0 && creates == 0 && calls == 0 && lists == 0);
+    assert(mcp_run_phase() == MCP_RUN_IDLE && !mcp_run_draining() && journal_calls == n);
     assert(agent_mcp_tool_count() == 0);
     assert(agent_request(&agent, "model", req, sizeof(req)) > 0);
     request_pins(NULL, 0);
-    assert(mcp_client_close(&client) == 0);
-    assert(!agent_stop(&agent, "discovery failed"));
 
-    /* ---- Missing/disabled configuration causes no MCP traffic. ---- */
-    reset();
-    {
-        McpConfig disabled;
-        memset(&disabled, 0, sizeof(disabled));
-        assert(!mcp_config_parse("{\"mcpServers\":{}}", 17, &disabled, error, sizeof(error)));
-        assert(!disabled.enabled);
-        n = creates;
-        assert(mcp_client_discover(&client, &disabled, ++ticks) == 1);
-        assert(client.state == MCP_READY && creates == n && client.registry.count == 0);
-    }
-    begin_run("Native only.");
-    assert(agent_request(&agent, "model", req, sizeof(req)) > 0);
-    request_pins(NULL, 0);
-
-    puts("PASS MCP run integration: discovery, freeze, sequential dispatch, retention, paging, Stop, fallback");
+    puts("PASS MCP run controller: load, discovery, freeze, sequential dispatch, retention, paging, Stop, drain, fallback");
     return 0;
 }

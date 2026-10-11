@@ -269,7 +269,7 @@ static void remote_schemas(void)
 
     /* Clear state: the native-only advertisement. */
     assert(agent_set_mcp_schemas(NULL) == 0);
-    assert(agent_mcp_tool_count() == 0 && agent_mcp_tool_name(0) == NULL);
+    assert(agent_mcp_tool_count() == 0 && !agent_mcp_tool_frozen("mcp_tavily_tavily_search"));
     begin();
     assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0);
 
@@ -299,8 +299,9 @@ static void remote_schemas(void)
     snprintf(remote_both, sizeof(remote_both), "%s,%s", remote_search, remote_extract);
     assert(agent_set_mcp_schemas(remote_both) == 0);
     assert(agent_mcp_tool_count() == 2);
-    assert(!strcmp(agent_mcp_tool_name(0), "mcp_tavily_tavily_search"));
-    assert(!strcmp(agent_mcp_tool_name(1), "mcp_tavily_tavily_extract"));
+    assert(agent_mcp_tool_frozen("mcp_tavily_tavily_search"));
+    assert(agent_mcp_tool_frozen("mcp_tavily_tavily_extract"));
+    assert(!agent_mcp_tool_frozen("get_environment") && !agent_mcp_tool_frozen(""));
     names[0] = "mcp_tavily_tavily_search"; names[1] = "mcp_tavily_tavily_extract";
     assert(pin_remote(agent_request(&a, "model", req, sizeof(req)), names, 2) > 0);
     assert(strstr(req, "Search the web.") && strstr(req, "Extract one page."));
@@ -334,7 +335,7 @@ static void remote_schemas(void)
         memset(name, 'm', 63); name[63] = 0;
         remote_row(long_row, sizeof(long_row), name);
         assert(agent_set_mcp_schemas(long_row) == 0);
-        assert(agent_mcp_tool_count() == 1 && !strcmp(agent_mcp_tool_name(0), name));
+        assert(agent_mcp_tool_count() == 1 && agent_mcp_tool_frozen(name));
         long_name[0] = name;
         begin();
         assert(pin_remote(agent_request(&a, "model", req, sizeof(req)), long_name, 1) > 0);
@@ -345,7 +346,7 @@ static void remote_schemas(void)
     }
 
     /* Clearing restores the native-only advertisement. */
-    assert(agent_mcp_tool_count() == 0 && agent_mcp_tool_name(0) == NULL);
+    assert(agent_mcp_tool_count() == 0 && !agent_mcp_tool_frozen("mcp_tavily_tavily_search"));
     begin();
     assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0);
 }

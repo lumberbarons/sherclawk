@@ -246,9 +246,9 @@ that drain — and clears the frozen advertisement, so no further remote call
 is dispatched. The in-flight call's result says the call was stopped, its
 outcome is unknown and it is never replayed; unstarted calls record
 interrupted results like native tools. The MCP editor, a new send and a
-handoff wait until the drain finishes. A run's end — completion, Stop or New
-Chat — closes the client and wipes its copy of the configuration
-credentials; the next run re-discovers from the file.
+handoff wait until the drain finishes. A run's end — completion, any Stop or
+error abort, a limit pause or New Chat — closes the client and wipes its copy
+of the configuration credentials; the next run re-discovers from the file.
 
 ## Remaining implementation and acceptance
 
@@ -257,7 +257,7 @@ credentials; the next run re-discovers from the file.
   replay, and absence of credentials in model-visible output in the OS 9.2.2
   guest.
 - Measure the integrated linked footprint against the guest minimum
-  partition (the host-linked app measured 7,562,128 bytes on 2026-10-11; see
+  partition (the Docker-linked app measured 7,562,128 bytes on 2026-10-11; see
   [limits](limits.md)).
 
 ## Verification evidence (2026-10-08)

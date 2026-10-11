@@ -38,8 +38,8 @@
  * the run proceeds with native tools only (see docs/limits.md). */
 #define AGENT_MCP_SCHEMA_CAP 8192
 /* Frozen remote function names: discovery maps names to at most 63 bytes, so
- * one name also fits AgentCall.name; the cap matches the registry's own
- * MCP_TOOL_MAX bound. */
+ * one name also fits AgentCall.name. AGENT_MCP_TOOL_MAX must equal the
+ * registry's MCP_TOOL_MAX (a LIMIT_CHECK in agent.c enforces it). */
 #define AGENT_MCP_TOOL_MAX 8
 #define AGENT_MCP_NAME_CAP 64
 /* Projects whose AGENTS.md is tracked per chat, and the longest tracked name
@@ -181,8 +181,7 @@ const char *agent_tool_schemas(void);
  * their bytes count toward the request overhead. Returns 0, or -1 with
  * nothing changed when the text is refused (see AGENT_MCP_SCHEMA_CAP). */
 int agent_set_mcp_schemas(const char *schemas);
-/* The frozen remote function names, in freeze order: the dispatchable set
- * for the run. */
+/* The frozen remote function names are the run's dispatchable set. */
 int agent_mcp_tool_count(void);
-const char *agent_mcp_tool_name(int i); /* NULL outside [0, count) */
+int agent_mcp_tool_frozen(const char *name); /* 1 when `name` is one of them */
 #endif

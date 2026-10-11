@@ -329,7 +329,9 @@ completed, that the server may still finish it, and that it was not replayed.
 Remote tools are admitted read-only ([ADR-0003](adr/0003-admit-tools-read-only-first.md));
 their schemas are redacted before the model ever sees them, and their
 results only ever reach the model through the retained, re-redacted
-artifacts.
+artifacts. They are not registry tools: the run loop dispatches a frozen
+remote name before the registry-driven argument preflight, so the arguments
+are bounded by the common argument cap and the server validates them.
 
 ## Retained remote MCP results
 

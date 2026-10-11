@@ -95,7 +95,9 @@ in bss and 8,224 bytes of text and data, mostly the embedded starter.
 3. **`CHAT_REQUEST_CAP` = `AGENT_HISTORY_CAP` + overhead.** The overhead is the
    system prompt, tool schemas and the workspace `AGENTS.md` (about 13 KB plus
    up to `AGENT_INSTRUCTIONS_CAP` today, with room to 32 KiB; the compile-time
-   guard demands 16 KiB plus the instruction cap).
+   guards demand 16 KiB plus the instruction cap, and with remote MCP tools
+   also `AGENT_MCP_SCHEMA_CAP` — see
+   [frozen remote schemas](#frozen-remote-schemas-agenth)).
    Raising history means raising the request cap and the HTTP request buffer in
    `network.h`, which is `CHAT_REQUEST_CAP` plus header room.
 4. **A cut-off reply is a model round.** At the token limit the reply is
@@ -147,7 +149,8 @@ in bss and 8,224 bytes of text and data, mostly the embedded starter.
 | `CHAT_PROMPT_CAP` | `gPending` (three times) and the `SendChat` prompt buffer | 4 |
 | `AGENT_RESULT_CAP` | `gToolResult`, the static record scratch in `tools.c`, and the wire message (`AGENT_RESULT_WIRE_CAP`) | about 15 |
 | `AGENT_IMAGE_CAP` | the `view_image` PNG buffer | 1 |
-| `AGENT_TOOL_SCHEMA_CAP` | the joined registry schemas in `agent.c` (one buffer, built once) | 1 |
+| `AGENT_TOOL_SCHEMA_CAP` | the native schema array and the merged native-plus-remote array in `agent.c` (two buffers) | 2 |
+| `AGENT_MCP_SCHEMA_CAP` | the frozen remote schema text and its validation copy in `agent.c` | 2 |
 | `AGENT_MAX_TOKENS` | none | 0 |
 
 Linked static size is measured, not estimated, with `powerpc-apple-macos-size`
