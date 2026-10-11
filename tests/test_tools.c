@@ -1723,6 +1723,7 @@ static void copy_checks(void)
         "{\"path\":\"app\",\"revision\":\"cat-0-0-0-0\",\"destination\":\"out\",\"extra\":1}|"
         "{\"path\":\"app\",\"revision\":1,\"destination\":\"out\"}";
       char *one=(char *)malloc(sizeof(bad)+1);
+      assert(one);
       strcpy(one,bad);
       for(char *at=strtok(one,"|");at;at=strtok(NULL,"|")) {
         reset(); copy_fixture(10,"app",data,rsrc,'APPL','ShCk',0);
