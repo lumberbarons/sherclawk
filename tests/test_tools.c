@@ -2131,5 +2131,16 @@ int main(void)
     instruction_checks();
     trash_checks();
     copy_checks();
+    /* Issue #41: every staged publication funnels through fs_write_verified in
+     * fsutil.c. One short FSWrite fails each caller through that one function
+     * — after the intent journal, before any publication rename — with the
+     * staged body retained for inspection. The launcher, executor and queue
+     * callers take the same injection in their own suites. */
+    reset(); short_write=1;
+    strcpy(call.name,"write_text"); strcpy(call.arguments,"{\"path\":\"short.c\",\"text\":\"body\"}");
+    assert(!run() && strstr(result,"STAGE_FAILED_INSPECT_TEMP") && leaf("short.c")<0 && journals==1 && !renames);
+    reset(); short_write=1; strcpy(call.name,"create_project"); strcpy(call.arguments,"{\"path\":\"ShortProj\"}");
+    assert(run() && strstr(result,"PROJECT_STAGE_RETAINED") && leaf("ShortProj")<0 && journals==1 && !renames);
+    short_write=0;
     return 0;
 }

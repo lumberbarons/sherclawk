@@ -8,7 +8,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # retained MCP results (mcp_result.c) re-run credential redaction from
 # mcp_config.c over what they retain; mcp_config.c parses URLs with
 # vendor/http.c, so every target that links TOOLS_SRC gets it too.
-set(TOOLS_SRC tools.c inspect.c mcp_guard.c mcp_result.c mcp_config.c registry.c vendor/http.c)
+set(TOOLS_SRC tools.c fsutil.c inspect.c mcp_guard.c mcp_result.c mcp_config.c registry.c vendor/http.c)
 # Certainly is fetch-only; build.sh expects it next to this repo. Override
 # with -DCERTAINLY_DIR=<path> when it is cloned elsewhere.
 if(NOT CERTAINLY_DIR)

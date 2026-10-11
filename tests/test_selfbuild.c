@@ -47,6 +47,15 @@ int main(void)
     {   int jobs=0,k;for(k=0;k<64;k++)if(files[k].used && !strncmp(files[k].name,"build-",6))jobs++;
         assert(jobs==1); }
     drain();assert(ts_sends==1 && named("claimed")>=0 && named("success.txt")<0);
+    /* Issue #41: the claim's started record goes through the shared verified
+     * write; one short FSWrite ends the claim uncertain, releasing the lock
+     * (ToolServer is idle) and retaining the staged temporary. */
+    setup();
+    while(named("ready")<0)assert(build_project_step(result,sizeof(result),ticks++,0)==2);
+    short_write=1;
+    assert(build_project_step(result,sizeof(result),ticks++,0)==1 && strstr(result,"uncertain"));
+    assert(named("started")<0 && named("started.tmp")>=0 && named("worker-lock")<0 && !ts_sends);
+    short_write=0;
     setup();
     while(named("ready")<0)assert(build_project_step(result,sizeof(result),ticks++,0)==2);
     i=named("ready");record_file(files[i].parent,"stdout","old evidence");

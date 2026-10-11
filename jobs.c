@@ -2,6 +2,7 @@
  * complete-file ready visibility. No executor-owned files are ever rewritten.
  * FlushVol is a visibility barrier, not a verified AFP power-loss guarantee. */
 #include "jobs.h"
+#include "fsutil.h"
 #include <Script.h>
 #include <stdio.h>
 #include <string.h>
@@ -129,11 +130,11 @@ static void stage(NativeJob *j)
         return;
     }
     if(record(j,"job_staged")) { fail(j,ioErr); return; }
-    leaf(j,"ready.tmp",&s); e=FSpCreate(&s,'ShCk','TEXT',smSystemScript);
-    if(!e) e=transfer(j,"ready.tmp",0,"protocol=1\n",11,1);
-    if(!e) e=FlushVol(NULL,j->volume);
-    if(!e) e=transfer(j,"ready.tmp",0,page,11,0);
-    if(e || memcmp(page,"protocol=1\n",11)) { fail(j,e ? e : ioErr); return; }
+    /* The complete-file visibility marker is published by the one shared
+     * verified body write (issue #41); only the rename is queue-specific. */
+    leaf(j,"ready.tmp",&s);
+    e=fs_write_verified(&s,'ShCk','TEXT',"protocol=1\n",11,NULL);
+    if(e) { fail(j,e); return; }
     /* From here any failure is uncertain: AFP may have completed the rename. */
     j->published=1;
     e=FSpRename(&s,(const unsigned char *)"\005ready");

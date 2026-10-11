@@ -12,6 +12,7 @@
 #include <Files.h>
 #include <Folders.h>
 #include <Script.h>
+#include "fsutil.h"
 #include <Memory.h>
 #include <Gestalt.h>
 #include <stdio.h>
@@ -793,16 +794,14 @@ static int journal_mutation(AgentJournal journal, void *context, const char *eve
 static int write_text(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap,
                       AgentJournal journal, void *context)
 {
-    static char utf8[AGENT_ARGUMENT_CAP], bytes[TOOLS_STRING_CAP+1], observed[4097];
+    static char utf8[AGENT_ARGUMENT_CAP], bytes[TOOLS_STRING_CAP+1];
     static char record[AGENT_RESULT_CAP]; /* static: the application stack is small */
     char path[512], temporary[768], tempname[32], revision[80] = "";
     char call_id[800];
     FSSpec target, stage;
     CInfoPBRec pb;
-    OSErr err, closed;
-    short ref;
+    OSErr err;
     int length, attempt;
-    long count;
     size_t i, prefix;
     unsigned long hash = 2166136261UL;
     if (valid_keys(call->arguments, tokens, "|path||text|") ||
@@ -836,26 +835,14 @@ static int write_text(const AgentCall *call, const JsonToken *tokens, char *out,
             fail(out, cap, "LIMIT", "Cannot encode recovery paths; no file created.", 0); return 0;
         }
         if (journal_mutation(journal, context, "mutation_intent", call_id, record)) { fail(out, cap, "JOURNAL", "Cannot record mutation intent; no file created.", 0); return 1; }
-        err = FSpCreate(&stage, 'ttxt', 'TEXT', smSystemScript);
+        /* One shared verified body write: create, write, flush, catalog proof
+         * and read-back comparison live in fsutil.c. A dupFNErr races for
+         * the next staging name exactly like the hand-rolled create did. */
+        err = fs_write_verified(&stage, 'ttxt', 'TEXT', bytes, length, &pb);
         if (err == dupFNErr) continue;
         break;
     }
     if (attempt == 100) { fail(out, cap, "STAGE", "Temporary name collisions; no destination created.", 0); return 0; }
-    if (err) goto failed;
-    err = FSpOpenDF(&stage, fsWrPerm, &ref);
-    if (err) goto failed;
-    count = length; err = FSWrite(ref, &count, bytes); closed = FSClose(ref);
-    if (!err && count != length) err = ioErr;
-    if (!err) err = closed;
-    if (err) goto failed;
-    err = FlushVol(NULL, stage.vRefNum); if (err) goto failed;
-    err = catalog(&stage, &pb);
-    if (!err && (pb.hFileInfo.ioFlLgLen != length || pb.hFileInfo.ioFlRLgLen || pb.hFileInfo.ioFlFndrInfo.fdType != 'TEXT')) err = ioErr;
-    if (err) goto failed;
-    err = FSpOpenDF(&stage, fsRdPerm, &ref); if (err) goto failed;
-    count = length; err = FSRead(ref, &count, observed); closed = FSClose(ref);
-    if (!err && (count != length || memcmp(bytes, observed, (size_t)length))) err = ioErr;
-    if (!err) err = closed;
     if (err) goto failed;
     full_revision(&pb, bytes, length, revision, sizeof(revision));
     mutation_result(record, sizeof(record), "staged", "CREATE_ONLY", path, temporary, length, revision, 0);
@@ -1904,34 +1891,13 @@ static int project_result(char *out, size_t cap, const char *status, const char 
         append(out, cap, &at, ",\"temporary_path\":") || quote(out, cap, &at, temporary) ||
         append(out, cap, &at, tail) ? -1 : 0;
 }
+/* The template files are published by the one shared verified write and
+ * re-proved the same way after the folder rename (issue #41). */
 static OSErr project_file(FSSpec *file, const char *bytes, int create)
 {
-    char observed[4096];
-    CInfoPBRec pb;
-    OSErr err, closed;
-    short ref;
-    long length = (long)strlen(bytes), count;
-    if (length > (long)sizeof(observed)) return paramErr;
-    if (create) {
-        err = FSpCreate(file, 'ttxt', 'TEXT', smSystemScript);
-        if (err) return err;
-        err = FSpOpenDF(file, fsWrPerm, &ref);
-        if (err) return err;
-        count = length; err = FSWrite(ref, &count, bytes); closed = FSClose(ref);
-        if (!err && count != length) err = ioErr;
-        if (!err) err = closed;
-        if (err) return err;
-        err = FlushVol(NULL, file->vRefNum); if (err) return err;
-    }
-    err = catalog(file, &pb);
-    if (!err && (!plain_file(file, &pb) || pb.hFileInfo.ioFlLgLen != length ||
-        pb.hFileInfo.ioFlFndrInfo.fdType != 'TEXT' || pb.hFileInfo.ioFlFndrInfo.fdCreator != 'ttxt')) err = ioErr;
-    if (err) return err;
-    err = FSpOpenDF(file, fsRdPerm, &ref); if (err) return err;
-    count = length; err = FSRead(ref, &count, observed); closed = FSClose(ref);
-    if (!err && (count != length || memcmp(bytes, observed, (size_t)length))) err = ioErr;
-    if (!err) err = closed;
-    return err;
+    long length = (long)strlen(bytes);
+    if (create) return fs_write_verified(file, 'ttxt', 'TEXT', bytes, length, NULL);
+    return fs_verify_body(file, 'ttxt', 'TEXT', bytes, length);
 }
 static int create_project(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap,
                           AgentJournal journal, void *context)
