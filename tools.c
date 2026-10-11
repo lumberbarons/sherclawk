@@ -248,25 +248,30 @@ void tools_catalog_revision(const CInfoPBRec *pb, char *out, size_t cap)
         (unsigned long)pb->hFileInfo.ioFlMdDat, (unsigned long)pb->hFileInfo.ioFlLgLen,
         (unsigned long)pb->hFileInfo.ioFlRLgLen);
 }
-/* Sealed evidence for every mutating tool: the Worker01:buildjobs queue and
+/* Sealed evidence for every mutating tool: the configured build queue and
  * its children, and the retained MCP results folder and its artifacts.
  * Case-insensitive, whole path components only. */
+static int path_has_prefix(const char *path, const char *prefix, size_t length)
+{
+    size_t i;
+    if (!path) return 0;
+    for (i = 0; i < length; i++) {
+        unsigned char c = (unsigned char)path[i], p = (unsigned char)prefix[i];
+        if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + 'a' - 'A');
+        if (p >= 'A' && p <= 'Z') p = (unsigned char)(p + 'a' - 'A');
+        if (!c || c != p) return 0;
+    }
+    return !path[i] || path[i] == ':';
+}
+int tools_path_in_queue(const char *path)
+{
+    static const char queue[] = SHERCLAWK_BUILD_QUEUE;
+    return path_has_prefix(path, queue, sizeof(queue) - 1);
+}
 static int evidence_path(const char *path)
 {
-    static const char *const sealed[] = { "worker01:buildjobs", "sherclawk mcp results" };
-    size_t k;
-    for (k = 0; k < sizeof(sealed) / sizeof(sealed[0]); k++) {
-        const char *prefix = sealed[k];
-        size_t i;
-        int ok = 1;
-        for (i = 0; prefix[i]; i++) {
-            unsigned char c = (unsigned char)path[i];
-            if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + 'a' - 'A');
-            if (!path[i] || c != (unsigned char)prefix[i]) { ok = 0; break; }
-        }
-        if (ok && (!path[i] || path[i] == ':')) return 1;
-    }
-    return 0;
+    static const char results[] = "Sherclawk MCP Results";
+    return tools_path_in_queue(path) || path_has_prefix(path, results, sizeof(results) - 1);
 }
 /* A real folder: a directory that is not an alias. */
 static int is_plain_dir(const CInfoPBRec *pb)
@@ -289,14 +294,16 @@ static int same_file(const CInfoPBRec *a, const CInfoPBRec *b)
 static char text_source[TOOLS_FILE_CAP + 1], text_edited[TOOLS_FILE_CAP + 1];
 static char text_scratch[TOOLS_WORK_CHUNK];
 static int text_active;
-static int text_arguments(const AgentCall *call, JsonToken *tokens, char *out, size_t cap, int mutation)
+int tools_check_arguments(const ToolDef *def, const AgentCall *call, JsonToken *tokens, char *out, size_t cap)
 {
     char path[512];
+    if (!def) { fail(out,cap,"UNKNOWN_TOOL","This tool is not installed.",0);return -1; }
     if(cap<AGENT_RESULT_CAP || strlen(call->arguments)>=AGENT_ARGUMENT_CAP ||
        json_parse(call->arguments,strlen(call->arguments),tokens,128)<1 || tokens[0].type!=JSON_OBJECT) {
         fail(out,cap,"ARGUMENTS","Tool arguments must be a bounded JSON object.",0);return -1;
     }
-    if(mutation && string_arg(call->arguments,tokens,"path",path,sizeof(path))>=0 && evidence_path(path)) {
+    if(def->mutates && string_arg(call->arguments,tokens,
+       def->mutation_argument ? def->mutation_argument : "path",path,sizeof(path))>=0 && evidence_path(path)) {
         fail(out,cap,"EXECUTION_EVIDENCE_READ_ONLY","Worker queue, snapshots and retained MCP results are read-only to source tools.",0);return -1;
     }
     return 0;
@@ -327,14 +334,13 @@ static int read_finish(char *out,size_t cap,const char *code,int native,int stop
     if(code || closed)fail(out,cap,closed ? "CLOSE" : code,"Read failed; no editable revision supplied.",native ? native : closed);
     return stop || closed ? 1 : 0;
 }
-int read_text_begin(const AgentCall *call,char *out,size_t cap,AgentJournal journal,void *context,uint32_t now)
+static int read_text_begin_checked(const AgentCall *call,const JsonToken *tokens,char *out,size_t cap,AgentJournal journal,void *context,uint32_t now)
 {
     if(cap<AGENT_RESULT_CAP) { if(cap)out[0]=0;return 1; }
     cap=AGENT_RESULT_CAP;
-    JsonToken tokens[128]; char path[512]; OSErr err;
+    char path[512]; OSErr err;
     (void)journal;(void)context;
     if(text_active) { fail(out,cap,"TEXT_BUSY","A text operation is already active.",0);return 1; }
-    if(text_arguments(call,tokens,out,cap,0))return 0;
     memset(&text_read,0,sizeof(text_read));text_read.ref=-1;
     text_read.start=int_arg(call->arguments,tokens,"start_line",1,1,100000);
     text_read.maximum=int_arg(call->arguments,tokens,"max_lines",20,1,30);
@@ -926,13 +932,12 @@ static int edit_record(const char *event,const char *status)
                    text_edit.backup_path,text_edit.length,text_edit.revision,text_edit.previous,0))return -1;
     return journal_mutation(text_edit.journal,text_edit.context,event,text_edit.call_id,record);
 }
-int edit_text_begin(const AgentCall *call,char *out,size_t cap,AgentJournal journal,void *context,uint32_t now)
+static int edit_text_begin_checked(const AgentCall *call,const JsonToken *tokens,char *out,size_t cap,AgentJournal journal,void *context,uint32_t now)
 {
     if(cap<AGENT_RESULT_CAP) { if(cap)out[0]=0;return 1; }
     cap=AGENT_RESULT_CAP;
-    static char utf8[AGENT_ARGUMENT_CAP];JsonToken tokens[128];OSErr err;int i;
+    static char utf8[AGENT_ARGUMENT_CAP];OSErr err;int i;
     if(text_active) { fail(out,cap,"TEXT_BUSY","A text operation is already active.",0);return 1; }
-    if(text_arguments(call,tokens,out,cap,1))return 0;
     memset(&text_edit,0,sizeof(text_edit));text_edit.ref=text_edit.aux=-1;
     if(valid_keys(call->arguments,tokens,"|path||expected_revision||old_text||new_text|") ||
        string_arg(call->arguments,tokens,"path",text_edit.path,sizeof(text_edit.path))<0 ||
@@ -1649,9 +1654,8 @@ static int copy_failed(char *out, size_t cap, const char *code, int native, int 
         fail(out, cap, "LIMIT", "Copy report exceeds the result capacity.", 0);
     return stop;
 }
-int copy_file_begin(const AgentCall *call, char *out, size_t cap, AgentJournal journal, void *context, uint32_t now)
+static int copy_file_begin_checked(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap, AgentJournal journal, void *context, uint32_t now)
 {
-    JsonToken tokens[128];
     CInfoPBRec pb;
     char tempname[32];
     OSErr err;
@@ -1661,7 +1665,6 @@ int copy_file_begin(const AgentCall *call, char *out, size_t cap, AgentJournal j
     if (cap < AGENT_RESULT_CAP) { if (cap) out[0] = 0; return 1; }
     cap = AGENT_RESULT_CAP;
     if (copy_work.active) { fail(out, cap, "COPY_BUSY", "A copy is already active.", 0); return 1; }
-    if (text_arguments(call, tokens, out, cap, 0)) return 0;
     if (valid_keys(call->arguments, tokens, "|path||revision||destination|") ||
         string_arg(call->arguments, tokens, "path", copy_work.path, sizeof(copy_work.path)) < 0 ||
         string_arg(call->arguments, tokens, "revision", copy_work.revision, sizeof(copy_work.revision)) < 0 ||
@@ -1670,11 +1673,6 @@ int copy_file_begin(const AgentCall *call, char *out, size_t cap, AgentJournal j
     }
     if (strncmp(copy_work.revision, "cat-", 4)) {
         fail(out, cap, "ARGUMENTS", "revision must be the cat- token from list_files or get_file_info.", 0); return 0;
-    }
-    /* The mutation is the destination. A sealed build artifact is a legal
-     * source (copying only reads it); the queue never accepts a copy. */
-    if (evidence_path(copy_work.destination)) {
-        fail(out, cap, "EXECUTION_EVIDENCE_READ_ONLY", "Worker queue, snapshots and retained MCP results are read-only to source tools.", 0); return 0;
     }
     err = tools_resolve(copy_work.path, &copy_work.source);
     if (err) { fail(out, cap, "FILE", "Cannot resolve the source path.", err); return 0; }
@@ -1982,31 +1980,58 @@ limit:
     fail(out, cap, "LIMIT", "Project child or recovery paths exceed bounds; no project created.", 0); return 0;
 }
 
+/* Standalone begin APIs perform the same preflight as the app. Once checked,
+ * dispatch and the retained text/copy snapshot share that one tokenization. */
+int read_text_begin(const AgentCall *call, char *out, size_t cap, AgentJournal journal, void *context, uint32_t now)
+{
+    JsonToken tokens[128];
+    if (cap < AGENT_RESULT_CAP) { if (cap) out[0] = 0; return 1; }
+    if (tools_check_arguments(&kToolDefs[TOOL_read_text], call, tokens, out, cap)) return 0;
+    return read_text_begin_checked(call, tokens, out, cap, journal, context, now);
+}
+int edit_text_begin(const AgentCall *call, char *out, size_t cap, AgentJournal journal, void *context, uint32_t now)
+{
+    JsonToken tokens[128];
+    if (cap < AGENT_RESULT_CAP) { if (cap) out[0] = 0; return 1; }
+    if (tools_check_arguments(&kToolDefs[TOOL_edit_text], call, tokens, out, cap)) return 0;
+    return edit_text_begin_checked(call, tokens, out, cap, journal, context, now);
+}
+int copy_file_begin(const AgentCall *call, char *out, size_t cap, AgentJournal journal, void *context, uint32_t now)
+{
+    JsonToken tokens[128];
+    if (cap < AGENT_RESULT_CAP) { if (cap) out[0] = 0; return 1; }
+    if (tools_check_arguments(&kToolDefs[TOOL_copy_file], call, tokens, out, cap)) return 0;
+    return copy_file_begin_checked(call, tokens, out, cap, journal, context, now);
+}
 int tools_execute_recorded(const AgentCall *call, char *out, size_t cap, AgentJournal journal, void *context)
 {
     JsonToken tokens[128];
     const ToolDef *def = tools_lookup(call->name);
     if (cap < AGENT_RESULT_CAP) { if (cap) out[0] = 0; return 1; }
+    if (tools_check_arguments(def, call, tokens, out, cap)) return 0;
+    return tools_execute_checked(call, tokens, out, cap, journal, context, (uint32_t)TickCount());
+}
+int tools_execute_checked(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap,
+                          AgentJournal journal, void *context, uint32_t now)
+{
+    const ToolDef *def = tools_lookup(call->name);
+    if (cap < AGENT_RESULT_CAP) { if (cap) out[0] = 0; return 1; }
+    cap = AGENT_RESULT_CAP;
     if (!def) { fail(out, cap, "UNKNOWN_TOOL", "This tool is not installed.", 0); return 0; }
-    /* The queue guard is the registry's own mutates flag, checked against the
-     * path a tool mutates. copy_file's path is an untouched source that may be
-     * sealed build evidence, so only its destination is guarded, inside
-     * copy_file_begin. */
-    if (text_arguments(call, tokens, out, cap, def->id == TOOL_copy_file ? 0 : (int)def->mutates)) return 0;
     switch (def->id) {
     case TOOL_get_environment:
         if (tokens[0].next != 1) fail(out, cap, "ARGUMENTS", "get_environment takes no arguments.", 0);
         else environment(out, cap);
         return 0;
     case TOOL_list_files: list(call->arguments, tokens, out, cap); return 0;
-    case TOOL_read_text: return read_text_begin(call, out, cap, journal, context, (uint32_t)TickCount());
+    case TOOL_read_text: return read_text_begin_checked(call, tokens, out, cap, journal, context, now);
     case TOOL_search_text: search_text(call->arguments, tokens, out, cap); return 0;
     case TOOL_write_text: return write_text(call, tokens, out, cap, journal, context);
-    case TOOL_edit_text: return edit_text_begin(call, out, cap, journal, context, (uint32_t)TickCount());
+    case TOOL_edit_text: return edit_text_begin_checked(call, tokens, out, cap, journal, context, now);
     case TOOL_create_project: return create_project(call, tokens, out, cap, journal, context);
     case TOOL_create_folder: return create_folder(call, tokens, out, cap, journal, context);
     case TOOL_move_to_trash: return move_to_trash(call, tokens, out, cap, journal, context);
-    case TOOL_copy_file: return copy_file_begin(call, out, cap, journal, context, (uint32_t)TickCount());
+    case TOOL_copy_file: return copy_file_begin_checked(call, tokens, out, cap, journal, context, now);
     case TOOL_get_file_info:
     case TOOL_resolve_alias:
     case TOOL_list_processes:

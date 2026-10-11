@@ -2110,15 +2110,16 @@ static void NewChat(void)
 typedef struct {
     RunState state;
     const ToolDef *def;   /* registry row that names the tool */
+    /* NULL delegates to tools_execute_checked, which reuses preflight tokens. */
     int (*begin)(const AgentCall *, char *, size_t, AgentJournal, void *, uint32_t);
     int (*step)(char *, size_t, uint32_t, int stop);
     const char *status;  /* shown while it is pending */
     const char *failure; /* stop reason when the step reports failure */
 } PendingState;
 static const PendingState kPendingStates[] = {
-    { RUN_READ_TEXT, &kToolDefs[TOOL_read_text], read_text_begin, read_text_step,
+    { RUN_READ_TEXT, &kToolDefs[TOOL_read_text], NULL, read_text_step,
       "Reading and verifying text...", "Text read stopped; no revision supplied." },
-    { RUN_EDIT_TEXT, &kToolDefs[TOOL_edit_text], edit_text_begin, edit_text_step,
+    { RUN_EDIT_TEXT, &kToolDefs[TOOL_edit_text], NULL, edit_text_step,
       "Staging and verifying exact edit...", "Edit stopped. Inspect retained recovery paths before continuing." },
     { RUN_BUILD, &kToolDefs[TOOL_build_project], build_project_begin, build_project_step,
       "Building snapshot with MPW ToolServer...",
@@ -2132,7 +2133,7 @@ static const PendingState kPendingStates[] = {
     { RUN_VIEW_IMAGE, &kToolDefs[TOOL_view_image], view_image_begin, view_image_step,
       "Reading image...",
       "Image read stopped. Nothing was attached." },
-    { RUN_COPY_FILE, &kToolDefs[TOOL_copy_file], copy_file_begin, copy_file_step,
+    { RUN_COPY_FILE, &kToolDefs[TOOL_copy_file], NULL, copy_file_step,
       "Copying and verifying both forks...",
       "Copy stopped. Inspect the retained stage and session recovery records before continuing." }
 };
@@ -2385,6 +2386,7 @@ static void StepPendingTool(void)
 static void StepTools(void)
 {
     char error[256];
+    JsonToken tokens[128];
     int result;
     AgentCall *call;
     const ToolDef *def;
@@ -2414,12 +2416,15 @@ static void StepTools(void)
     view_image_set_vision(gModelInfoAttempted && !strcmp(gModelInfoModel, gRunModel) ? gModelInfo.vision : AGENT_VISION_UNKNOWN);
     def = tools_lookup(call->name);
     pending = def ? PendingStateForDef(def) : NULL;
-    if (pending) {
+    /* One registry-driven preflight before either dispatch path. Pending rows
+     * inherit the guard even when their begin function belongs to a module. */
+    if (tools_check_arguments(def, call, tokens, gToolResult, sizeof(gToolResult))) result = 0;
+    else if (pending && pending->begin) {
         result = pending->begin(call, gToolResult, sizeof(gToolResult), ToolEventJournal, &gSession, (uint32_t)TickCount());
-        if (result == 2) { gRun = pending->state; SetStatus("%s", pending->status); return; }
     } else if (def && def->id == TOOL_read_build_log) {
         build_project_log(call, gToolResult, sizeof(gToolResult)); result = 0;
-    } else result = tools_execute_recorded(call, gToolResult, sizeof(gToolResult), ToolEventJournal, &gSession);
+    } else result = tools_execute_checked(call, tokens, gToolResult, sizeof(gToolResult), ToolEventJournal, &gSession, (uint32_t)TickCount());
+    if (pending && result == 2) { gRun = pending->state; SetStatus("%s", pending->status); return; }
     LogToolTiming(gAgent.next + 1, call->name);
     if (agent_tool_result(&gAgent, gToolResult, error, sizeof(error))) { AbortChat(error); return; }
     ShowToolResult(call, call->name, gToolResult);
