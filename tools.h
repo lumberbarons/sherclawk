@@ -2,6 +2,7 @@
 #ifndef SHERCLAWK_TOOLS_H
 #define SHERCLAWK_TOOLS_H
 #include "agent.h"
+#include "json.h"
 #include <stdint.h>
 #include "text_limits.h"
 
@@ -26,6 +27,7 @@ typedef struct {
     const char *schema_json; /* one {"type":"function","function":{...}} object */
     unsigned mutates : 1; /* pre-checked: journal + sealed build-evidence paths */
     unsigned pending : 1; /* finishes over event-loop steps; main.c drives it */
+    const char *mutation_argument; /* NULL means path; copy_file writes destination */
 } ToolDef;
 extern const ToolDef kToolDefs[];
 /* Row by table position (NULL past the end), the table size, and the row a
@@ -61,6 +63,16 @@ int tools_execute(const AgentCall *call, char *result, size_t cap);
 /* 2 pending, 0 completed, 1 stop (recording failed or uncertain outcome). */
 int tools_execute_recorded(const AgentCall *call, char *result, size_t cap,
                            AgentJournal journal, void *context);
+/* Common preflight for both dispatch paths. tokens has 128 entries; -1
+ * supplies an error result without executing. New mutates rows guard path
+ * automatically, or name a different writable argument in the registry. */
+int tools_check_arguments(const ToolDef *, const AgentCall *, JsonToken *tokens,
+                          char *result, size_t cap);
+/* Dispatch with the tokens from a successful preflight; no reparse or second
+ * evidence check. The app uses this for immediate tools and tools.c's pending
+ * read/edit/copy; other pending executors stay with their owning modules. */
+int tools_execute_checked(const AgentCall *, const JsonToken *, char *, size_t,
+                          AgentJournal, void *, uint32_t now);
 const char *tools_text_phase(void);
 int tools_text_step(char *, size_t, uint32_t, int stop);
 /* Advance whichever pending tool operation is active: a text read/edit or a
@@ -68,6 +80,8 @@ int tools_text_step(char *, size_t, uint32_t, int stop);
  * registry rows with their own step functions instead. */
 int tools_pending_step(char *, size_t, uint32_t, int stop);
 int tools_validate_path(const char *path, int folder);
+/* Case-insensitive whole-component match of the configured relative queue. */
+int tools_path_in_queue(const char *workspace_relative_path);
 /* Runtime workspace root (MacRoman, ends in ':'), compiled default unless the
  * app applies the saved preferences. Shared by tools, inspection and builds. */
 const char *tools_workspace(void);

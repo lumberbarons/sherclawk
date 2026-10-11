@@ -179,8 +179,14 @@ built application can be published out of its build artifact folder into the
 workspace. The source needs its current `cat-` catalog revision from
 `list_files` or `get_file_info` and is never modified, removed or re-flagged.
 Copying FROM the sealed build queue is a read and is allowed, so a build
-artifact is a legal source; a destination under `Worker01:buildjobs` is
-refused like every other queue mutation. The destination is create-only: an
+artifact is a legal source; a destination under the configured
+`SHERCLAWK_BUILD_QUEUE` (default `Worker01:buildjobs`) is refused like every
+other queue mutation. The shared argument check runs before immediate or
+pending dispatch, matches whole colon-separated components regardless of
+ASCII case, and returns `EXECUTION_EVIDENCE_READ_ONLY` before any mutation
+or mutation journal entry. Every mutating registry row inherits protection
+for `path`; `copy_file` names `destination` as its writable argument.
+The destination is create-only: an
 existing name is refused `EXISTS` before any I/O, exactly like `write_text`.
 
 Both forks and the Finder type, creator and flags are preserved; the lock and

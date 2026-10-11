@@ -45,6 +45,8 @@ static inline int sherclawk_attribution(const char *url, char *out, size_t cap)
 }
 
 /* Fixed originating queue shared by build publication and retained authority. */
+#ifndef SHERCLAWK_BUILD_QUEUE
 #define SHERCLAWK_BUILD_QUEUE "Worker01:buildjobs"
+#endif
 
 #endif /* SHERCLAWK_CONFIG_H */

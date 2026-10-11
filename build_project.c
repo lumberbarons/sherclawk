@@ -245,7 +245,7 @@ static const char *start_code(int why)
 static const char *start_message(int why)
 {
     return why==SELFBUILD_BUSY ? "An earlier ToolServer command is still draining, so no build was started. Tell the user and wait before requesting another build." :
-        why==SELFBUILD_BLOCKED ? "The build queue holds a worker-lock or STOP marker, or cannot be used, so no build was started. Tell the user to inspect Worker01:buildjobs; do not try to remove either." :
+        why==SELFBUILD_BLOCKED ? "The build queue holds a worker-lock or STOP marker, or cannot be used, so no build was started. Tell the user to inspect " QUEUE "; do not try to remove either." :
         "MPW ToolServer is unavailable, so no build ran. Tell the user to install MPW ToolServer with the SDK, or quit and relaunch Sherclawk, and retry.";
 }
 static int resolve_input(int i)

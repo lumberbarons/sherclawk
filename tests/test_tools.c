@@ -2,6 +2,7 @@
  * that journal barriers, short writes, corrupt reads and rename races cannot
  * silently overwrite an existing file or claim an uncertain create succeeded. */
 #include "tools.h"
+#include "config.h"
 #include "view_image.h"
 #include "mcp_result.h"
 #include "json.h"
@@ -1722,6 +1723,7 @@ static void copy_checks(void)
         "{\"path\":\"app\",\"revision\":\"cat-0-0-0-0\",\"destination\":\"out\",\"extra\":1}|"
         "{\"path\":\"app\",\"revision\":1,\"destination\":\"out\"}";
       char *one=(char *)malloc(sizeof(bad)+1);
+      assert(one);
       strcpy(one,bad);
       for(char *at=strtok(one,"|");at;at=strtok(NULL,"|")) {
         reset(); copy_fixture(10,"app",data,rsrc,'APPL','ShCk',0);
@@ -2063,8 +2065,81 @@ static void registry_checks(void)
     puts("PASS tool registry: schemas and get_environment agree with one contract table");
 }
 
+/* Every registry mutation inherits sealed-path protection, including pending
+ * tools. The second build of this suite uses a different queue and length. */
+static void queue_guard_checks(void)
+{
+    char path[512];
+    JsonToken tokens[128];
+    ToolDef added = { TOOL_write_text, "future_mutation", "{}", 1, 1, NULL };
+    size_t row, i;
+    int mixed;
+    for (row = 0; row < tools_count(); row++) {
+        const ToolDef *def = tools_at(row);
+        if (!def->mutates) continue;
+        for (mixed = 0; mixed < 2; mixed++) {
+            snprintf(path, sizeof(path), "%s:x", SHERCLAWK_BUILD_QUEUE);
+            for (i = 0; path[i]; i++) {
+                if (path[i] >= 'a' && path[i] <= 'z' && (!mixed || i % 2)) path[i] -= 'a' - 'A';
+                else if (mixed && !(i % 2) && path[i] >= 'A' && path[i] <= 'Z') path[i] += 'a' - 'A';
+            }
+            reset(); strcpy(call.name, def->name);
+            snprintf(call.arguments, sizeof(call.arguments), "{\"%s\":\"%s\"}",
+                     def->id == TOOL_copy_file ? "destination" : "path", path);
+            assert(!run() && strstr(result, "EXECUTION_EVIDENCE_READ_ONLY"));
+            assert(!creates && !journals && !io_opens && !renames && !trash_moves);
+        }
+    }
+    reset(); strcpy(call.name, "edit_text");
+    snprintf(call.arguments, sizeof(call.arguments), "{\"path\":\"%s:x\"}", SHERCLAWK_BUILD_QUEUE);
+    assert(!edit_text_begin(&call, result, sizeof(result), journal, NULL, 42));
+    assert(strstr(result, "EXECUTION_EVIDENCE_READ_ONLY") && !creates && !journals);
+    /* A newly added pending registry row inherits the guard without a named
+     * executor or a separate flag in main.c's pending-state table. */
+    strcpy(call.name, added.name);
+    assert(tools_check_arguments(&added, &call, tokens, result, sizeof(result)) == -1);
+    assert(strstr(result, "EXECUTION_EVIDENCE_READ_ONLY") && !creates && !journals);
+    added.pending = 0;
+    assert(tools_check_arguments(&added, &call, tokens, result, sizeof(result)) == -1);
+    added.mutates = 0;
+    assert(!tools_check_arguments(&added, &call, tokens, result, sizeof(result)));
+    added.mutates = 1;
+    strcpy(call.arguments, "{\"path\":\"Sherclawk MCP Results:x\"}");
+    assert(tools_check_arguments(&added, &call, tokens, result, sizeof(result)) == -1);
+    assert(strstr(result, "EXECUTION_EVIDENCE_READ_ONLY"));
+    /* Whole-component matches include the queue itself and nested children,
+     * but leave siblings and short prefixes available to source tools. */
+    assert(tools_path_in_queue(SHERCLAWK_BUILD_QUEUE));
+    assert(tools_path_in_queue(SHERCLAWK_BUILD_QUEUE ":"));
+    assert(tools_path_in_queue(SHERCLAWK_BUILD_QUEUE ":job:launch.rec"));
+    assert(!tools_path_in_queue(SHERCLAWK_BUILD_QUEUE "-other:x"));
+    assert(!tools_path_in_queue("x:" SHERCLAWK_BUILD_QUEUE));
+    assert(!tools_path_in_queue("") && !tools_path_in_queue(NULL));
+    strcpy(path, SHERCLAWK_BUILD_QUEUE); path[strlen(path) - 1] = 0;
+    assert(!tools_path_in_queue(path));
+    strcpy(call.arguments, "{\"path\":\"" SHERCLAWK_BUILD_QUEUE "-other:x\"}");
+    assert(!tools_check_arguments(&added, &call, tokens, result, sizeof(result)));
+    strcpy(call.arguments, "{\"path\":\"Sherclawk MCP Results-old:x\"}");
+    assert(!tools_check_arguments(&added, &call, tokens, result, sizeof(result)));
+    /* Only the writable argument is sealed: copies may read evidence. */
+    strcpy(call.arguments, "{\"path\":\"" SHERCLAWK_BUILD_QUEUE ":x\",\"destination\":\"published\"}");
+    assert(!tools_check_arguments(tools_lookup("copy_file"), &call, tokens, result, sizeof(result)));
+    strcpy(call.arguments, "{\"path\":\"published\",\"destination\":\"" SHERCLAWK_BUILD_QUEUE ":x\"}");
+    assert(tools_check_arguments(tools_lookup("copy_file"), &call, tokens, result, sizeof(result)) == -1);
+    assert(strstr(result, "EXECUTION_EVIDENCE_READ_ONLY"));
+    assert(!copy_file_begin(&call, result, sizeof(result), journal, NULL, 42));
+    assert(strstr(result, "EXECUTION_EVIDENCE_READ_ONLY") && !creates && !journals);
+    strcpy(call.arguments, "[]");
+    assert(tools_check_arguments(&added, &call, tokens, result, sizeof(result)) == -1);
+    assert(strstr(result, "ARGUMENTS"));
+    puts("PASS configured queue guard: registry inheritance, both dispatch paths, case and component boundaries");
+}
 int main(void)
 {
+    queue_guard_checks();
+#ifdef SHERCLAWK_QUEUE_GUARD_CHECK
+    return 0;
+#endif
     registry_checks();
     mcp_result_checks();
     project_checks();

@@ -139,6 +139,15 @@ build_test test-tools "${WARN[@]}" -Wno-multichar \
     "$HERE/json.c" "$HERE/text.c" "$HERE/vendor/http.c"
 run_test test-tools
 
+# The sealed queue guard must follow configuration, including its length.
+build_test test-tools-queue "${WARN[@]}" -Wno-multichar \
+    -DSHERCLAWK_BUILD_QUEUE='"Build Service:pending"' -DSHERCLAWK_QUEUE_GUARD_CHECK=1 \
+    -I"$HERE/tests/toolbox" -I"$HERE" -I"$HERE/vendor" \
+    "$HERE/tests/test_tools.c" "$HERE/tools.c" "$HERE/fsutil.c" "$HERE/registry.c" "$HERE/agent.c" \
+    "$HERE/mcp_guard.c" "$HERE/mcp_result.c" "$HERE/mcp_config.c" "$HERE/inspect.c" "$HERE/view_image.c" \
+    "$HERE/json.c" "$HERE/text.c" "$HERE/vendor/http.c"
+run_test test-tools-queue
+
 build_test test-mcp-result "${WARN[@]}" -Wno-multichar \
     -I"$HERE/tests/toolbox" -I"$HERE" -I"$HERE/vendor" \
     "$HERE/tests/test_mcp_result.c" "$HERE/mcp_result.c" "$HERE/mcp_config.c" \
