@@ -314,9 +314,27 @@ Request construction still touches at most the 8 KiB of arguments and the 8 KiB
 header block once per exchange, and the diagnostic's own final summary of a
 search result remains synchronous. The separate acknowledgment connection adds
 TLS allocations, so its footprint must also be measured on the guest.
-The future retained-result cap is 128 KiB, while the existing tool
-result and 8 KiB argument caps will remain unchanged. Result artifacts and
-pagination are not implemented yet.
+
+### Retained results (`mcp_result.h`)
+
+Completed, redacted call responses are retained as immutable UTF-8 artifacts
+in `MCP_RESULT_FOLDER` under the workspace and paged back by
+`read_mcp_result` (see [tools](tools.md#retained-remote-mcp-results)).
+
+- `MCP_RESULT_CAP` is 128 KiB: the staging buffer `mcp_result.c` holds one
+  artifact, plus a 2,048-token parse array (32 KiB) and an 8 KiB read-back
+  chunk. A response is at most `MCP_MESSAGE_CAP` (64 KiB) and decoding never
+  expands text, so the artifact bound has headroom by construction.
+- `MCP_RESULT_PAGE` is 512 raw UTF-8 bytes per page. A page never splits a
+  multi-byte character (at most three bytes over), and its JSON-escaped wire
+  form (at most six bytes per control byte) plus the envelope stays under
+  `AGENT_RESULT_CAP`.
+- `MCP_RESULT_MAX` is 16 retained results per session (`LIMIT` when full),
+  and `MCP_RESULT_LINK_MAX` (6) with `MCP_RESULT_LINK_LEN` (300) bound the
+  source links surfaced with the summary.
+- Retention work is stepped (parse, decode, redact, 8 KiB staging chunks,
+  read-back, publication) and honors Stop; the tool result and 8 KiB
+  argument caps are unchanged.
 
 On 2026-10-08 the Docker-linked MCP diagnostic measured 339,968 bytes text,
 6,624 data and 1,190,632 bss (1,537,224 total). The main app remains 3,036,744

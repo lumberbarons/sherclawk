@@ -3,6 +3,7 @@
  * silently overwrite an existing file or claim an uncertain create succeeded. */
 #include "tools.h"
 #include "view_image.h"
+#include "mcp_result.h"
 #include "json.h"
 #include "text.h"
 #include "build/project-template.h"
@@ -142,6 +143,15 @@ OSErr FSpSetFInfo(const FSSpec *s, const FInfo *finfo)
 {
     int i=find(s->parID,s->name); if(i<0)return fnfErr;
     files[i].info=*finfo; return 0;
+}
+/* Retained MCP results read their artifacts back whole and delete failed
+ * stages; the model treats a delete as the file vanishing from the catalog. */
+OSErr GetEOF(short ref, long *eof) { *eof=files[ref].size; return 0; }
+OSErr FSpDelete(const FSSpec *s)
+{
+    int i=find(s->parID,s->name);
+    if(i<0) return fnfErr;
+    files[i].used=0; return 0;
 }
 OSErr FSRead(short ref, long *n, void *out)
 {
@@ -502,6 +512,7 @@ static int journal(void *ctx, const char *event, const char *json)
 static void reset(void)
 {
     memset(files,0,sizeof(files)); add(1,"Retro68",1);
+    mcp_result_new_session(); /* a fresh session empties the retained-result table */
     memset(resources,0,sizeof(resources)); res_ref=0; res_error=0;
     dir_error=dir_leftover=dir_race=touch_on_read=0;
     short_write=bad_read=bad_close=rename_race=rename_error=published=flush_error=0;
@@ -1948,6 +1959,38 @@ static void protection_checks(void)
     assert(!run() && leaf("new.c") < 0 && !creates); guard_refused();
     puts("PASS MCP configuration protection: identity guard across reads, listing, search, aliases, mutation and lookup failure");
 }
+/* Retained MCP results through the real dispatch: an unconfigured ID is
+ * stale, a retained result pages through tools_execute_recorded, and the
+ * artifacts folder is sealed from mutating tools. */
+static void mcp_result_checks(void)
+{
+    static const char response[] =
+        "{\"jsonrpc\":\"2.0\",\"id\":5,\"result\":{\"content\":"
+        "[{\"type\":\"text\",\"text\":\"Sherclawk retained \\u00e9 https://example.org/x text\"}]}}";
+    McpResultRetain in;
+    char id[64];
+    int r, guard = 0;
+    reset(); strcpy(call.name, "read_mcp_result");
+    strcpy(call.arguments, "{\"result_id\":\"mcp-00000000-0000\"}");
+    assert(!run() && strstr(result, "\"code\":\"STALE_ID\""));
+    reset();
+    memset(&in, 0, sizeof(in));
+    in.response = response; in.response_len = strlen(response);
+    in.folder = "Retro68:Sherclawk MCP Results:";
+    assert(mcp_result_retain_begin(&in, result, sizeof(result)) == 2);
+    r = 2;
+    while (r == 2) { assert(++guard < 100000); r = mcp_result_retain_step(result, sizeof(result), 0); }
+    assert(r == 0 && strstr(result, "\"result_id\""));
+    field("result_id", id, sizeof(id));
+    snprintf(call.arguments, sizeof(call.arguments), "{\"result_id\":\"%s\"}", id);
+    strcpy(call.name, "read_mcp_result");
+    assert(!run() && strstr(result, "\"status\":\"ok\"") && strstr(result, "\xc3\xa9"));
+    /* The retained artifact is sealed from mutations like the build queue. */
+    reset(); strcpy(call.name, "write_text");
+    strcpy(call.arguments, "{\"path\":\"Sherclawk MCP Results:attack\",\"text\":\"x\"}");
+    assert(!run() && strstr(result, "EXECUTION_EVIDENCE_READ_ONLY") && !creates);
+    puts("PASS read_mcp_result: dispatch, paging and sealed artifacts");
+}
 /* The registry is the one definition site of every tool contract: its rows
  * must agree with the two generated model-facing surfaces (the schema array
  * and get_environment's tools list) and with the numeric caps their text
@@ -2004,12 +2047,13 @@ static void registry_checks(void)
     assert(!tools_lookup("get_environment")->mutates && !tools_lookup("list_files")->mutates &&
            !tools_lookup("read_text")->mutates && !tools_lookup("search_text")->mutates &&
            !tools_lookup("read_build_log")->mutates && !tools_lookup("get_file_info")->mutates &&
-           !tools_lookup("view_image")->mutates);
+           !tools_lookup("view_image")->mutates && !tools_lookup("read_mcp_result")->mutates);
     assert(tools_lookup("read_text")->pending && tools_lookup("edit_text")->pending &&
            tools_lookup("build_project")->pending && tools_lookup("run_application")->pending &&
            tools_lookup("quit_application")->pending && tools_lookup("view_image")->pending &&
            tools_lookup("copy_file")->pending);
     assert(!tools_lookup("write_text")->pending && !tools_lookup("read_build_log")->pending);
+    assert(!tools_lookup("read_mcp_result")->pending);
     /* The model-facing cap descriptions never drift from the caps they name. */
     assert(atol(TOOLS_FILE_CAP_DESCRIPTION) == (long)TOOLS_ACCEPTED_FILE_CAP);
     assert(atol(TOOLS_STRING_CAP_DESCRIPTION) == (long)TOOLS_STRING_CAP);
@@ -2022,6 +2066,7 @@ static void registry_checks(void)
 int main(void)
 {
     registry_checks();
+    mcp_result_checks();
     project_checks();
     search_checks();
     int i;

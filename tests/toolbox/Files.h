@@ -20,7 +20,7 @@ typedef union {
     struct { unsigned char *ioNamePtr; short ioVRefNum; long ioDirID; short ioFDirIndex;
         unsigned char ioFlAttrib; FInfo unused; long ioDrDirID; } dirInfo;
 } CInfoPBRec;
-enum { noErr=0, fnfErr=-43, dupFNErr=-48, paramErr=-50, dirNFErr=-120, ioErr=-36, eofErr=-39,
+enum { noErr=0, fnfErr=-43, fBsyErr=-47, dupFNErr=-48, paramErr=-50, dirNFErr=-120, ioErr=-36, eofErr=-39,
        fsRdPerm=1, fsWrPerm=2, fsRdWrPerm=3, fsFromStart=1, smSystemScript=0 };
 typedef union { struct { unsigned char *ioNamePtr;short ioVolIndex,ioVRefNum; } volumeParam; } HParamBlockRec;
 typedef struct { unsigned char *ioNamePtr;short ioVRefNum,ioIndex;unsigned long ioFileCreator;long ioAPPLParID; } DTPBRec;

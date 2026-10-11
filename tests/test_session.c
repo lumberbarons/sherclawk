@@ -2,6 +2,8 @@
  * check that a failed handoff leaves the agent, the open journal and the file
  * handles exactly as they were, and that an existing file is never reused. */
 #include "session.h"
+#include "mcp_result.h"
+#include "json.h"
 #include <Files.h>
 #include <Script.h>
 #include <assert.h>
@@ -11,7 +13,8 @@
 
 #define WORKSPACE "Retro68:"
 #define FOLDER "Retro68:Sherclawk Sessions:"
-static struct File { int used, dir; char name[256]; char bytes[16384]; long size; } files[32];
+static struct File { int used, dir; char name[256]; char bytes[16384]; long size;
+    unsigned long type; } files[32];
 static long position[32];
 static int open_count, creates, fail_create_at, short_write, corrupt_read, flush_error, fail_write_at, writes;
 static unsigned long ticks = 0x2a;
@@ -52,12 +55,13 @@ OSErr FSpDirCreate(const FSSpec *s, short code, long *id)
 }
 OSErr FSpCreate(const FSSpec *s, unsigned long creator, unsigned long type, short code)
 {
-    char name[256]; (void)creator; (void)type; (void)code;
+    char name[256]; (void)creator; (void)code;
+    int i;
     creates++;
     if (creates == fail_create_at) return ioErr;
     if (find(s->name) >= 0) return dupFNErr;
     memcpy(name, s->name + 1, s->name[0]); name[s->name[0]] = 0;
-    add(name, 0); return noErr;
+    i = add(name, 0); files[i].type = type; return noErr;
 }
 OSErr FSpOpenDF(const FSSpec *s, short mode, short *ref)
 {
@@ -82,8 +86,44 @@ OSErr FSRead(short ref, long *n, void *bytes)
     return noErr;
 }
 OSErr GetEOF(short ref, long *eof) { *eof = files[ref].size; return noErr; }
+OSErr SetFPos(short ref, short pos, long off) { (void)pos; position[ref] = off; return noErr; }
 OSErr FSClose(short ref) { (void)ref; open_count--; return noErr; }
 OSErr FlushVol(const unsigned char *name, short vol) { (void)name; (void)vol; return flush_error ? ioErr : noErr; }
+/* The retained MCP result adapter renames leaf names inside their folder,
+ * deletes failed stages and re-checks the catalog of what it published. */
+OSErr FSpDelete(const FSSpec *s)
+{
+    int i = find(s->name);
+    if (i < 0) return fnfErr;
+    files[i].used = 0;
+    return noErr;
+}
+OSErr FSpRename(const FSSpec *s, const unsigned char *to)
+{
+    char name[256], *colon;
+    int i = find(s->name);
+    if (i < 0) return fnfErr;
+    memcpy(name, s->name + 1, s->name[0]); name[s->name[0]] = 0;
+    colon = strrchr(name, ':');
+    if (!colon) return paramErr;
+    colon[1] = 0;
+    strncat(name, (const char *)to + 1, (size_t)to[0]);
+    if (find_name(name) >= 0) return dupFNErr;
+    strcpy(files[i].name, name);
+    return noErr;
+}
+OSErr PBGetCatInfoSync(CInfoPBRec *pb)
+{
+    int i = find(pb->hFileInfo.ioNamePtr);
+    if (i < 0) return fnfErr;
+    pb->hFileInfo.ioFlAttrib = (unsigned char)(files[i].dir ? 16 : 0);
+    pb->hFileInfo.ioFlFndrInfo.fdFlags = 0;
+    pb->hFileInfo.ioFlFndrInfo.fdType = files[i].type;
+    pb->hFileInfo.ioFlLgLen = files[i].size;
+    pb->hFileInfo.ioFlRLgLen = 0;
+    if (files[i].dir) pb->dirInfo.ioDrDirID = 1;
+    return noErr;
+}
 
 static Agent agent, before;
 static Session session;
@@ -252,6 +292,53 @@ static void test_commit_failures_leave_agent_untouched(void)
     assert(!memcmp(&before, &agent, sizeof(agent)) && !session.open);
 }
 
+/* A new journal is a new session: retained MCP result IDs die with it, and
+ * no journal record ever revives them. */
+static void test_mcp_results_session_scoped(void)
+{
+    static const char response[] =
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"content\":"
+        "[{\"type\":\"text\",\"text\":\"session retained text\"}]}}";
+    McpResultRetain in;
+    char summary[AGENT_RESULT_CAP], id[24];
+    AgentCall call;
+    JsonToken t[64];
+    int r, guard = 0;
+
+    reset();
+    assert(!session_open(&session, WORKSPACE));
+    memset(&in, 0, sizeof(in));
+    in.response = response;
+    in.response_len = strlen(response);
+    in.folder = "Retro68:Sherclawk MCP Results:";
+    assert(mcp_result_retain_begin(&in, summary, sizeof(summary)) == 2);
+    r = 2;
+    while (r == 2) { guard++; assert(guard < 10000); r = mcp_result_retain_step(summary, sizeof(summary), 0); }
+    assert(r == 0);
+    assert(json_parse(summary, strlen(summary), t, 64) > 1);
+    assert(json_string(summary, t, json_member(summary, t, 0, "result_id"), id, sizeof(id)) > 0);
+    memset(&call, 0, sizeof(call));
+    strcpy(call.name, "read_mcp_result");
+    snprintf(call.arguments, sizeof(call.arguments), "{\"result_id\":\"%s\"}", id);
+    {
+        char out[AGENT_RESULT_CAP];
+        assert(mcp_result_read(&call, out, sizeof(out)) == 0 && strstr(out, "\"status\":\"ok\""));
+    }
+    /* session_open creates a new journal, so the retained ID is stale. */
+    assert(!session_open(&session, WORKSPACE));
+    {
+        char out[AGENT_RESULT_CAP];
+        assert(mcp_result_read(&call, out, sizeof(out)) == 0 && strstr(out, "\"code\":\"STALE_ID\""));
+    }
+    /* The artifact stays on disk as evidence; a new session simply has no
+     * entry for it and nothing is restored from the journal records. */
+    {
+        char path[256];
+        snprintf(path, sizeof(path), "Retro68:Sherclawk MCP Results:%s", id);
+        assert(find_name("Retro68:Sherclawk MCP Results") >= 0);
+        assert(find_name(path) >= 0);
+    }
+}
 int main(void)
 {
     test_open_and_journal();
@@ -259,6 +346,7 @@ int main(void)
     test_save_handoff();
     test_commit_handoff();
     test_commit_failures_leave_agent_untouched();
+    test_mcp_results_session_scoped();
     puts("session tests passed");
     return 0;
 }

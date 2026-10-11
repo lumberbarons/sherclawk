@@ -12,6 +12,7 @@ buffer and deadline relationships are in [limits](limits.md).
 | Native project work | `create_project`, `build_project`, `read_build_log`, `run_application` |
 | Read-only platform inspection | `get_file_info`, `resolve_alias`, `list_processes`, `list_fonts`, `measure_text`, `list_resources`, `read_resource` |
 | Read-only image viewing | `view_image` |
+| Retained remote tool results | `read_mcp_result` |
 
 ## Workspace paths and text
 
@@ -300,6 +301,54 @@ picture, so it must not describe one.
 
 If the conversation is already so full that the encoded image could not fit in
 one request, the image is not attached and the note says so explicitly.
+
+## Retained remote MCP results
+
+When a configured remote MCP tool call completes, its response — already
+redacted in place by the client, so no configured credential or session ID
+remains — is retained as evidence the model can page through. The retention
+decodes every `text` content item into one UTF-8 artifact (items joined with
+`\n`), re-runs credential redaction over the decoded text, stages it beside
+the retained-results folder, flushes it, reads it back byte for byte, renames
+it into place, re-checks its catalog entry, and journals one
+`mcp_result_retained` record. Only then is the ID advertised: the call's tool
+result carries `result_id`, `bytes`, `is_error` (and the JSON-RPC `error_code`
+for a protocol-level error), `items`, `unsupported` (content of other kinds —
+images, resource links, unknown types — is counted, never retained), and
+`links`, up to six `http(s)` source URLs cut from the redacted text so
+citations survive without paging everything. A response with no text content
+retains nothing and the summary says so; a remote tool error still retains its
+text and reports `is_error`.
+
+The artifacts are immutable: they live in the workspace folder
+`Sherclawk MCP Results:` as `mcp-XXXXXXXX-XXXX` files of type `UTF8`, created
+only, never rewritten, and sealed from every mutating tool exactly like the
+build queue (`EXECUTION_EVIDENCE_READ_ONLY`). Retention and reading are
+stepped from the event loop and honor Stop: a stopped or failed retention
+deletes its stage and is never advertised, and the remote call is not
+replayed.
+
+`read_mcp_result(result_id, start_byte)` returns one page of about 512 raw
+UTF-8 bytes. Pages never split a multi-byte character — `next_byte` is the
+next character boundary — so the escaped `text` wire value is always whole,
+and reading the same `start_byte` twice returns the identical page. Follow
+`next_byte` until `truncated` is false. `start_byte` at `bytes` reads an empty
+final page. IDs are session-scoped: a new journal (new chat, handoff) makes
+every previous ID `STALE_ID`, and nothing is ever restored from journal
+records. At most 16 results are retained per session; the next retention
+fails with `LIMIT`.
+
+| Code | Meaning |
+|---|---|
+| `ARGUMENTS` | Not exactly `result_id` (and an optional `start_byte` offset). |
+| `STALE_ID` | Unknown, malformed, or from a previous session. |
+| `RANGE` | `start_byte` lies beyond the end of the artifact or inside a multi-byte character (use `next_byte`). |
+| `CHANGED` | The artifact's catalog identity, type or size no longer matches the verified entry. |
+| `READ` / `ENCODING` | The artifact could not be read, or is no longer valid UTF-8. |
+| `RETAIN_BUSY`, `LIMIT`, `RETENTION`, `STAGE`, `VERIFY`, `JOURNAL`, `STOPPED`, `SESSION` | Retention-side failures; nothing was retained or advertised. |
+
+See [limits](limits.md) for the 128 KiB artifact cap and the page math, and
+[MCP](mcp.md) for the client whose redacted responses are retained.
 
 ## Editing text
 
