@@ -21,11 +21,18 @@ static struct File {
     unsigned long type;
 } files[24];
 static long position[24];
+static int open_refs[24]; /* open forks: a busy file cannot be deleted */
 static int creates, opens, writes, reads, renames, flushes, dir_creates, deletes, closes, setposs;
 static int fail_dir_create, fail_create_at, fail_open_at, fail_write_at, short_write;
 static int fail_close_at, fail_flush_at, fail_read_at, corrupt_read_at, fail_rename_at;
 static int fail_setpos_at, journal_fail;
 static unsigned long ticks = 0x2a;
+static int open_fork_count(void)
+{
+    int i, total = 0;
+    for (i = 0; i < 24; i++) total += open_refs[i];
+    return total;
+}
 
 unsigned long TickCount(void) { return ticks; }
 
@@ -82,7 +89,7 @@ OSErr FSpOpenDF(const FSSpec *s, short mode, short *ref)
     if (i < 0) return fnfErr;
     if (files[i].dir) return paramErr;
     if (++opens == fail_open_at) return ioErr;
-    *ref = (short)i; position[i] = 0;
+    *ref = (short)i; position[i] = 0; open_refs[i]++;
     return noErr;
 }
 OSErr FSWrite(short ref, long *n, const void *bytes)
@@ -112,7 +119,13 @@ OSErr SetFPos(short ref, short pos, long off)
     position[ref] = off;
     return noErr;
 }
-OSErr FSClose(short ref) { (void)ref; if (++closes == fail_close_at) return ioErr; return noErr; }
+OSErr FSClose(short ref)
+{
+    assert(open_refs[ref] > 0);
+    open_refs[ref]--; /* a failed close still releases the fork */
+    if (++closes == fail_close_at) return ioErr;
+    return noErr;
+}
 OSErr FlushVol(const unsigned char *name, short vol)
 {
     (void)name; (void)vol;
@@ -124,6 +137,7 @@ OSErr FSpDelete(const FSSpec *s)
     int i = find(s->name);
     deletes++;
     if (i < 0) return fnfErr;
+    if (open_refs[i] > 0) return fBsyErr;
     files[i].used = 0;
     return noErr;
 }
@@ -176,6 +190,7 @@ static int fault_journal;
 static void reset(void)
 {
     memset(files, 0, sizeof(files));
+    memset(open_refs, 0, sizeof(open_refs));
     mcp_result_new_session(); /* fresh session: empty table, stale old IDs */
     creates = opens = writes = reads = renames = flushes = dir_creates = deletes = closes = setposs = 0;
     fail_dir_create = fail_create_at = fail_open_at = fail_write_at = short_write = 0;
@@ -371,6 +386,9 @@ static void test_utf8_boundaries(void)
     assert(field_long(summary, "bytes") == 518);
     reconstruct(id, text, sizeof(text));
     assert(!strcmp(text, expected));
+    /* A start_byte inside the euro is a range error, not corrupt data. */
+    assert(read_page(id, 512) == 0);
+    assert(strstr(read_result, "\"code\":\"RANGE\""));
     /* The first page carried the whole euro: next_byte is past its last byte. */
     assert(read_page(id, 0) == 0);
     assert(field_long(read_result, "next_byte") >= 514);
@@ -523,6 +541,7 @@ static void test_stop(void)
     assert(mcp_result_retain_step(summary, sizeof(summary), 1) == 1);
     assert(strstr(summary, "\"code\":\"STOPPED\""));
     assert(artifact_count() == 0 && artifact_count_suffix(".new") == 0);
+    assert(open_fork_count() == 0);
     /* A stopped retention leaves the adapter reusable. */
     assert(retain(two_items, FOLDER, NULL, NULL) == 0);
     assert(artifact_count() == 1);
@@ -549,6 +568,7 @@ static void test_faults(void)
         /* No stage remains and nothing was advertised. */
         assert(artifact_count_suffix(".new") == 0);
         assert(artifact_count() == 0);
+        assert(open_fork_count() == 0);
         /* The adapter is reusable after every failure. */
         reset();
         assert(retain(two_items, FOLDER, NULL, NULL) == 0);
@@ -641,6 +661,19 @@ static void test_retain_arguments(void)
     in.response = ""; in.response_len = 0;
     assert(mcp_result_retain_begin(&in, summary, sizeof(summary)) == 0);
     assert(strstr(summary, "\"code\":\"ARGUMENTS\"") && artifact_count() == 0);
+    /* A folder path that would not fit a Pascal string is refused, never truncated. */
+    {
+        static char long_folder[300];
+        int before = dir_creates;
+        memset(long_folder, 'f', sizeof(long_folder));
+        memcpy(long_folder, "Retro68:", 8);
+        long_folder[240] = ':'; long_folder[241] = 0;
+        in.folder = long_folder;
+        in.response = two_items; in.response_len = strlen(two_items);
+        assert(mcp_result_retain_begin(&in, summary, sizeof(summary)) == 0);
+        assert(strstr(summary, "\"code\":\"ARGUMENTS\"") && artifact_count() == 0 && dir_creates == before);
+    }
+    in.folder = FOLDER;
     /* Without a journal configured (diagnostics) retention still works. */
     fault_journal = 1;
     assert(retain(two_items, FOLDER, NULL, NULL) == 0);

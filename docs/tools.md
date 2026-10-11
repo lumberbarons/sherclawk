@@ -342,7 +342,7 @@ fails with `LIMIT`.
 |---|---|
 | `ARGUMENTS` | Not exactly `result_id` (and an optional `start_byte` offset). |
 | `STALE_ID` | Unknown, malformed, or from a previous session. |
-| `RANGE` | `start_byte` lies beyond the end of the artifact. |
+| `RANGE` | `start_byte` lies beyond the end of the artifact or inside a multi-byte character (use `next_byte`). |
 | `CHANGED` | The artifact's catalog identity, type or size no longer matches the verified entry. |
 | `READ` / `ENCODING` | The artifact could not be read, or is no longer valid UTF-8. |
 | `RETAIN_BUSY`, `LIMIT`, `RETENTION`, `STAGE`, `VERIFY`, `JOURNAL`, `STOPPED`, `SESSION` | Retention-side failures; nothing was retained or advertised. |

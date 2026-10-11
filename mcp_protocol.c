@@ -138,12 +138,20 @@ static int begin_rewrite(McpWork *w)
     w->phase = C_REDACT;
     return 0;
 }
+/* The registry entry is prefix, quoted description, this literal, the schema
+ * text, then "}}"; schema_offset is where the schema copy begins. */
+#define PARAMETERS_PIECE ",\"parameters\":"
+#define PARAMETERS_LEN (sizeof(PARAMETERS_PIECE) - 1)
+static size_t schema_offset(const McpWork *w)
+{
+    return w->prefix_len + w->quoted_used + PARAMETERS_LEN;
+}
 static const char *copy_piece(McpWork *w, int piece, size_t *length)
 {
     switch (piece) {
     case 0: *length = w->prefix_len; return w->prefix;
     case 1: *length = w->quoted_used; return w->quoted;
-    case 2: *length = 14; return ",\"parameters\":";
+    case 2: *length = PARAMETERS_LEN; return PARAMETERS_PIECE;
     case 3: *length = (size_t)(w->tokens[w->held[2]].end - w->tokens[w->held[2]].start);
             return w->text + w->tokens[w->held[2]].start;
     default: *length = 2; return "}}";
@@ -419,7 +427,7 @@ static int advance_phase(McpWork *w, size_t *work, size_t budget)
         n = snprintf(w->prefix, sizeof(w->prefix), "%s{\"type\":\"function\",\"function\":{\"name\":\"%s\",\"description\":",
             r->count ? "," : "", w->mapped);
         w->prefix_len = (size_t)n;
-        w->total = w->prefix_len + w->quoted_used + 14 + (size_t)(t[w->held[2]].end - t[w->held[2]].start) + 2;
+        w->total = schema_offset(w) + (size_t)(t[w->held[2]].end - t[w->held[2]].start) + 2;
         if (w->total >= available) return reject(w, "schema limit");
         w->piece = 0; w->piece_at = 0; w->copied = 0;
         w->phase = T_COPY;
@@ -432,7 +440,7 @@ static int advance_phase(McpWork *w, size_t *work, size_t budget)
             /* The input schema is the server's text, copied verbatim: its own
              * descriptions, defaults, enums and keys are redacted as raw JSON
              * before the schema is published (before schema_len moves). */
-            size_t offset = w->prefix_len + w->quoted_used + 14;
+            size_t offset = schema_offset(w);
             mcp_redact_init_text(&w->redact, c, w->session, r->schemas + r->schema_len + offset,
                 (size_t)(t[w->held[2]].end - t[w->held[2]].start), 1);
             w->phase = T_SCHEMA_REDACT;

@@ -14,6 +14,9 @@ extern unsigned long TickCount(void);
 #define MCP_RESULT_TOKENS 2048
 #define MCP_RESULT_CHUNK 8192
 #define MCP_RESULT_ID_LEN 17
+/* A Pascal string holds 255 bytes; longer paths would silently truncate and
+ * resolve to some other file or folder, so they are refused instead. */
+#define MCP_RESULT_PATH_MAX 255
 
 typedef struct {
     char id[MCP_RESULT_ID_LEN + 1];
@@ -21,7 +24,6 @@ typedef struct {
     long bytes;
     int is_error;
     char error_code[16]; /* JSON-RPC error code slice, empty when none */
-    unsigned long scope;
 } McpResultEntry;
 static McpResultEntry results[MCP_RESULT_MAX];
 static int result_count;
@@ -39,7 +41,7 @@ static struct {
     char stage_path[344], final_path[344];
     FSSpec stage_spec;
     int phase, item, text, list_end, items, unsupported, is_error, first_item;
-    int stage_created, renamed;
+    int stage_created, renamed, ref_open;
     short ref;
     long written, checked;
     size_t used, item_at, item_len;
@@ -58,7 +60,7 @@ static char verify[MCP_RESULT_CHUNK];
 static void pstr(Str255 p, const char *s)
 {
     size_t n = strlen(s);
-    if (n > 255) n = 255;
+    if (n > MCP_RESULT_PATH_MAX) n = MCP_RESULT_PATH_MAX; /* callers reject longer paths first */
     p[0] = (unsigned char)n;
     memcpy(&p[1], s, n);
 }
@@ -86,13 +88,18 @@ static int quote_at(char *out, size_t cap, size_t *at, const char *s)
     return 0;
 }
 
-/* End the retention with an error: an unrenamed stage is deleted, a renamed
- * artifact stays on disk as unadvertised evidence, and the ID is never
- * published. Returns 1 (the caller's terminal failure code). */
+/* End the retention with an error: an unrenamed stage is closed and deleted
+ * (a busy file cannot be deleted), a renamed artifact stays on disk as
+ * unadvertised evidence, and the ID is never published. Returns 1 (the
+ * caller's terminal failure code). */
 static int retain_fail(char *out, size_t cap, const char *code, const char *message, int native)
 {
     FSSpec spec;
     Str255 path;
+    if (work.ref_open) {
+        (void)FSClose(work.ref);
+        work.ref_open = 0;
+    }
     if (work.stage_created && !work.renamed) {
         pstr(path, work.stage_path);
         if (!FSMakeFSSpec(0, 0, path, &spec)) (void)FSpDelete(&spec);
@@ -251,7 +258,7 @@ int mcp_result_retain_begin(const McpResultRetain *in, char *out, size_t cap)
         return 0;
     }
     n = strlen(in->folder);
-    if (n + MCP_RESULT_ID_LEN + 5 >= sizeof(stage_path) || in->folder[n - 1] != ':') {
+    if (n + MCP_RESULT_ID_LEN + 4 > MCP_RESULT_PATH_MAX || in->folder[n - 1] != ':') {
         fail(out, cap, "ARGUMENTS", "The artifact folder path is not usable.", 0);
         return 0;
     }
@@ -412,6 +419,9 @@ int mcp_result_retain_step(char *out, size_t cap, int stop)
                 active = 0;
                 return 0;
             }
+            /* Prove the summary fits before anything reaches the disk, so the
+             * final step cannot fail after the artifact is published. */
+            if (summary_out(out, cap, 1)) return retain_fail(out, cap, "RETENTION", "The summary does not fit.", 0);
             work.phase = R_STAGE_CREATE;
             break;
         case R_STAGE_CREATE:
@@ -423,6 +433,7 @@ int mcp_result_retain_step(char *out, size_t cap, int stop)
         case R_STAGE_OPEN:
             err = FSpOpenDF(&work.stage_spec, fsWrPerm, &work.ref);
             if (err) return retain_fail(out, cap, "STAGE", "The retained result could not be created.", err);
+            work.ref_open = 1;
             work.phase = R_STAGE_WRITE;
             break;
         case R_STAGE_WRITE: {
@@ -439,6 +450,7 @@ int mcp_result_retain_step(char *out, size_t cap, int stop)
         }
         case R_STAGE_CLOSE:
             err = FSClose(work.ref);
+            work.ref_open = 0;
             if (err) return retain_fail(out, cap, "STAGE", "The retained result could not be written.", err);
             work.phase = R_FLUSH;
             break;
@@ -451,6 +463,7 @@ int mcp_result_retain_step(char *out, size_t cap, int stop)
             long size;
             err = FSpOpenDF(&work.stage_spec, fsRdPerm, &work.ref);
             if (err) return retain_fail(out, cap, "STAGE", "The retained result could not be read back.", err);
+            work.ref_open = 1;
             err = GetEOF(work.ref, &size);
             if (err || size != (long)work.used)
                 return retain_fail(out, cap, "VERIFY", "The retained result did not read back whole.", err ? err : ioErr);
@@ -474,6 +487,7 @@ int mcp_result_retain_step(char *out, size_t cap, int stop)
         }
         case R_VERIFY_CLOSE:
             err = FSClose(work.ref);
+            work.ref_open = 0;
             if (err) return retain_fail(out, cap, "VERIFY", "The retained result could not be read back.", err);
             work.phase = R_PUBLISH;
             break;
@@ -507,14 +521,14 @@ int mcp_result_retain_step(char *out, size_t cap, int stop)
             work.phase = R_SUMMARY;
             break;
         case R_SUMMARY: {
-            McpResultEntry *entry = &results[result_count++];
+            McpResultEntry *entry;
+            if (summary_out(out, cap, 1)) return retain_fail(out, cap, "RETENTION", "The summary does not fit.", 0);
+            entry = &results[result_count++];
             strcpy(entry->id, work.id);
             snprintf(entry->path, sizeof(entry->path), "%s%s", work.folder, work.id);
             entry->bytes = (long)work.used;
             entry->is_error = work.is_error;
             strcpy(entry->error_code, work.error_code);
-            entry->scope = work.scope;
-            if (summary_out(out, cap, 1)) return retain_fail(out, cap, "RETENTION", "The summary does not fit.", 0);
             active = 0;
             return 0;
         }
@@ -595,7 +609,7 @@ int mcp_result_read(const AgentCall *call, char *out, size_t cap)
         return 0;
     }
     for (i = 0; i < result_count; i++)
-        if (!strcmp(results[i].id, id) && results[i].scope == result_scope) { entry = &results[i]; break; }
+        if (!strcmp(results[i].id, id)) { entry = &results[i]; break; }
     if (!entry) {
         fail(out, cap, "STALE_ID", "No retained result with this ID is available in this session.", 0);
         return 0;
@@ -629,6 +643,10 @@ int mcp_result_read(const AgentCall *call, char *out, size_t cap)
     }
     if (FSClose(ref) && !err) err = ioErr;
     if (err) { fail(out, cap, "READ", "The retained result could not be read.", err); return 0; }
+    if (n > 0 && (page[0] & 0xc0) == 0x80) {
+        fail(out, cap, "RANGE", "start_byte falls inside a multi-byte character; use a next_byte value.", 0);
+        return 0;
+    }
     /* Never split a multi-byte character: extend the page to the next
      * boundary, at most three bytes past the cap. */
     limit = start + MCP_RESULT_PAGE;
