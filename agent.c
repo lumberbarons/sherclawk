@@ -9,7 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 
-/* One 4096-token scratch (64 KiB) is shared by both response parsers and the
+/* One 4096-token scratch (64 KiB) is shared by the completion parser and the
  * usage/context extractors, which never nest while an outer parser still needs
  * its token indices: agent_response absorbs only after its own use has ended. */
 static JsonToken tokens[4096];
@@ -291,29 +291,74 @@ static int null_token(const char *s, const JsonToken *t, int index)
     return index >= 0 && t[index].type == JSON_PRIMITIVE &&
         t[index].end - t[index].start == 4 && !memcmp(s + t[index].start, "null", 4);
 }
+static int reject(char *error, size_t cap, int status, const char *reason)
+{
+    snprintf(error, cap, "HTTP %d: %s", status, reason);
+    return -1;
+}
+typedef struct {
+    int message, content, calls;
+    char finish[64];
+} ParsedChoice;
+/* Token indices remain valid until another parser uses the shared scratch.
+ * Callers apply their own text/tool and truncation policy before that point. */
+static int parse_completion(const char *body, size_t len, int status,
+                            ParsedChoice *out, char *error, size_t cap)
+{
+    char role[32];
+    int i, choice;
+    if (json_parse(body, len, tokens, 4096) < 1 || tokens[0].type != JSON_OBJECT) {
+        snprintf(error, cap, "HTTP %d: response is not a bounded JSON object (%lu bytes).", status, (unsigned long)len);
+        return -1;
+    }
+    i = json_member(body, tokens, 0, "error");
+    if (status < 200 || status >= 300 || i >= 0) {
+        char detail[180];
+        if (json_string(body, tokens, json_member(body, tokens, i, "message"), detail, sizeof(detail)) >= 0)
+            snprintf(error, cap, "HTTP %d: %s", status, detail);
+        else snprintf(error, cap, "HTTP %d: provider error without a message.", status);
+        return -1;
+    }
+    i = json_member(body, tokens, 0, "choices");
+    if (i < 0 || tokens[i].type != JSON_ARRAY || tokens[i].next == i + 1)
+        return reject(error, cap, status, "response has no choices.");
+    choice = i + 1;
+    out->message = json_member(body, tokens, choice, "message");
+    if (out->message < 0 || tokens[out->message].type != JSON_OBJECT)
+        return reject(error, cap, status, "choice has no message object.");
+    if (json_string(body, tokens, json_member(body, tokens, out->message, "role"), role, sizeof(role)) < 0 || strcmp(role, "assistant"))
+        return reject(error, cap, status, "message role is missing or not \"assistant\".");
+    if (json_string(body, tokens, json_member(body, tokens, choice, "finish_reason"), out->finish, sizeof(out->finish)) < 0)
+        return reject(error, cap, status, "choice has no finish_reason.");
+    if (strcmp(out->finish, "stop") && strcmp(out->finish, "tool_calls") && strcmp(out->finish, "length")) {
+        snprintf(error, cap, "HTTP %d: unsupported finish_reason \"%s\".", status, out->finish);
+        return -1;
+    }
+    out->content = json_member(body, tokens, out->message, "content");
+    out->calls = json_member(body, tokens, out->message, "tool_calls");
+    error[0] = 0; return 0;
+}
 int agent_handoff_response(const char *body, size_t len, int status, char *summary,
                            size_t cap, char *error, size_t error_cap)
 {
-    char finish[64], role[32];
-    int choices, msg, calls;
+    ParsedChoice choice;
+    char detail[256];
+    int calls;
     summary[0] = 0;
+    if (parse_completion(body, len, status, &choice, detail, sizeof(detail))) {
+        snprintf(error, error_cap, "%s Conversation retained.", detail);
+        return -1;
+    }
     snprintf(error, error_cap, "HTTP %d: handoff must be complete text without tool calls. Conversation retained.", status);
-    if (status < 200 || status >= 300 || json_parse(body, len, tokens, 4096) < 1 ||
-        tokens[0].type != JSON_OBJECT || json_member(body, tokens, 0, "error") >= 0) return -1;
-    choices = json_member(body, tokens, 0, "choices");
-    if (choices < 0 || tokens[choices].type != JSON_ARRAY || tokens[choices].next == choices + 1) return -1;
-    msg = json_member(body, tokens, choices + 1, "message");
-    if (json_string(body, tokens, json_member(body, tokens, choices + 1, "finish_reason"), finish, sizeof(finish)) < 0) return -1;
-    if (!strcmp(finish, "length")) {
+    if (!strcmp(choice.finish, "length")) {
         snprintf(error, error_cap, "Handoff reached the output token limit before finishing. Conversation retained. Try Save Handoff again.");
         return -1;
     }
-    if (msg < 0 || tokens[msg].type != JSON_OBJECT || strcmp(finish, "stop") ||
-        json_string(body, tokens, json_member(body, tokens, msg, "role"), role, sizeof(role)) < 0 || strcmp(role, "assistant")) return -1;
-    calls = json_member(body, tokens, msg, "tool_calls");
+    if (strcmp(choice.finish, "stop")) return -1;
+    calls = choice.calls;
     if (calls >= 0 && !null_token(body, tokens, calls) &&
         (tokens[calls].type != JSON_ARRAY || tokens[calls].next != calls + 1)) return -1;
-    if (json_string(body, tokens, json_member(body, tokens, msg, "content"), summary, cap) <= 0) return -1;
+    if (json_string(body, tokens, choice.content, summary, cap) <= 0) return -1;
     error[0] = 0; return 0;
 }
 /* A reply that cannot be used as sent. Nothing in it is recorded or run: the
@@ -365,54 +410,28 @@ static int string_fit(const char *body, int index, size_t cap)
     int n = json_string(body, tokens, index, NULL, 0);
     return n < 0 ? -1 : (size_t)n < cap;
 }
-static int reject(char *error, size_t cap, int status, const char *reason)
-{
-    snprintf(error, cap, "HTTP %d: %s", status, reason);
-    return -1;
-}
 int agent_response(Agent *a, const char *body, size_t len, int status, char *error, size_t cap)
 {
     /* One assistant response cannot exceed the transport response bound;
      * its scratch buffer need not grow with total conversation history. */
     static char message[CHAT_RESPONSE_CAP + 1];
-    char finish[64], role[32], kind[32];
-    int parsed, choice, msg, content, calls, i, count = 0, limited, too_many = 0, too_big = 0;
+    ParsedChoice choice;
+    char kind[32];
+    int msg, content, calls, i, count = 0, limited, too_many = 0, too_big = 0;
     size_t length, reserve;
     snprintf(error, cap, "HTTP %d: invalid, truncated, or unsupported model response.", status);
     if (!a->active || a->next < a->count) return -1;
-    parsed = json_parse(body, len, tokens, 4096);
-    if (parsed < 1 || tokens[0].type != JSON_OBJECT) {
-        snprintf(error, cap, "HTTP %d: response is not a bounded JSON object (%lu bytes).", status, (unsigned long)len);
-        return -1;
-    }
-    i = json_member(body, tokens, 0, "error");
-    if (status < 200 || status >= 300 || i >= 0) {
-        char detail[180];
-        if (json_string(body, tokens, json_member(body, tokens, i, "message"), detail, sizeof(detail)) >= 0)
-            snprintf(error, cap, "HTTP %d: %s", status, detail);
-        else snprintf(error, cap, "HTTP %d: provider error without a message.", status);
-        return -1;
-    }
-    i = json_member(body, tokens, 0, "choices");
-    if (i < 0 || tokens[i].type != JSON_ARRAY || tokens[i].next == i + 1) {
-        snprintf(error, cap, "HTTP %d: response has no choices.", status);
-        return -1;
-    }
-    choice = i + 1; msg = json_member(body, tokens, choice, "message");
-    if (msg < 0 || tokens[msg].type != JSON_OBJECT) return reject(error, cap, status, "choice has no message object.");
-    if (json_string(body, tokens, json_member(body, tokens, msg, "role"), role, sizeof(role)) < 0 || strcmp(role, "assistant"))
-        return reject(error, cap, status, "message role is missing or not \"assistant\".");
-    if (json_string(body, tokens, json_member(body, tokens, choice, "finish_reason"), finish, sizeof(finish)) < 0)
-        return reject(error, cap, status, "choice has no finish_reason.");
-    limited = !strcmp(finish, "length"); a->truncated = 0; a->discarded = NULL;
-    content = json_member(body, tokens, msg, "content"); a->text[0] = 0;
+    if (parse_completion(body, len, status, &choice, error, cap)) return -1;
+    msg = choice.message; content = choice.content;
+    limited = !strcmp(choice.finish, "length"); a->truncated = 0; a->discarded = NULL;
+    a->text[0] = 0;
     if (content >= 0 && !null_token(body, tokens, content) &&
         json_string(body, tokens, content, a->text, sizeof(a->text)) < 0) {
         if (limited) return discard_truncated(a, body, len, error, cap);
         return reject(error, cap, status, string_fit(body, content, sizeof(a->text)) == 0 ?
             "reply text exceeds the " STRINGIFY(AGENT_REPLY_CAP) "-byte reply buffer." : "reply text is not a valid string.");
     }
-    calls = json_member(body, tokens, msg, "tool_calls");
+    calls = choice.calls;
     if (calls >= 0 && !null_token(body, tokens, calls)) {
         const char *why = NULL;
         if (tokens[calls].type != JSON_ARRAY) why = "tool_calls is not an array.";
@@ -446,17 +465,13 @@ int agent_response(Agent *a, const char *body, size_t len, int status, char *err
         if (why) return reject(error, cap, status, why);
     }
     a->limited = limited;
-    if (strcmp(finish, "stop") && strcmp(finish, "tool_calls") && !limited) {
-        snprintf(error, cap, "HTTP %d: unsupported finish_reason \"%s\".", status, finish);
-        return -1;
-    }
     /* A cut-off tool call is incomplete by definition, so it never runs. */
     if (limited && (count || !*a->text)) return discard_truncated(a, body, len, error, cap);
     if (!count && !*a->text) {
-        snprintf(error, cap, "HTTP %d: no usable text or tool calls (finish_reason \"%s\").", status, finish);
+        snprintf(error, cap, "HTTP %d: no usable text or tool calls (finish_reason \"%s\").", status, choice.finish);
         return -1;
     }
-    if (!count && !strcmp(finish, "tool_calls")) {
+    if (!count && !strcmp(choice.finish, "tool_calls")) {
         snprintf(error, cap, "HTTP %d: finish_reason \"tool_calls\" with no calls.", status);
         return -1;
     }

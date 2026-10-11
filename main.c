@@ -74,6 +74,7 @@ static TEHandle      gResponseTE = NULL;
 static ControlHandle gResponseScroll = NULL;
 static ControlActionUPP gScrollActionUPP = NULL;
 static TEHandle      gFocusedTE = NULL;
+static Chat gChat; /* Bounded display transcript; gAgent owns wire history. */
 
 static Rect gModelRect, gSendRect;
 static Rect gInfoRect, gStatusRect, gHistoryRect, gMeterRect;
@@ -102,7 +103,6 @@ static int   gPrefsUnreadable = 0;   /* existing file could not be read */
 #define kPrefsFileType 'pref'
 
 /* ── Request state ──────────────────────────────────────────────── */
-static Chat gChat; /* Only the bounded native display is reused. */
 static Agent gAgent;
 static char gRunModel[CHAT_MODEL_CAP];
 static GWorldPtr gArt = NULL;

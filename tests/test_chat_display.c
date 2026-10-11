@@ -11,13 +11,6 @@ static const char limits[] = "[Text exceeds display limits; see the UTF-8 sessio
 static void reset(void)
 {
     chat_reset(&chat);
-    strcpy(chat.history, "history sentinel"); chat.used = 17;
-    chat.offsets[0] = 5; chat.messages = 1;
-}
-static void history_retained(void)
-{
-    assert(!strcmp(chat.history, "history sentinel"));
-    assert(chat.used == 17 && chat.offsets[0] == 5 && chat.messages == 1);
 }
 /* Every recorded entry starts right after a blank line (or the notice), in order. */
 static void entries_aligned(void)
@@ -41,7 +34,6 @@ static void capping(void)
     assert(chat_append_message(&chat, NULL, "tool()") == at);
     chat_tool_note(&chat, (size_t)at, "tool"); assert(chat.tool_end != 0);
     assert(chat_append_message(&chat, "", "") > at); assert(chat.tool_end == 0);
-    history_retained();
 
     reset(); memset(text, 'x', sizeof(text) - 1); text[sizeof(text) - 1] = 0;
     assert(chat_append_message(&chat, NULL, text) == 0);
@@ -51,7 +43,7 @@ static void capping(void)
     assert(strlen(chat.transcript) == CHAT_TRANSCRIPT_CAP - 254);
     memset(text, 'n', 256); text[256] = 0;
     assert(chat_append_message(&chat, "Notice", text) == (long)strlen(earlier));
-    assert(!strncmp(chat.transcript, earlier, strlen(earlier))); history_retained();
+    assert(!strncmp(chat.transcript, earlier, strlen(earlier)));
     reset(); memset(text, 'x', sizeof(text) - 1); text[CHAT_TRANSCRIPT_CAP - 256] = 'x'; text[CHAT_TRANSCRIPT_CAP - 255] = 0;
     assert(chat_append_message(&chat, NULL, text) == 0);
     assert(!strcmp(chat.transcript, limits));
@@ -71,15 +63,15 @@ static void capping(void)
     assert(!strstr(chat.transcript, "Earlier"));
     assert(chat_append_message(&chat, NULL, "y") == (long)strlen(earlier) + 1399);
     assert(!strncmp(chat.transcript, earlier, strlen(earlier)));
-    assert(!strcmp(chat.transcript + strlen(earlier) + 1399, "y\r\r")); entries_aligned(); history_retained();
+    assert(!strcmp(chat.transcript + strlen(earlier) + 1399, "y\r\r")); entries_aligned();
     /* Text no entry was recorded for is a single entry. */
     reset(); memset(chat.transcript, '\r', 1401); chat.transcript[1401] = 0;
     assert(chat_append_message(&chat, NULL, "x") == (long)strlen(earlier));
-    assert(!strcmp(chat.transcript + strlen(earlier), "x\r\r")); entries_aligned(); history_retained();
+    assert(!strcmp(chat.transcript + strlen(earlier), "x\r\r")); entries_aligned();
 
     reset(); memset(text, 'L', sizeof(text) - 1); text[sizeof(text) - 1] = 0;
     assert(chat_append_message(&chat, text, "x") == -1);
-    assert(!strcmp(chat.transcript, earlier)); history_retained();
+    assert(!strcmp(chat.transcript, earlier));
 }
 /* Entry bodies carry no blank line, so each "\r\r" ends exactly one entry. */
 static void fill_entry(const char *label, char ch, size_t bytes)
@@ -106,13 +98,13 @@ static void dropping_oldest(void)
     assert(strstr(chat.transcript, "Fifth:\r") && strstr(chat.transcript, "Sixth:\r"));
     assert(strlen(chat.transcript) < CHAT_TRANSCRIPT_CAP && strlen(chat.transcript) > before - 5009);
     assert(at == (long)(strlen(chat.transcript) - strlen("Sixth:\r") - 5000 - 2));
-    assert(!strcmp(chat.transcript + at + 7 + 5000, "\r\r")); entries_aligned(); history_retained();
+    assert(!strcmp(chat.transcript + at + 7 + 5000, "\r\r")); entries_aligned();
 
     /* The notice is never stacked, however often the window rolls. */
     for (i = 0; i < 12; i++) fill_entry("More", 'g', 6000);
     assert(!strncmp(chat.transcript, earlier, strlen(earlier)));
     assert(!strstr(chat.transcript + 1, "[Earlier"));
-    assert(strlen(chat.transcript) < CHAT_TRANSCRIPT_CAP); history_retained();
+    assert(strlen(chat.transcript) < CHAT_TRANSCRIPT_CAP);
 }
 static void dropping_for_lines(void)
 {
@@ -127,7 +119,6 @@ static void dropping_for_lines(void)
     assert(!strncmp(chat.transcript, earlier, strlen(earlier)));
     assert(!strstr(chat.transcript, "First:"));
     assert(strstr(chat.transcript, "Second:\r") && strstr(chat.transcript, "Third:\r"));
-    history_retained();
 }
 /* A reply with blank lines of its own is still one entry: it goes whole or stays whole. */
 static void dropping_whole_entries(void)
@@ -141,7 +132,7 @@ static void dropping_whole_entries(void)
     assert(!strncmp(chat.transcript, earlier, strlen(earlier)));
     assert(!strncmp(chat.transcript + strlen(earlier), "You:\r", 5) ||
            !strncmp(chat.transcript + strlen(earlier), "Assistant:\r", 11));
-    entries_aligned(); history_retained();
+    entries_aligned();
 }
 static void dropping_for_entry_count(void)
 {
@@ -152,7 +143,7 @@ static void dropping_for_entry_count(void)
     assert(chat_append_message(&chat, NULL, "last") >= 0);
     assert(!strncmp(chat.transcript, earlier, strlen(earlier)));
     assert(chat.entries == CHAT_ENTRY_MAX);
-    assert(!strcmp(chat.transcript + chat.entry_at[chat.entries - 1], "last\r\r")); entries_aligned(); history_retained();
+    assert(!strcmp(chat.transcript + chat.entry_at[chat.entries - 1], "last\r\r")); entries_aligned();
 }
 int main(void)
 {

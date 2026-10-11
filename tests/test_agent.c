@@ -33,6 +33,54 @@ static void begin(void)
     assert(!agent_begin(&a, "Inspect my files", error, sizeof(error)));
     expect_event("user");
 }
+/* Both public response paths must report the same provider/protocol failure.
+ * A handoff also reminds the user that the conversation remains available. */
+static void completion_errors(void)
+{
+    static const struct { const char *body; int status; const char *detail; } cases[] = {
+        { "{\"error\":{\"message\":\"Invalid key\"}}", 401, "Invalid key" },
+        { "{\"error\":{\"message\":\"Rate limited\"}}", 200, "Rate limited" },
+        { "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}", 503, "provider error" },
+        { "not JSON", 200, "bounded JSON object" },
+        { "{\"choices\":[]}", 200, "no choices" },
+        { "{\"choices\":[{\"finish_reason\":\"stop\"}]}", 200, "no message object" },
+        { "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"user\",\"content\":\"ok\"}}]}", 200, "message role" },
+        { "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}", 200, "no finish_reason" },
+        { "{\"choices\":[{\"finish_reason\":\"content_filter\",\"message\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}", 200, "unsupported finish_reason" },
+    };
+    size_t i, used;
+    char handoff_error[256], summary[32];
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        begin(); used = a.used;
+        assert(agent_response(&a, cases[i].body, strlen(cases[i].body), cases[i].status, error, sizeof(error)) == -1);
+        assert(strstr(error, cases[i].detail));
+        assert(a.used == used && a.active && !a.count && !a.rounds && records == 1);
+        strcpy(summary, "stale summary");
+        assert(agent_handoff_response(cases[i].body, strlen(cases[i].body), cases[i].status,
+                                      summary, sizeof(summary), handoff_error, sizeof(handoff_error)) == -1);
+        assert(!*summary && !strncmp(handoff_error, error, strlen(error)));
+        assert(strstr(handoff_error, "Conversation retained"));
+        assert(a.used == used && records == 1);
+    }
+}
+static void completion_text(void)
+{
+    static const char *const bodies[] = {
+        "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Complete.\"}}]}",
+        "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Complete.\",\"tool_calls\":null}}]}",
+        "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Complete.\",\"tool_calls\":[]}}]}",
+    };
+    size_t i;
+    char summary[32];
+    for (i = 0; i < sizeof(bodies) / sizeof(bodies[0]); i++) {
+        begin();
+        assert(!agent_response(&a, bodies[i], strlen(bodies[i]), 200, error, sizeof(error)));
+        assert(!a.active && !a.count && a.rounds == 1 && !strcmp(a.text, "Complete.") && !*error);
+        expect_event("assistant");
+        assert(!agent_handoff_response(bodies[i], strlen(bodies[i]), 200, summary, sizeof(summary), error, sizeof(error)));
+        assert(!strcmp(summary, "Complete.") && !*error && records == 2);
+    }
+}
 /* Every request body the tests build is parsed and pinned by structure, so a
  * wrong model, role, message order or tool schema cannot hide behind the
  * substrings the individual assertions look for. */
@@ -933,6 +981,8 @@ int main(void)
     /* The wire request carries the named cap, so docs and code share one value. */
     begin();
     assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0 && strstr(req, "\"max_tokens\":6000,"));
+    completion_errors();
+    completion_text();
     rejections();
     model_metadata();
     vision_flag();
