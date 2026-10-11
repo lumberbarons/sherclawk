@@ -8,11 +8,11 @@
 #include "json.h"
 #include "text.h"
 #include "config.h"
+#include "fsutil.h"
 #include "build/project-template.h"
 #include <Files.h>
 #include <Folders.h>
 #include <Script.h>
-#include "fsutil.h"
 #include <Memory.h>
 #include <Gestalt.h>
 #include <stdio.h>

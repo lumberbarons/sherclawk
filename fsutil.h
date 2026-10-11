@@ -1,7 +1,8 @@
 /* The one staged File Manager publication body write, shared by the tools,
  * the build executor, the job queue and the launcher. Callers keep their
  * journal envelopes and publication renames; this module owns the byte-level
- * ladder so a correctness fix to it lands once, not per caller. */
+ * ladder so a correctness fix to it lands once for these callers. The
+ * cooperative chunked stagers do not use it. */
 #ifndef SHERCLAWK_FSUTIL_H
 #define SHERCLAWK_FSUTIL_H
 #include <Files.h>
@@ -10,7 +11,8 @@
  * close, flush, prove the catalog record and read the bytes back to compare.
  * Returns the first failing OSErr (dupFNErr: the name was taken), so no
  * caller can forget a step of the sequence. *out_info, when not NULL,
- * receives the verified catalog record of the staged file. */
+ * receives the verified catalog record of the staged file and is left
+ * untouched on any failure. */
 OSErr fs_write_verified(const FSSpec *dest, OSType creator, OSType type,
                         const void *bytes, long length, CInfoPBRec *out_info);
 

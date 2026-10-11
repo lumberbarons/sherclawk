@@ -13,6 +13,8 @@
 #include <string.h>
 #define QUEUE SHERCLAWK_BUILD_QUEUE
 #define FORK_LIMIT (1024L*1024L)
+/* The run intent record is one small JSON object; a longer one is a bug. */
+#define RESERVE_RUN_MAX 512
 typedef struct {
     uint32_t magic;
     char build[25], output[32];
@@ -137,7 +139,7 @@ static int reserve_run(const char *json)
 {
     char path[128]; FSSpec s;
     long n=(long)strlen(json);
-    if(n>=512)return -1; /* one bounded intent record, as before */
+    if(n>=RESERVE_RUN_MAX)return -1; /* one bounded intent record */
     snprintf(path,sizeof(path),QUEUE ":%s",run_id);
     /* fs_write_verified adds the catalog check this sequence used to skip. */
     if(tools_resolve(path,&s)!=fnfErr || fs_write_verified(&s,'ShCk','ShRR',json,n,NULL))return -1;

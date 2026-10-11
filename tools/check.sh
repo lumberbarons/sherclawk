@@ -152,6 +152,11 @@ build_test test-text-gate "${WARN[@]}" -USHERCLAWK_LARGE_TEXT_CHECK -Wno-multich
     "$HERE/json.c" "$HERE/text.c" "$HERE/vendor/http.c"
 run_test test-text-gate
 
+build_test test-fsutil "${WARN[@]}" -Wno-multichar \
+    -I"$HERE/tests/toolbox" -I"$HERE" \
+    "$HERE/tests/test_fsutil.c" "$HERE/fsutil.c"
+run_test test-fsutil
+
 build_test test-jobs "${WARN[@]}" -Wno-multichar \
     -I"$HERE/tests/toolbox" -I"$HERE" \
     "$HERE/tests/test_jobs.c" "$HERE/jobs.c" "$HERE/fsutil.c"
