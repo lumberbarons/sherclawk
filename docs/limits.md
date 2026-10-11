@@ -25,7 +25,7 @@ in the headers today; the headers win if this drifts.
 | `AGENT_RESULT_CAP` | 4096 | One tool result recorded into history. Tool executors fill pages to it, and several keep a record of it in static scratch (the application stack is small). Escaped on the wire it can reach `AGENT_RESULT_WIRE_CAP` (six times as much, plus 256), which `agent_response` reserves per call. |
 | `AGENT_IMAGE_CAP` | 128 KiB | Largest PNG `view_image` reads (`view_image.c` holds one in a static buffer). Its base64 form, a third larger, rides in one request. |
 | `AGENT_IMAGE_NOTE_CAP` | 2048 | History reserved for the note that accompanies an image, whenever a response calls `view_image`. |
-| JSON token scratch | 4096 tokens | Tokens (not bytes) in any parsed response; `tokens[]` in `agent.c`. A catalog page over the cap parses to zero rows. |
+| JSON token scratch | 4096 tokens | Tokens (not bytes) in any parsed model response; `tokens[]` in `agent.c`, shared by `agent_response`, `agent_handoff_response` and the usage extractors. A catalog page over the cap parses to zero rows. |
 
 ### Display and time
 
@@ -161,6 +161,9 @@ docker run --rm -v "$PWD/build:/b" ghcr.io/autc04/retro68 \
 Text plus data plus bss was 3,339,896 bytes (3.19 MiB) once `AGENTS.md`
 loading was linked; it adds static buffers for the loader scratch, the
 instruction text and its joined system message, and the project-note message.
+The superseded `Chat` protocol was removed afterwards, which drops its 32 KiB
+history array, its offsets and a 2048-token (32 KiB) parser scratch from bss;
+the totals below predate that and were not re-measured.
 Earlier: 2,454,552 bytes (2.34 MiB) at 3072 tokens with a
 16 KiB reply buffer and 256 KiB history, 2,512,456 bytes (2.40 MiB) at 6000
 tokens with the 40 KiB `AGENT_REPLY_CAP`, and 3,036,744 bytes (2.90 MiB) with

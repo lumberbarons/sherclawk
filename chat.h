@@ -1,4 +1,6 @@
-/* Bounded in-memory conversation. Pending turns are committed atomically. */
+/* Bounded MacRoman/CR display transcript, plus the request, response, prompt and
+ * model-id caps the agent, network and preference code share. The agent owns
+ * wire history. */
 #ifndef SHERCLAWK_CHAT_H
 #define SHERCLAWK_CHAT_H
 #include <stddef.h>
@@ -7,13 +9,8 @@
 #define CHAT_TRANSCRIPT_CAP 30001
 #define CHAT_PROMPT_CAP 8193
 #define CHAT_MODEL_CAP 256
-#define CHAT_HISTORY_CAP 32768
-#define CHAT_MESSAGE_MAX 20
 #define CHAT_ENTRY_MAX 512
 typedef struct {
-    char history[CHAT_HISTORY_CAP];
-    size_t offsets[CHAT_MESSAGE_MAX], used;
-    int messages;
     char transcript[CHAT_TRANSCRIPT_CAP];
     /* Where each transcript entry starts, oldest first, so display capping
      * drops whole entries; any session-file notice sits before the first. */
@@ -28,13 +25,8 @@ typedef struct {
 } Chat;
 void chat_reset(Chat *chat);
 /* Returns the entry offset, or -1 if its label cannot fit. The oldest whole
- * entries may be replaced by a session-file notice; history is never changed. */
+ * entries may be replaced by a session-file notice. */
 long chat_append_message(Chat *chat, const char *label, const char *text);
-int chat_request(const Chat *chat, const char *model, const char *prompt,
-                 char *out, size_t cap);
-/* Returns 0 reply, -1 API/protocol error; error is safe human-readable text. */
-int chat_reply(const char *body, size_t len, int status, char *reply, size_t cap,
-               int *limited, char *error, size_t error_cap);
 /* Collapsible tool lines. chat_tool_note marks the entry that starts at start
  * (the transcript's newest) as one call of tool name; chat_tool_forget drops
  * the mark. chat_tool_collapse returns 1 after rewriting that entry as
@@ -43,5 +35,4 @@ int chat_reply(const char *body, size_t len, int status, char *reply, size_t cap
 void chat_tool_note(Chat *chat, size_t start, const char *name);
 void chat_tool_forget(Chat *chat);
 int chat_tool_collapse(Chat *chat, const char *name);
-int chat_commit(Chat *chat, const char *prompt, const char *reply, int limited);
 #endif

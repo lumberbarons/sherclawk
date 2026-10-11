@@ -1,4 +1,4 @@
-/* Protocol regressions: malformed input, split framing, encodings, and rollback. */
+/* HTTP/JSON regressions, encodings, and native transcript tool folding. */
 #include "chat.h"
 #include "json.h"
 #include "text.h"
@@ -7,7 +7,6 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-static Chat c, snapshot;
 static char out[CHAT_REQUEST_CAP + 1], req[CHAT_REQUEST_CAP], text[CHAT_REQUEST_CAP + 1];
 static JsonToken tokens[2048];
 static int response(const char *s, int closed, int *status)
@@ -100,84 +99,6 @@ static void encoding(void)
         assert(text_to_macroman(out, text, sizeof(text)) == 1 && (unsigned char)text[0] == i);
     }}
 }
-/* Parse a chat_request body and return its messages array, after pinning the
- * literal model and the fixed request fields. */
-static int request_messages(int length, const char *model)
-{
-    char field[256];
-    int messages;
-    assert(length > 0 && json_parse(req, (size_t)length, tokens, 2048) > 0 && tokens[0].type == JSON_OBJECT);
-    assert(json_string(req, tokens, json_member(req, tokens, 0, "model"), field, sizeof(field)) >= 0 && !strcmp(field, model));
-    assert(json_member(req, tokens, 0, "stream") > 0 && !strncmp(req + tokens[json_member(req, tokens, 0, "stream")].start, "false", 5));
-    messages = json_member(req, tokens, 0, "messages");
-    assert(messages > 0 && tokens[messages].type == JSON_ARRAY);
-    return messages;
-}
-static int message_count(int messages)
-{
-    int at, n = 0;
-    for (at = messages + 1; at < tokens[messages].next; at = tokens[at].next) n++;
-    return n;
-}
-/* Message n of the array must carry exactly this role and content. */
-static void expect_message(int messages, int n, const char *role, const char *content)
-{
-    char field[256];
-    int at = messages + 1;
-    while (n-- > 0) at = tokens[at].next;
-    assert(at < tokens[messages].next && tokens[at].type == JSON_OBJECT);
-    assert(json_string(req, tokens, json_member(req, tokens, at, "role"), field, sizeof(field)) >= 0 && !strcmp(field, role));
-    assert(json_string(req, tokens, json_member(req, tokens, at, "content"), field, sizeof(field)) >= 0 && !strcmp(field, content));
-}
-static void history(void)
-{
-    const char *ok = "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"marmalade\"}}]}";
-    const char *err = "{\"error\":{\"code\":401,\"message\":\"Invalid key\"}}";
-    int limited, i;
-    char error[256];
-    chat_reset(&c);
-    i = request_messages(chat_request(&c, "openai/gpt-6-luna", "Remember marmalade", req, sizeof(req)), "openai/gpt-6-luna");
-    assert(message_count(i) == 1);
-    expect_message(i, 0, "user", "Remember marmalade");
-    assert(chat_reply(ok, strlen(ok), 200, out, sizeof(out), &limited, error, sizeof(error)) == 0);
-    assert(!limited && !strcmp(out, "marmalade"));
-    assert(chat_commit(&c, "Remember marmalade", out, 0) == 0);
-    assert(c.messages == 2);
-    i = request_messages(chat_request(&c, "other/model", "What word?", req, sizeof(req)), "other/model");
-    assert(message_count(i) == 3);
-    expect_message(i, 0, "user", "Remember marmalade");
-    expect_message(i, 1, "assistant", "marmalade");
-    expect_message(i, 2, "user", "What word?");
-    snapshot = c;
-    assert(chat_reply(err, strlen(err), 401, out, sizeof(out), &limited, error, sizeof(error)) == -1);
-    assert(strstr(error, "401") && strstr(error, "Invalid key") && !memcmp(&c, &snapshot, sizeof(c)));
-    assert(chat_reply(err, strlen(err), 200, out, sizeof(out), &limited, error, sizeof(error)) == -1);
-    assert(chat_reply("{\"choices\":[]}", 14, 200, out, sizeof(out), &limited, error, sizeof(error)) == -1);
-    /* A well-formed completion is still rejected on a non-2xx status. */
-    assert(chat_reply(ok, strlen(ok), 503, out, sizeof(out), &limited, error, sizeof(error)) == -1);
-    assert(strstr(error, "503") && !out[0] && !limited);
-    assert(chat_reply("{}", 2, 503, out, sizeof(out), &limited, error, sizeof(error)) == -1);
-    assert(chat_reply(ok, strlen(ok), 200, out, 3, &limited, error, sizeof(error)) == -1);
-    strcpy(text, ok); { char *p = strstr(text, "stop"); memcpy(p, "xxxx", 4); }
-    assert(chat_reply(text, strlen(text), 200, out, sizeof(out), &limited, error, sizeof(error)) == -1);
-    strcpy(text, "{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"partial\"}}]}");
-    assert(chat_reply(text, strlen(text), 200, out, sizeof(out), &limited, error, sizeof(error)) == 0 && limited);
-    strcpy(text, "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":null}}]}");
-    assert(chat_reply(text, strlen(text), 200, out, sizeof(out), &limited, error, sizeof(error)) == -1);
-    for (i = 1; i < 10; i++) assert(chat_commit(&c, "user", "assistant", 0) == 0);
-    snapshot = c;
-    assert(chat_request(&c, "model", "next", req, sizeof(req)) == -1);
-    assert(chat_commit(&c, "next", "reply", 0) == -1 && !memcmp(&c, &snapshot, sizeof(c)));
-    chat_reset(&c); assert(!c.messages && !c.transcript[0]);
-    memset(text, 'x', CHAT_TRANSCRIPT_CAP); text[CHAT_TRANSCRIPT_CAP] = 0;
-    snapshot = c;
-    assert(chat_commit(&c, "prompt", text, 0) == -1 && !memcmp(&c, &snapshot, sizeof(c)));
-    memset(text, '\n', 1600); text[1600] = 0;
-    assert(chat_commit(&c, "prompt", text, 0) == -1 && !memcmp(&c, &snapshot, sizeof(c)));
-    assert(chat_commit(&c, "prompt", "partial", 1) == 0 && strstr(c.transcript, "token limit"));
-    memset(out, '\n', CHAT_REQUEST_CAP); out[CHAT_REQUEST_CAP] = 0;
-    assert(chat_request(&c, "model", out, req, sizeof(req)) == -1);
-}
 /* Append one transcript entry the way the app's ShowMessage does. */
 static size_t add_entry(Chat *c, const char *text)
 {
@@ -217,11 +138,11 @@ static void tool_collapse(void)
     /* A name too long to remember is never collapsed. */
     at = add_entry(&c, "\xA5 long");
     { char name[80]; memset(name, 'n', 79); name[79] = 0; chat_tool_note(&c, at, name); assert(!chat_tool_collapse(&c, name)); }
-    /* A committed turn ends the run, and a full transcript falls back to appending. */
+    /* A displayed message ends the run, and a full transcript falls back to appending. */
     chat_reset(&c);
     at = add_entry(&c, "\xA5 read_text()");
     chat_tool_note(&c, at, "read_text");
-    assert(chat_commit(&c, "q", "a", 0) == 0 && !chat_tool_collapse(&c, "read_text"));
+    assert(chat_append_message(&c, "Assistant", "a") >= 0 && !chat_tool_collapse(&c, "read_text"));
     chat_reset(&c);
     memset(c.transcript, 'x', sizeof(c.transcript) - 8); c.transcript[sizeof(c.transcript) - 8] = 0;
     at = add_entry(&c, "\xA5 t()");
@@ -278,7 +199,7 @@ static void numbers(void)
 }
 int main(void)
 {
-    framing(); json(); numbers(); encoding(); history(); tool_collapse();
-    puts("PASS HTTP framing, JSON, numbers, encoding, history, rollback and tool collapse");
+    framing(); json(); numbers(); encoding(); tool_collapse();
+    puts("PASS HTTP framing, JSON, numbers, encoding and tool collapse");
     return 0;
 }
