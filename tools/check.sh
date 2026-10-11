@@ -119,6 +119,18 @@ if [ -d "$CERTAINLY_DIR/include" ]; then
         "$HERE/mcp_config.c" "$HERE/mcp_protocol.c" "$HERE/mcp_stream.c" \
         "$HERE/json.c" "$HERE/vendor/http.c"
     run_test test-mcp-client
+    # The run choreography main.c drives, at module level: discovery, the
+    # schema freeze, sequential dispatch, retention, paging, Stop and the
+    # native-only fallbacks, with the File Manager model in its own unit
+    # (the Toolbox headers and the host TLS shim both define noErr).
+    build_test test-mcp-run "${WARN[@]}" -Wno-multichar \
+        -I"$HERE" -I"$HERE/vendor" -I"$CERTAINLY_DIR/include" \
+        -I"$HERE/vendor/host-tls/shim" -I"$HERE/tests/toolbox" \
+        "$HERE/tests/test_mcp_run.c" "$HERE/tests/test_mcp_run_fm.c" \
+        "$HERE/mcp_client.c" "$HERE/mcp_config.c" "$HERE/mcp_protocol.c" \
+        "$HERE/mcp_stream.c" "$HERE/mcp_result.c" "$HERE/agent.c" \
+        "$HERE/registry.c" "$HERE/json.c" "$HERE/text.c" "$HERE/vendor/http.c"
+    run_test test-mcp-run
 else
     echo "skip: network test needs a Certainly clone at $CERTAINLY_DIR" >&2
     echo "      git clone --recursive --depth 1 https://github.com/minorbug/certainly.git Certainly" >&2

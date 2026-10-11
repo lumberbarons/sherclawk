@@ -31,9 +31,12 @@ but are not automatically reloaded after quitting. Stop prevents further work;
 it does not undo completed operations or prove cancellation of a published
 build. Launch observation does not establish functional or visual correctness.
 
-Remote MCP has a protocol core, a native diagnostic and a configuration editor
-(Edit ▸ MCP Servers…), but the agent does not use the configuration or expose
-MCP tools yet. Reasoning-effort metadata
+Remote MCP is wired end to end: a configuration editor (Edit ▸ MCP Servers…),
+per-run discovery of the configured single server's read-only tools before
+the first model request, sequential remote calls with verbatim arguments, and
+redacted results retained in the workspace and paged back through
+`read_mcp_result`. Integrated OS 9.2.2 guest acceptance is still pending.
+Reasoning-effort metadata
 is displayed in Preferences; effort is not yet saved or sent. Follow active
 work in [GitHub issues](https://github.com/lumberbarons/sherclawk/issues).
 

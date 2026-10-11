@@ -54,9 +54,15 @@ configuration, `System Folder:Preferences:Sherclawk MCP Servers.json`, in a
 scrolling text pane. Save is refused, with a message naming the offending field,
 unless the JSON is a valid single-server configuration; Cancel discards your
 edits. Header values such as bearer tokens are stored and shown as clear text,
-so protect the file and guest disk images. The agent does not use this
-configuration yet. The [MCP guide](mcp.md#configuration-editor) has the format,
-limits and how saves are staged.
+so protect the file and guest disk images. Each run loads this configuration
+before its first model request: with a server configured, the agent discovers
+its read-only tools, can call them remotely during the run and retains every
+redacted result in `Sherclawk MCP Results:` so you can see exactly what it was
+shown; with no file, or a disabled or invalid one, nothing is contacted and
+the run uses the native tools only. The item is refused while a run — or a
+stopped MCP connection still closing — is in progress. The
+[MCP guide](mcp.md#agent-integration) has the format, limits, the run
+behavior and how saves are staged.
 
 ## Project instructions (AGENTS.md)
 
@@ -125,7 +131,9 @@ for pending calls; completed results remain in history. New Chat starts a fresh 
 The stopped connection is not torn down mid-connect — that can crash OS 9 — so
 it closes in the background and Send, Save Handoff, Preferences and MCP Servers
 report that the stopped request is still closing until it does (bounded at 30
-seconds).
+seconds). A stopped remote MCP call closes the same way in the background: the
+model is told the call's outcome is unknown and it is never replayed, and the
+next run re-reads the configuration and re-discovers.
 
 ### Save Handoff
 

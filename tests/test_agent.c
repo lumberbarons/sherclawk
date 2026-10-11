@@ -158,19 +158,28 @@ static int parse_request(int length, const char *model)
     return messages;
 }
 /* Each registered tool appears exactly once, whatever the order, as a function
- * with a description and an object parameter schema. */
-static void check_tool_schemas(int tools)
+ * with a description and an object parameter schema. Frozen remote schemas
+ * ride after the native rows and are pinned by name the same way. */
+static void check_tool_schemas(int tools, const char *const *extra, int extra_count)
 {
     enum { TOOLS = sizeof(tool_names) / sizeof(*tool_names) };
-    int seen[TOOLS] = {0}, i, j;
-    assert(wire[tools].type == JSON_ARRAY && length_of(tools) == TOOLS);
-    for (i = 0; i < TOOLS; i++) {
+    int seen[TOOLS] = {0}, seen_remote[16] = {0}, i, j;
+    assert(extra_count >= 0 && extra_count <= (int)(sizeof(seen_remote) / sizeof(*seen_remote)));
+    assert(wire[tools].type == JSON_ARRAY && length_of(tools) == TOOLS + extra_count);
+    for (i = 0; i < TOOLS + extra_count; i++) {
         int tool = element(tools, i), function = member(tool, "function"), parameters = member(function, "parameters");
+        int remote = -1;
         assert(is_text(member(tool, "type"), "function"));
         assert(json_string(req, wire, member(function, "name"), decoded, sizeof(decoded)) > 0);
-        for (j = 0; j < TOOLS && strcmp(decoded, tool_names[j]); j++) {}
-        assert(j < TOOLS && !seen[j]);
-        seen[j] = 1;
+        for (j = 0; j < extra_count; j++) if (!strcmp(decoded, extra[j])) { remote = j; break; }
+        if (remote >= 0) {
+            assert(!seen_remote[remote]);
+            seen_remote[remote] = 1;
+        } else {
+            for (j = 0; j < TOOLS && strcmp(decoded, tool_names[j]); j++) {}
+            assert(j < TOOLS && !seen[j]);
+            seen[j] = 1;
+        }
         assert(json_string(req, wire, member(function, "description"), decoded, sizeof(decoded)) > 0 && *decoded);
         assert(is_text(member(parameters, "type"), "object") && wire[member(parameters, "properties")].type == JSON_OBJECT);
     }
@@ -194,8 +203,41 @@ static int pin(int length)
         assert(is_text(role, "user") || is_text(role, "assistant") || is_text(role, "tool"));
         if (is_text(role, "tool")) assert(json_string(req, wire, member(at, "tool_call_id"), decoded, sizeof(decoded)) > 0);
     }
-    check_tool_schemas(member(0, "tools"));
+    check_tool_schemas(member(0, "tools"), NULL, 0);
     return length;
+}
+/* pin() with frozen remote function schemas after the native rows: each
+ * remote name appears exactly once with a description and object parameters. */
+static int pin_remote(int length, const char *const *extra, int extra_count)
+{
+    int messages;
+    if (length <= 0) return length;
+    messages = parse_request(length, "model");
+    check_tool_schemas(member(0, "tools"), extra, extra_count);
+    (void)messages;
+    return length;
+}
+/* Frozen remote MCP schemas join the native advertisement for the run; a
+ * set that collides with a native name, repeats a remote name, is malformed
+ * or does not fit is refused whole, leaving the previous advertisement. */
+static const char *remote_search =
+    "{\"type\":\"function\",\"function\":{\"name\":\"mcp_tavily_tavily_search\","
+    "\"description\":\"Search the web.\",\"parameters\":{\"type\":\"object\","
+    "\"properties\":{\"query\":{\"type\":\"string\",\"minLength\":1}},"
+    "\"required\":[\"query\"],\"additionalProperties\":false}}}";
+static const char *remote_extract =
+    "{\"type\":\"function\",\"function\":{\"name\":\"mcp_tavily_tavily_extract\","
+    "\"description\":\"Extract one page.\",\"parameters\":{\"type\":\"object\","
+    "\"properties\":{},\"additionalProperties\":false}}}";
+static char remote_both[1024];
+/* One admitted function row with `name` substituted. */
+static void remote_row(char *out, size_t cap, const char *name)
+{
+    int n = snprintf(out, cap,
+        "{\"type\":\"function\",\"function\":{\"name\":\"%s\","
+        "\"description\":\"Remote %s\",\"parameters\":{\"type\":\"object\","
+        "\"properties\":{\"query\":{\"type\":\"string\"}}}}}", name, name);
+    assert(n > 0 && (size_t)n < cap);
 }
 /* A handoff request carries the history, no tools, and asks for the summary last. */
 static int pin_handoff(int length)
@@ -218,6 +260,95 @@ static void named_call(const char *finish, const char *name, const char *argumen
     snprintf(response, sizeof(response), "{\"choices\":[{\"finish_reason\":\"%s\",\"message\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"%s\",\"arguments\":%s}}]}}]}", finish, name, quoted);
 }
 static void call(const char *finish) { named_call(finish, "get_environment", "{}"); }
+
+static void remote_schemas(void)
+{
+    const char *names[2];
+    const char *final = "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Inspected.\"}}]}";
+    static char row[512], both[1024], too_big[AGENT_MCP_SCHEMA_CAP + 512];
+
+    /* Clear state: the native-only advertisement. */
+    assert(agent_set_mcp_schemas(NULL) == 0);
+    assert(agent_mcp_tool_count() == 0 && agent_mcp_tool_name(0) == NULL);
+    begin();
+    assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0);
+
+    /* Refusals leave the previous advertisement untouched. */
+    remote_row(row, sizeof(row), "read_text"); /* collides with a native tool */
+    assert(agent_set_mcp_schemas(row) == -1);
+    assert(agent_mcp_tool_count() == 0);
+    remote_row(row, sizeof(row), "mcp_other_remote");
+    snprintf(both, sizeof(both), "%s,%s", row, row); /* duplicate remote names */
+    assert(agent_set_mcp_schemas(both) == -1);
+    assert(agent_set_mcp_schemas("not json") == -1);
+    assert(agent_set_mcp_schemas("{\"type\":\"function\"}") == -1);
+    assert(agent_set_mcp_schemas("{\"function\":{\"name\":\"mcp_x\"}}") == -1);
+    assert(agent_set_mcp_schemas("{\"type\":\"chat\",\"function\":{\"name\":\"mcp_x\"}}") == -1);
+    assert(agent_set_mcp_schemas("[]") == -1);
+    assert(agent_set_mcp_schemas("{\"type\":\"function\",\"function\":{}}") == -1);
+    /* Over-cap text is refused before it is parsed. */
+    memset(too_big, 'p', AGENT_MCP_SCHEMA_CAP + 1);
+    too_big[AGENT_MCP_SCHEMA_CAP + 1] = 0;
+    assert(agent_set_mcp_schemas(too_big) == -1);
+    assert(agent_mcp_tool_count() == 0);
+    begin();
+    assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0);
+
+    /* Admission: the merged array carries the native rows plus each remote
+     * row exactly once, in freeze order, and the request text shows them. */
+    snprintf(remote_both, sizeof(remote_both), "%s,%s", remote_search, remote_extract);
+    assert(agent_set_mcp_schemas(remote_both) == 0);
+    assert(agent_mcp_tool_count() == 2);
+    assert(!strcmp(agent_mcp_tool_name(0), "mcp_tavily_tavily_search"));
+    assert(!strcmp(agent_mcp_tool_name(1), "mcp_tavily_tavily_extract"));
+    names[0] = "mcp_tavily_tavily_search"; names[1] = "mcp_tavily_tavily_extract";
+    assert(pin_remote(agent_request(&a, "model", req, sizeof(req)), names, 2) > 0);
+    assert(strstr(req, "Search the web.") && strstr(req, "Extract one page."));
+
+    /* The model answers with a remote call by mapped name; the arguments are
+     * preserved verbatim and the next request keeps the frozen schemas. */
+    named_call("tool_calls", "mcp_tavily_tavily_search", "{\"query\":\"mac os 9\"}");
+    assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
+    assert(a.count == 1 && !strcmp(a.calls[0].name, "mcp_tavily_tavily_search"));
+    assert(!strcmp(a.calls[0].arguments, "{\"query\":\"mac os 9\"}"));
+    assert(!agent_tool_result(&a, "{\"status\":\"ok\",\"result_id\":\"mcp-00000001-0001\"}", error, sizeof(error)));
+    assert(pin_remote(agent_request(&a, "model", req, sizeof(req)), names, 2) > 0);
+    assert(!agent_response(&a, final, strlen(final), 200, error, sizeof(error)));
+    assert(!a.active);
+
+    /* Stop fills unstarted remote calls; the frozen advertisement survives
+     * Stop and serves the next run unchanged. */
+    begin();
+    named_call("tool_calls", "mcp_tavily_tavily_extract", "{}");
+    assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
+    assert(!agent_stop(&a, "stopped"));
+    assert(agent_mcp_tool_count() == 2);
+    begin();
+    assert(pin_remote(agent_request(&a, "model", req, sizeof(req)), names, 2) > 0);
+
+    /* A remote name at the 63-byte mapped limit is admitted; 64 bytes is not. */
+    {
+        const char *long_name[1];
+        static char long_row[512];
+        char name[80];
+        memset(name, 'm', 63); name[63] = 0;
+        remote_row(long_row, sizeof(long_row), name);
+        assert(agent_set_mcp_schemas(long_row) == 0);
+        assert(agent_mcp_tool_count() == 1 && !strcmp(agent_mcp_tool_name(0), name));
+        long_name[0] = name;
+        begin();
+        assert(pin_remote(agent_request(&a, "model", req, sizeof(req)), long_name, 1) > 0);
+        memset(name, 'm', 64); name[64] = 0;
+        remote_row(long_row, sizeof(long_row), name);
+        assert(agent_set_mcp_schemas(long_row) == -1);
+        assert(agent_set_mcp_schemas(NULL) == 0);
+    }
+
+    /* Clearing restores the native-only advertisement. */
+    assert(agent_mcp_tool_count() == 0 && agent_mcp_tool_name(0) == NULL);
+    begin();
+    assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0);
+}
 static const char *usage1 =
     "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Counted.\"}}],"
     "\"usage\":{\"prompt_tokens\":1200,\"completion_tokens\":30,\"total_tokens\":1230,\"cost\":0.012345}}";
@@ -801,7 +932,7 @@ static void wire_shape(void)
     assert(!agent_tool_result(&a, "{\"status\":\"ok\",\"text\":\"caf\xc3\xa9\"}", error, sizeof(error)));
     expect_event("tool");
     messages = parse_request(agent_request(&a, "vendor/other-model", req, sizeof(req)), "vendor/other-model");
-    check_tool_schemas(member(0, "tools"));
+    check_tool_schemas(member(0, "tools"), NULL, 0);
     assert(length_of(messages) == 4);
     assert(json_string(req, wire, member(message(messages, 0, "system"), "content"), decoded, sizeof(decoded)) > 0 && *decoded);
     assert(is_text(member(message(messages, 1, "user"), "content"), "Inspect my files"));
@@ -1001,6 +1132,7 @@ int main(void)
     assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0 && strstr(req, "\"max_tokens\":6000,"));
     completion_errors();
     completion_text();
+    remote_schemas();
     rejections();
     model_metadata();
     vision_flag();

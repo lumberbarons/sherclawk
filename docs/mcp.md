@@ -2,11 +2,15 @@
 
 The protocol core and native diagnostic for #76 are implemented, and the
 application has a configuration editor (**Edit ▸ MCP Servers…**). The agent
-does not use the configuration yet: discovery, tools and results are not wired
-into the run loop. The client already redacts credentials from everything it
-would hand on (see [Credential redaction](#credential-redaction)). The OS 9.2.2 Tavily diagnostic gate passed on October 10,
+run loop uses the configuration: every run loads it before the first model
+request, discovers the server's eligible tools, freezes the admitted schemas
+into the request advertisement and dispatches model-selected remote calls
+cooperatively (see [Agent integration](#agent-integration)). Completed,
+redacted responses are retained as immutable artifacts and paged back with
+`read_mcp_result`. The client redacts credentials from everything it would
+hand on (see [Credential redaction](#credential-redaction)). The OS 9.2.2 Tavily diagnostic gate passed on October 10,
 2026 (see [guest evidence](history/verification.md#mcp-tavily-diagnostic-october-10-2026)).
-Agent integration and release acceptance remain separate gates.
+Integrated guest acceptance remains a separate gate.
 
 ## Configuration editor
 
@@ -201,21 +205,60 @@ that set fails the TLS handshake until the set is extended and Certainly is
 rebuilt. When adding a server, check its issuing root first. Authorization
 servers add a second host with its own chain.
 
+## Agent integration
+
+Every run loads the saved configuration before its first model request. With
+no file, a disabled configuration, an unreadable file or an invalid one, no
+MCP traffic happens at all: the run continues with the native tools and the
+session journal records a fixed-text `mcp_notice` (never a host, path, header
+or credential value). An enabled configuration starts discovery
+(`initialize`, the `tools/list` pages) cooperatively from the event loop,
+under the client's own 30-second deadline; a failed or over-budget discovery
+records a sanitized notice and the run continues natively.
+
+Discovery is frozen per run. The admitted mapped names
+(`mcp_<server>_<tool>`) and their redacted schemas are re-validated —
+structure, name uniqueness, no native-name collisions, at most eight tools
+and 8 KiB of schema text inside the request budget — and then merged after
+the native schemas in the `tools` array of every request of that run (see
+[limits](limits.md#frozen-remote-schemas-agenth)). A set that fails
+validation is refused whole: nothing is advertised and the run continues
+natively with a notice. A successful freeze journals one `mcp_discovery`
+record with the admitted count and schema bytes; skipped tools keep their
+sanitized registry notice.
+
+The model selects a remote tool by its exact mapped name. Calls are
+sequential — one exchange at a time, in call order — and the arguments are
+forwarded verbatim; the only rewrite is the mapped name back to the server's
+original. A completed response is redacted in place by the client, retained
+as a verified artifact, and the retention summary (with `result_id`, source
+links and error status) is the tool result; the model pages the artifact with
+`read_mcp_result` (see [tools](tools.md#retained-remote-mcp-results)). A call
+that cannot start (an earlier call failed or was stopped) or that fails
+mid-flight sends nothing further and returns an explicit `MCP_UNAVAILABLE`
+error result; the run continues, and the frozen advertisement stays for the
+rest of the run.
+
+Stop during discovery, a call or result publication stops the client, sends
+its best-effort cancellation notification, drains any outstanding OT connect
+cooperatively from the event loop — Open Transport teardown waits behind
+that drain — and clears the frozen advertisement, so no further remote call
+is dispatched. The in-flight call's result says the call was stopped, its
+outcome is unknown and it is never replayed; unstarted calls record
+interrupted results like native tools. The MCP editor, a new send and a
+handoff wait until the drain finishes. A run's end — completion, Stop or New
+Chat — closes the client and wipes its copy of the configuration
+credentials; the next run re-discovers from the file.
+
 ## Remaining implementation and acceptance
 
-- Integrate frozen per-run discovery, schemas and remote calls into the event
-  loop, history/journal notices, native-only fallback and Stop. Retention of
-  completed results is implemented but not yet driven by the run loop.
-- Immutable verified result artifacts, session-scoped IDs and
-  `read_mcp_result` are implemented in `mcp_result.c` with UTF-8/escaped-output
-  pagination and host fault tests (`tests/test_mcp_result.c`); the contract is
-  in [tools](tools.md#retained-remote-mcp-results). The run loop must pass
-  each completed, redacted `mcp_client_response` to
-  `mcp_result_retain_begin`/`_step` and hand the model its summary.
 - Demonstrate model-triggered search with source links, extraction and
   multi-page results, failed-discovery fallback, responsive Stop without
-  replay, and absence of credentials in model-visible output.
-- Measure the integrated linked footprint and test the guest minimum partition.
+  replay, and absence of credentials in model-visible output in the OS 9.2.2
+  guest.
+- Measure the integrated linked footprint against the guest minimum
+  partition (the host-linked app measured 7,562,128 bytes on 2026-10-11; see
+  [limits](limits.md)).
 
 ## Verification evidence (2026-10-08)
 
