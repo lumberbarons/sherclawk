@@ -41,6 +41,7 @@ static void completion_errors(void)
         { "{\"error\":{\"message\":\"Invalid key\"}}", 401, "Invalid key" },
         { "{\"error\":{\"message\":\"Rate limited\"}}", 200, "Rate limited" },
         { "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}", 503, "provider error" },
+        { "{\"message\":\"Too many requests\"}", 429, "Too many requests" },
         { "not JSON", 200, "bounded JSON object" },
         { "{\"choices\":[]}", 200, "no choices" },
         { "{\"choices\":[{\"finish_reason\":\"stop\"}]}", 200, "no message object" },
@@ -60,7 +61,24 @@ static void completion_errors(void)
                                       summary, sizeof(summary), handoff_error, sizeof(handoff_error)) == -1);
         assert(!*summary && !strncmp(handoff_error, error, strlen(error)));
         assert(strstr(handoff_error, "Conversation retained"));
+        assert(!strstr(handoff_error, "message Conversation") && !strstr(handoff_error, "key Conversation"));
         assert(a.used == used && records == 1);
+    }
+    /* Dropping the provider's text must not fuse it with the suffix. */
+    assert(agent_handoff_response(cases[0].body, strlen(cases[0].body), cases[0].status,
+                                  summary, sizeof(summary), handoff_error, sizeof(handoff_error)) == -1);
+    assert(!strcmp(handoff_error, "HTTP 401: Invalid key. Conversation retained."));
+    /* A cut-off handoff keeps its retry guidance even if the message is unusable. */
+    {
+        static const char *const cut[] = {
+            "{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"par\"}}]}",
+            "{\"choices\":[{\"finish_reason\":\"length\",\"message\":null}]}",
+        };
+        for (i = 0; i < sizeof(cut) / sizeof(cut[0]); i++) {
+            assert(agent_handoff_response(cut[i], strlen(cut[i]), 200, summary, sizeof(summary),
+                                          handoff_error, sizeof(handoff_error)) == -1);
+            assert(strstr(handoff_error, "Try Save Handoff again"));
+        }
     }
 }
 static void completion_text(void)

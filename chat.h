@@ -1,4 +1,6 @@
-/* Bounded MacRoman/CR display transcript; the agent owns wire history. */
+/* Bounded MacRoman/CR display transcript, plus the request, response, prompt and
+ * model-id caps the agent, network and preference code share. The agent owns
+ * wire history. */
 #ifndef SHERCLAWK_CHAT_H
 #define SHERCLAWK_CHAT_H
 #include <stddef.h>

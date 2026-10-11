@@ -297,7 +297,7 @@ static int reject(char *error, size_t cap, int status, const char *reason)
     return -1;
 }
 typedef struct {
-    int message, content, calls;
+    int choice, message, content, calls;
     char finish[64];
 } ParsedChoice;
 /* Token indices remain valid until another parser uses the shared scratch.
@@ -305,8 +305,7 @@ typedef struct {
 static int parse_completion(const char *body, size_t len, int status,
                             ParsedChoice *out, char *error, size_t cap)
 {
-    char role[32];
-    int i, choice;
+    int i;
     if (json_parse(body, len, tokens, 4096) < 1 || tokens[0].type != JSON_OBJECT) {
         snprintf(error, cap, "HTTP %d: response is not a bounded JSON object (%lu bytes).", status, (unsigned long)len);
         return -1;
@@ -314,7 +313,9 @@ static int parse_completion(const char *body, size_t len, int status,
     i = json_member(body, tokens, 0, "error");
     if (status < 200 || status >= 300 || i >= 0) {
         char detail[180];
-        if (json_string(body, tokens, json_member(body, tokens, i, "message"), detail, sizeof(detail)) >= 0)
+        /* Gateways in front of the provider put the reason at the top level. */
+        if (json_string(body, tokens, json_member(body, tokens, i, "message"), detail, sizeof(detail)) >= 0 ||
+            json_string(body, tokens, json_member(body, tokens, 0, "message"), detail, sizeof(detail)) >= 0)
             snprintf(error, cap, "HTTP %d: %s", status, detail);
         else snprintf(error, cap, "HTTP %d: provider error without a message.", status);
         return -1;
@@ -322,21 +323,34 @@ static int parse_completion(const char *body, size_t len, int status,
     i = json_member(body, tokens, 0, "choices");
     if (i < 0 || tokens[i].type != JSON_ARRAY || tokens[i].next == i + 1)
         return reject(error, cap, status, "response has no choices.");
-    choice = i + 1;
-    out->message = json_member(body, tokens, choice, "message");
-    if (out->message < 0 || tokens[out->message].type != JSON_OBJECT)
-        return reject(error, cap, status, "choice has no message object.");
-    if (json_string(body, tokens, json_member(body, tokens, out->message, "role"), role, sizeof(role)) < 0 || strcmp(role, "assistant"))
-        return reject(error, cap, status, "message role is missing or not \"assistant\".");
-    if (json_string(body, tokens, json_member(body, tokens, choice, "finish_reason"), out->finish, sizeof(out->finish)) < 0)
+    out->choice = i + 1;
+    if (json_string(body, tokens, json_member(body, tokens, out->choice, "finish_reason"), out->finish, sizeof(out->finish)) < 0)
         return reject(error, cap, status, "choice has no finish_reason.");
     if (strcmp(out->finish, "stop") && strcmp(out->finish, "tool_calls") && strcmp(out->finish, "length")) {
         snprintf(error, cap, "HTTP %d: unsupported finish_reason \"%s\".", status, out->finish);
         return -1;
     }
+    error[0] = 0; return 0;
+}
+/* Split from parse_completion so a caller can act on finish_reason "length"
+ * before the possibly cut-off message is required to be well formed. */
+static int parse_message(const char *body, int status, ParsedChoice *out, char *error, size_t cap)
+{
+    char role[32];
+    out->message = json_member(body, tokens, out->choice, "message");
+    if (out->message < 0 || tokens[out->message].type != JSON_OBJECT)
+        return reject(error, cap, status, "choice has no message object.");
+    if (json_string(body, tokens, json_member(body, tokens, out->message, "role"), role, sizeof(role)) < 0 || strcmp(role, "assistant"))
+        return reject(error, cap, status, "message role is missing or not \"assistant\".");
     out->content = json_member(body, tokens, out->message, "content");
     out->calls = json_member(body, tokens, out->message, "tool_calls");
     error[0] = 0; return 0;
+}
+/* The provider's detail often has no final stop; keep the sentence readable. */
+static void retained(char *error, size_t cap, const char *detail)
+{
+    size_t n = strlen(detail);
+    snprintf(error, cap, "%s%s Conversation retained.", detail, n && detail[n - 1] == '.' ? "" : ".");
 }
 int agent_handoff_response(const char *body, size_t len, int status, char *summary,
                            size_t cap, char *error, size_t error_cap)
@@ -346,19 +360,26 @@ int agent_handoff_response(const char *body, size_t len, int status, char *summa
     int calls;
     summary[0] = 0;
     if (parse_completion(body, len, status, &choice, detail, sizeof(detail))) {
-        snprintf(error, error_cap, "%s Conversation retained.", detail);
+        retained(error, error_cap, detail);
         return -1;
     }
-    snprintf(error, error_cap, "HTTP %d: handoff must be complete text without tool calls. Conversation retained.", status);
     if (!strcmp(choice.finish, "length")) {
         snprintf(error, error_cap, "Handoff reached the output token limit before finishing. Conversation retained. Try Save Handoff again.");
         return -1;
     }
-    if (strcmp(choice.finish, "stop")) return -1;
+    if (parse_message(body, status, &choice, detail, sizeof(detail))) {
+        retained(error, error_cap, detail);
+        return -1;
+    }
     calls = choice.calls;
-    if (calls >= 0 && !null_token(body, tokens, calls) &&
-        (tokens[calls].type != JSON_ARRAY || tokens[calls].next != calls + 1)) return -1;
-    if (json_string(body, tokens, choice.content, summary, cap) <= 0) return -1;
+    if (strcmp(choice.finish, "stop") ||
+        (calls >= 0 && !null_token(body, tokens, calls) &&
+         (tokens[calls].type != JSON_ARRAY || tokens[calls].next != calls + 1)) ||
+        json_string(body, tokens, choice.content, summary, cap) <= 0) {
+        snprintf(error, error_cap, "HTTP %d: handoff must be complete text without tool calls. Conversation retained.", status);
+        summary[0] = 0;
+        return -1;
+    }
     error[0] = 0; return 0;
 }
 /* A reply that cannot be used as sent. Nothing in it is recorded or run: the
@@ -421,7 +442,8 @@ int agent_response(Agent *a, const char *body, size_t len, int status, char *err
     size_t length, reserve;
     snprintf(error, cap, "HTTP %d: invalid, truncated, or unsupported model response.", status);
     if (!a->active || a->next < a->count) return -1;
-    if (parse_completion(body, len, status, &choice, error, cap)) return -1;
+    if (parse_completion(body, len, status, &choice, error, cap) ||
+        parse_message(body, status, &choice, error, cap)) return -1;
     msg = choice.message; content = choice.content;
     limited = !strcmp(choice.finish, "length"); a->truncated = 0; a->discarded = NULL;
     a->text[0] = 0;
