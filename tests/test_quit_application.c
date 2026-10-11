@@ -86,6 +86,14 @@ int main(void)
     process_absent=1;assert(!quit_application_step(result,sizeof(result),2005,0) && strstr(result,"QUIT_OBSERVED"));
     n=ae_sends;assert(!quit_begin() && strstr(result,"RUN_NOT_OWNED"));unchanged_sends(n);
     fresh();process_absent=1;n=ae_sends;assert(quit_begin()==2);assert(!quit_application_step(result,sizeof(result),2001,0) && strstr(result,"ALREADY_EXITED"));unchanged_sends(n);
+    /* Issue #41: authorization persistence is the shared verified write; one
+     * short FSWrite fails it uncertain with the staged temporary retained. */
+    fresh();short_write=1;
+    r=application_authorize_begin("build-00000001-0001","sample",build_journal,NULL,1);assert(r==2);
+    do {r=run_application_step(result,sizeof(result),2,0);} while(r==2);
+    { int k,tmp=0; for(k=0;k<64;k++) if(files[k].used && !strcmp(files[k].name,"launch.tmp")) tmp=1;
+      assert(r==1 && strstr(result,"AUTHORIZATION_PERSISTENCE") && tmp); }
+    short_write=0;
     fresh();process_error=1;n=ae_sends;assert(quit_begin()==2);assert(quit_application_step(result,sizeof(result),2001,0)==1 && strstr(result,"OBSERVATION_FAILED"));unchanged_sends(n);
     fresh();identity_changed=1;n=ae_sends;assert(quit_begin()==2);assert(!quit_application_step(result,sizeof(result),2001,0) && strstr(result,"IDENTITY_CHANGED"));unchanged_sends(n);
     fresh();submit();ae_deliver(ae_last_id,42,0,1,-128);assert(!quit_application_step(result,sizeof(result),2002,0) && strstr(result,"QUIT_REFUSED") && strstr(result,"-128"));

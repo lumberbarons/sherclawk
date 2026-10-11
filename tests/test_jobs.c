@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-struct File { int used,folder; long parent,id,size,resource; unsigned short flags; char name[32],bytes[JOB_TOTAL_MAX]; };
+struct File { int used,folder; long parent,id,size,resource; unsigned short flags; unsigned long type,creator; char name[32],bytes[JOB_TOTAL_MAX]; };
 static struct File files[32];
 static long position[32];
 static int open_count,read_bytes,write_bytes,short_write,corrupt_read,close_error,flush_error,rename_error;
@@ -36,16 +36,19 @@ OSErr PBGetCatInfoSync(CInfoPBRec *p)
     p->hFileInfo.ioFlAttrib=files[i].folder ? 16 : 0;
     p->hFileInfo.ioFlRLgLen=files[i].resource;
     p->hFileInfo.ioFlFndrInfo.fdFlags=files[i].flags;
+    p->hFileInfo.ioFlFndrInfo.fdType=files[i].type;
+    p->hFileInfo.ioFlFndrInfo.fdCreator=files[i].creator;
     if(files[i].folder) p->dirInfo.ioDrDirID=files[i].id;
     else p->hFileInfo.ioFlLgLen=files[i].size;
     return 0;
 }
 OSErr FSpCreate(const FSSpec *s,unsigned long creator,unsigned long type,short script_code)
 {
-    char name[32]; (void)creator;(void)type;(void)script_code;
+    char name[32]; int i; (void)script_code;
     if(find(s->parID,s->name)>=0) return dupFNErr;
     memcpy(name,s->name+1,s->name[0]); name[s->name[0]]=0;
-    add(s->parID,name,0,NULL,0); creates++; return 0;
+    i=add(s->parID,name,0,NULL,0);
+    files[i].type=type; files[i].creator=creator; creates++; return 0;
 }
 OSErr FSpDirCreate(const FSSpec *s,short code,long *id)
 {
@@ -196,6 +199,13 @@ int main(void)
     reset(); assert(!begin());
     while(job.input<job.count && job.state==JOB_STAGING) step(0,0);
     short_write=1; step(0,0); assert(job.state==JOB_ABANDONED && !renames);
+    /* The ready.tmp visibility marker is the queue's one shared verified body
+     * write (fsutil.c): a short write abandons the job before the rename. */
+    reset(); assert(!begin());
+    while(job.input<job.count && job.state==JOB_STAGING) step(0,0);
+    short_write=1; step(0,0);
+    assert(job.state==JOB_ABANDONED && !renames && !job.published && records==3 && creates==4);
+    short_write=0;
     reset(); assert(!begin()); publish();
     i=add(job.directory,"result",0,"invalid",7); files[i].flags=0x8000;
     step(0,0); assert(job.state==JOB_UNKNOWN);

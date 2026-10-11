@@ -6,12 +6,15 @@
 #include "application_process.h"
 #include "json.h"
 #include "config.h"
+#include "fsutil.h"
 #include <Processes.h>
 #include <Script.h>
 #include <stdio.h>
 #include <string.h>
 #define QUEUE SHERCLAWK_BUILD_QUEUE
 #define FORK_LIMIT (1024L*1024L)
+/* The run intent record is one small JSON object; a longer one is a bug. */
+#define RESERVE_RUN_MAX 512
 typedef struct {
     uint32_t magic;
     char build[25], output[32];
@@ -121,14 +124,11 @@ int run_application_begin(const AgentCall *call,char *out,size_t cap,AgentJourna
 }
 static int persist(void)
 {
-    FSSpec s; short ref; long n=sizeof(observed); OSErr e,c; Authority verify;
-    if(record_spec("launch.tmp",&s)!=fnfErr || FSpCreate(&s,'ShCk','ShAR',smSystemScript) || FSpOpenDF(&s,fsWrPerm,&ref))return -1;
-    e=FSWrite(ref,&n,&observed); c=FSClose(ref);
-    if(e || c || n!=sizeof(observed) || FlushVol(NULL,s.vRefNum))return -1;
-    /* Verify the closed staged bytes before exposing the authorization name. */
-    if(FSpOpenDF(&s,fsRdPerm,&ref))return -1;
-    n=sizeof(verify); e=FSRead(ref,&n,&verify); c=FSClose(ref);
-    if(e || c || n!=sizeof(verify) || memcmp(&verify,&observed,sizeof(verify)) ||
+    FSSpec s; Authority verify;
+    /* The staged body goes through the one shared verified write; the rename
+     * and the post-rename record recheck are this caller's to keep (issue #41). */
+    if(record_spec("launch.tmp",&s)!=fnfErr ||
+        fs_write_verified(&s,'ShCk','ShAR',&observed,sizeof(observed),NULL) ||
         FSpRename(&s,(const unsigned char *)"\012launch.rec") || FlushVol(NULL,s.vRefNum) ||
         read_record(&verify) || memcmp(&verify,&observed,sizeof(verify)))return -1;
     return 0;
@@ -137,15 +137,13 @@ static int persist(void)
  * Retain this closed intent record even if launch/observation is uncertain. */
 static int reserve_run(const char *json)
 {
-    char path[128],verify[512]; FSSpec s; short ref;
-    long n=(long)strlen(json),got=n; OSErr e,c;
-    if(n>=(long)sizeof(verify))return -1;
+    char path[128]; FSSpec s;
+    long n=(long)strlen(json);
+    if(n>=RESERVE_RUN_MAX)return -1; /* one bounded intent record */
     snprintf(path,sizeof(path),QUEUE ":%s",run_id);
-    if(tools_resolve(path,&s)!=fnfErr || FSpCreate(&s,'ShCk','ShRR',smSystemScript) || FSpOpenDF(&s,fsWrPerm,&ref))return -1;
-    e=FSWrite(ref,&got,json); c=FSClose(ref);
-    if(e || c || got!=n || FlushVol(NULL,s.vRefNum) || FSpOpenDF(&s,fsRdPerm,&ref))return -1;
-    got=n;e=FSRead(ref,&got,verify);c=FSClose(ref);
-    return e || c || got!=n || memcmp(json,verify,(size_t)n) ? -1 : 0;
+    /* fs_write_verified adds the catalog check this sequence used to skip. */
+    if(tools_resolve(path,&s)!=fnfErr || fs_write_verified(&s,'ShCk','ShRR',json,n,NULL))return -1;
+    return 0;
 }
 int run_application_step(char *out,size_t cap,uint32_t now,int stop)
 {

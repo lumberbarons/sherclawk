@@ -250,6 +250,13 @@ int main(void)
       run_journal_error=2;assert(run_application_begin(&call,result,sizeof(result),build_journal,NULL,1360)==2);
       do {r=run_application_step(result,sizeof(result),1361,0);} while(r==2);
       assert(r==1 && launches==4 && strstr(result,"JOURNAL_AFTER"));run_journal_error=0;
+      /* Issue #41: the run reservation is the shared verified write; one short
+       * FSWrite fails it before any launch, leaving the staged record. */
+      strcpy(call.arguments,runargs);assert(run_application_begin(&call,result,sizeof(result),build_journal,NULL,1450)==2);
+      short_write=1;
+      do {r=run_application_step(result,sizeof(result),1451,0);} while(r==2);
+      assert(r==1 && launches==4 && strstr(result,"RUN_RESERVATION_FAILED_NO_LAUNCH"));
+      short_write=0;
       for(int k=0;k<64;k++)if(files[k].used && !strcmp(files[k].name,"sample"))resource_bytes[k][0]^=1;
       assert(run_application_begin(&call,result,sizeof(result),build_journal,NULL,1370)==2);
       do {r=run_application_step(result,sizeof(result),1371,0);} while(r==2);

@@ -7,6 +7,7 @@
 #include "toolserver.h"
 #include "tools.h"
 #include "config.h"
+#include "fsutil.h"
 #include <Script.h>
 #include <stdio.h>
 #include <string.h>
@@ -54,13 +55,13 @@ static int create_file(long parent,const char *name,FSSpec *s)
 }
 static int record(long parent,const char *name,const char *text)
 {
-    FSSpec s; Str255 final; char temporary[40],page[JOB_PAGE]; long n=(long)strlen(text);
-    CInfoPBRec p;
+    FSSpec s; Str255 final; char temporary[40]; long n=(long)strlen(text);
     if(n>JOB_PAGE || !absent(parent,name))return -1;
     snprintf(temporary,sizeof(temporary),"%s.tmp",name);
-    if(create_file(parent,temporary,&s) || transfer(&s,0,(void *)text,n,1) ||
-        FlushVol(NULL,s.vRefNum) || catalog(&s,&p) || !plain(&p) || p.hFileInfo.ioFlLgLen!=n ||
-        transfer(&s,0,page,n,0) || memcmp(page,text,(size_t)n))return -1;
+    leaf(parent,temporary,&s);
+    /* The body write, catalog proof and read-back comparison are the shared
+     * ladder in fsutil.c; only the publication rename is ours (issue #41). */
+    if(fs_write_verified(&s,'ttxt','TEXT',text,n,NULL))return -1;
     final[0]=(unsigned char)strlen(name); memcpy(final+1,name,final[0]);
     return FSpRename(&s,final) || FlushVol(NULL,s.vRefNum) ? -1 : 0;
 }

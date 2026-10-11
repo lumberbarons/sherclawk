@@ -11,6 +11,7 @@ typedef long Size;
 #endif
 typedef unsigned char Str255[256];
 typedef short OSErr;
+typedef unsigned long OSType;
 typedef struct { short vRefNum; long parID; Str255 name; } FSSpec;
 typedef struct { unsigned long fdType, fdCreator; unsigned short fdFlags; } FInfo;
 typedef union {
