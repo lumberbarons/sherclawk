@@ -20,11 +20,15 @@ if command -v cppcheck >/dev/null 2>&1; then
     # The host tests never define NDEBUG; their fixture clock and journal
     # spies advance inside assert() on purpose, so scope those two checkers
     # to the test files where the pattern lives (cppcheck 2.13 on CI emits
-    # both; newer cppcheck only the first).
+    # both; newer cppcheck only the first). test_tools.c joins the
+    # assertWithSideEffect list for the queue-guard suite, whose asserts
+    # pass the journal spy into the standalone begin() wrappers; 2.13
+    # follows the function pointer in, newer cppcheck does not.
     cppcheck --enable=warning,performance,portability --error-exitcode=1 \
         --inline-suppr --std=c99 --suppress=missingIncludeSystem \
         --suppress=assignmentInAssert:tests/test_tools.c \
         --suppress=assignmentInAssert:tests/test_selfbuild.c \
+        --suppress=assertWithSideEffect:tests/test_tools.c \
         --suppress=assertWithSideEffect:tests/test_jobs.c \
         --suppress=assertWithSideEffect:tests/test_build_project.c \
         -I tests/toolbox -I . -I vendor \
