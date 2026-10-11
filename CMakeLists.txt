@@ -4,8 +4,10 @@ cmake_minimum_required(VERSION 3.12)
 project(sherclawk C)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-# Shared native tool sources; read-only inspection lives in inspect.c.
-set(TOOLS_SRC tools.c inspect.c mcp_guard.c registry.c)
+# Shared native tool sources; read-only inspection lives in inspect.c, and
+# retained MCP results (mcp_result.c) re-run credential redaction from
+# mcp_config.c over what they retain.
+set(TOOLS_SRC tools.c inspect.c mcp_guard.c mcp_result.c mcp_config.c registry.c)
 # Certainly is fetch-only; build.sh expects it next to this repo. Override
 # with -DCERTAINLY_DIR=<path> when it is cloned elsewhere.
 if(NOT CERTAINLY_DIR)
@@ -33,9 +35,9 @@ endmacro()
 
 set(MCP_CORE mcp_config.c mcp_protocol.c mcp_stream.c mcp_client.c)
 sherclawk_app(SherclawkMCPCheck tools/mcp-check.c ${MCP_CORE} json.c text.c vendor/http.c hello.r)
-# Editor-side MCP code (config validation, text rules, staged store); the app
-# does not link the protocol client yet.
-set(MCP_EDITOR_SRC mcp_config.c mcp_editor.c mcp_store.c)
+# Editor-side MCP code (text rules, staged store); the config parser itself is
+# shared through TOOLS_SRC wherever mcp_result.c links.
+set(MCP_EDITOR_SRC mcp_editor.c mcp_store.c)
 set(CHAT_CORE display.c chat.c json.c text.c network.c timing.c vendor/http.c)
 # The shipping app and the diagnostics that #include main.c themselves.
 # Add a module here once and every one of those targets gets it.

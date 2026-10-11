@@ -2,6 +2,7 @@
  * conversation records, separate from the credential-free app log. */
 #include "session.h"
 #include "text.h"
+#include "mcp_result.h"
 #include <Files.h>
 #include <Script.h>
 #include <stdio.h>
@@ -37,6 +38,10 @@ static int create_journal(const char *folder, char *out_path, size_t cap, short 
         if (err == noErr) continue;
         if (err != fnfErr || FSpCreate(&spec, 'ShCk', 'TEXT', smSystemScript) != noErr) return -1;
         if (FSpOpenDF(&spec, fsWrPerm, out_ref)) return -1;
+        /* A new journal is a new session: every retained MCP result ID of the
+         * old session becomes stale. Journal records are append-only evidence;
+         * nothing is ever restored from them. */
+        mcp_result_new_session();
         return 0;
     }
     return -1;

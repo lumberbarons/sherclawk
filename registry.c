@@ -143,6 +143,13 @@ const ToolDef kToolDefs[] = {
         "\"revision\":{\"type\":\"string\"},\"destination\":{\"type\":\"string\"}},"
         "\"required\":[\"path\",\"revision\",\"destination\"],\"additionalProperties\":false}}}",
         1, 1 },
+    { TOOL_read_mcp_result, "read_mcp_result",
+        "{\"type\":\"function\",\"function\":{\"name\":\"read_mcp_result\","
+        "\"description\":\"Read one bounded page (about 512 bytes) of a retained remote MCP tool result by its session-scoped result_id, the ID a completed remote tool call returned. UTF-8 text; pages never split a multi-byte character and repeated start_byte reads are identical. Follow next_byte until truncated is false.\","
+        "\"parameters\":{\"type\":\"object\",\"properties\":{\"result_id\":{\"type\":\"string\"},"
+        "\"start_byte\":{\"type\":\"integer\",\"minimum\":0}},"
+        "\"required\":[\"result_id\"],\"additionalProperties\":false}}}",
+        0, 0 },
 };
 
 #define TOOL_COUNT (sizeof kToolDefs / sizeof *kToolDefs)

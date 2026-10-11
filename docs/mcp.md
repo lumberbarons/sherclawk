@@ -175,6 +175,7 @@ reflection, not against a server that is trying to smuggle the key out.
 | Tool names | A name containing a credential is skipped with a registry notice; a name cannot be rewritten because the call uses it verbatim. |
 | Call results and errors | `MCP_STAGE_CALL` rewrites the `result` or `error` member of the response in the stream's message buffer, so `mcp_client_response` never holds the original. Server errors, tool content, structured content and `isError` payloads are all inside that member. |
 | Server instructions, `serverInfo`, notifications, server requests | Never retained or shown; instructions are not propagated. |
+| Retained results | `mcp_result.c` decodes `text` content into a UTF-8 artifact and re-runs `McpRedact` over the decoded text before it is staged, so a wiring mistake cannot retain a credential either; the input response must be the already-redacted `mcp_client_response` text. |
 
 Raw JSON is searched only inside strings and a match is made of whole escape
 sequences, so a redacted message has exactly the same tokens at the same
@@ -203,9 +204,14 @@ servers add a second host with its own chain.
 ## Remaining implementation and acceptance
 
 - Integrate frozen per-run discovery, schemas and remote calls into the event
-  loop, history/journal notices, native-only fallback and Stop.
-- Add immutable verified result artifacts, session-scoped IDs and
-  `read_mcp_result`, with UTF-8/escaped-output pagination and fault tests.
+  loop, history/journal notices, native-only fallback and Stop. Retention of
+  completed results is implemented but not yet driven by the run loop.
+- Immutable verified result artifacts, session-scoped IDs and
+  `read_mcp_result` are implemented in `mcp_result.c` with UTF-8/escaped-output
+  pagination and host fault tests (`tests/test_mcp_result.c`); the contract is
+  in [tools](tools.md#retained-remote-mcp-results). The run loop must pass
+  each completed, redacted `mcp_client_response` to
+  `mcp_result_retain_begin`/`_step` and hand the model its summary.
 - Demonstrate model-triggered search with source links, extraction and
   multi-page results, failed-discovery fallback, responsive Stop without
   replay, and absence of credentials in model-visible output.

@@ -42,7 +42,8 @@ int toolserver_poll(uint32_t now,int stop,ToolServerReply *reply)
     return 0;
 }
 #endif
-OSErr FSpDelete(const FSSpec *s) {int i=find(s->parID,s->name);if(i<0)return fnfErr;files[i].used=0;return 0;}
+/* FSpDelete itself now lives in the shared test_tools.c model, which the
+ * retained MCP result adapter also links. */
 OSErr FSpGetFInfo(const FSSpec *s,FInfo *p) {int i=find(s->parID,s->name);if(i<0)return fnfErr;*p=files[i].info;return 0;}
 static int launches,launch_error,process_error,run_journal_error;
 static FSSpec launched;

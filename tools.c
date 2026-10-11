@@ -4,6 +4,7 @@
 #include "tools.h"
 #include "inspect.h"
 #include "mcp_guard.h"
+#include "mcp_result.h"
 #include "json.h"
 #include "text.h"
 #include "config.h"
@@ -246,18 +247,25 @@ void tools_catalog_revision(const CInfoPBRec *pb, char *out, size_t cap)
         (unsigned long)pb->hFileInfo.ioFlMdDat, (unsigned long)pb->hFileInfo.ioFlLgLen,
         (unsigned long)pb->hFileInfo.ioFlRLgLen);
 }
-/* Worker01:buildjobs and its children are sealed build evidence for every
- * mutating tool. Case-insensitive, whole path components only. */
+/* Sealed evidence for every mutating tool: the Worker01:buildjobs queue and
+ * its children, and the retained MCP results folder and its artifacts.
+ * Case-insensitive, whole path components only. */
 static int evidence_path(const char *path)
 {
-    static const char sealed[] = "worker01:buildjobs";
-    size_t i;
-    for (i = 0; i < sizeof(sealed) - 1 && path[i]; i++) {
-        unsigned char c = (unsigned char)path[i];
-        if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + 'a' - 'A');
-        if (c != (unsigned char)sealed[i]) return 0;
+    static const char *const sealed[] = { "worker01:buildjobs", "sherclawk mcp results" };
+    size_t k;
+    for (k = 0; k < sizeof(sealed) / sizeof(sealed[0]); k++) {
+        const char *prefix = sealed[k];
+        size_t i;
+        int ok = 1;
+        for (i = 0; prefix[i]; i++) {
+            unsigned char c = (unsigned char)path[i];
+            if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + 'a' - 'A');
+            if (!path[i] || c != (unsigned char)prefix[i]) { ok = 0; break; }
+        }
+        if (ok && (!path[i] || path[i] == ':')) return 1;
     }
-    return i == sizeof(sealed) - 1 && (path[i] == 0 || path[i] == ':');
+    return 0;
 }
 /* A real folder: a directory that is not an alias. */
 static int is_plain_dir(const CInfoPBRec *pb)
@@ -288,7 +296,7 @@ static int text_arguments(const AgentCall *call, JsonToken *tokens, char *out, s
         fail(out,cap,"ARGUMENTS","Tool arguments must be a bounded JSON object.",0);return -1;
     }
     if(mutation && string_arg(call->arguments,tokens,"path",path,sizeof(path))>=0 && evidence_path(path)) {
-        fail(out,cap,"EXECUTION_EVIDENCE_READ_ONLY","Worker queue and snapshots are read-only to source tools.",0);return -1;
+        fail(out,cap,"EXECUTION_EVIDENCE_READ_ONLY","Worker queue, snapshots and retained MCP results are read-only to source tools.",0);return -1;
     }
     return 0;
 }
@@ -1679,7 +1687,7 @@ int copy_file_begin(const AgentCall *call, char *out, size_t cap, AgentJournal j
     /* The mutation is the destination. A sealed build artifact is a legal
      * source (copying only reads it); the queue never accepts a copy. */
     if (evidence_path(copy_work.destination)) {
-        fail(out, cap, "EXECUTION_EVIDENCE_READ_ONLY", "Worker queue and snapshots are read-only to source tools.", 0); return 0;
+        fail(out, cap, "EXECUTION_EVIDENCE_READ_ONLY", "Worker queue, snapshots and retained MCP results are read-only to source tools.", 0); return 0;
     }
     err = tools_resolve(copy_work.path, &copy_work.source);
     if (err) { fail(out, cap, "FILE", "Cannot resolve the source path.", err); return 0; }
@@ -2041,6 +2049,8 @@ int tools_execute_recorded(const AgentCall *call, char *out, size_t cap, AgentJo
     case TOOL_list_resources:
     case TOOL_read_resource:
         inspect_execute(call, out, cap); return 0;
+    case TOOL_read_mcp_result:
+        return mcp_result_read(call, out, cap);
     case TOOL_build_project:
     case TOOL_read_build_log:
     case TOOL_run_application:
