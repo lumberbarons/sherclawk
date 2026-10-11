@@ -2228,8 +2228,9 @@ static int McpFrozenName(const char *name)
 }
 
 /* Load the saved configuration and start discovery before the first model
- * request. Returns 1 with gRun set to RUN_MCP_DISCOVERY, 0 to continue the
- * run natively, or -1 when the send must wait for a drain. */
+ * request. Returns 1 with gRun set to RUN_MCP_DISCOVERY, or 0 to continue the
+ * run natively. SendChat has already refused to start while a stopped client
+ * is draining. */
 static int McpRunStart(void)
 {
     static char bytes[MCP_STORE_CAP + 1]; /* static: the application stack is small */
@@ -2241,10 +2242,6 @@ static int McpRunStart(void)
     OSErr err;
 
     agent_set_mcp_schemas(NULL); /* each run freezes its own discovery */
-    if (McpDraining()) {
-        SetStatus("The stopped MCP connection is still closing; send again in a moment.");
-        return -1;
-    }
     err = McpSpec(&spec);
     if (err && err != fnfErr) {
         McpNotice("mcp_notice", "The Preferences folder could not be found; continuing with native tools only.");
@@ -2625,11 +2622,9 @@ static void SendBegin(void)
     ShowMessage("You", gPending);
     TESetText("", 0, gPromptTE); InvalRect(&gPromptRect);
     SetSendEnabled(0);
-    /* Remote MCP discovery runs before the first model request; a refusal
-     * waits for a drain and restores the editor, everything else continues
-     * into the request, natively when no tools were admitted. */
-    if (McpRunStart() < 0) { gRun = RUN_IDLE; SetSendEnabled(1); FocusSet(gPromptTE); return; }
-    if (gRun == RUN_MCP_DISCOVERY) return;
+    /* Remote MCP discovery runs before the first model request; everything
+     * else continues into the request, natively when no tools were admitted. */
+    if (McpRunStart()) return;
     StartModelRequest();
 }
 static void StartContextLookup(void)
