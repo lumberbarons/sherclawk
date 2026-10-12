@@ -33,7 +33,11 @@ compiled default is used. The Model field is also the catalog search box: the
 dialog lists the ten most popular models when it opens (once per launch),
 typing filters that list locally, **Find** searches the whole public catalog
 for the typed text, and clicking a row confirms the model and lists its Effort
-choices (the effort is shown only; it is not saved or sent yet). OK saves only
+choices: a `Default (X)` entry with the row's default effort first, then the
+supported efforts in order (`none` hidden on models where reasoning is
+mandatory). The choice is saved — `Default (X)` stores X — and sent as the
+`reasoning.effort` of every model and handoff request; a model without effort
+choices leaves the popup disabled and saves none. OK saves only
 a model that resolved to a catalog row — a changed, unconfirmed ID is checked
 with `GET /api/v1/models?q=<id>&limit=10` first, and a typo leaves the dialog
 open with the closest candidates. The model already saved is not re-checked,

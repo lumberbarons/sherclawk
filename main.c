@@ -567,6 +567,12 @@ typedef struct {
     int           effort_on;         /* the menu holds real choices */
     int           effort_choice;     /* 1-based chosen item */
     int           effort_shown;      /* popup lists confirmed_info's efforts */
+    int           effort_item_count; /* menu items backed by effort_items */
+    char          effort_items[AGENT_EFFORT_MAX + 1][AGENT_EFFORT_CAP];
+                                     /* stored value of each menu item: the
+                                      * Default entry resolves to the row's
+                                      * default effort, the rest store their
+                                      * own name */
     Rect          results;           /* results userItem rectangle */
     AgentModelRow rows[AGENT_MODEL_ROWS_MAX];
     int           count;
@@ -709,36 +715,61 @@ static void PrefsEffortDraw(PrefsDialog *d)
     ForeColor(blackColor);
 }
 
-/* Rebuild the effort menu from a confirmed row, preselecting its default
- * effort; a row without choices leaves the popup disabled showing None. */
+/* Rebuild the effort menu from a confirmed row: a Default (X) entry first,
+ * where X is the row's default effort, then the supported efforts in order,
+ * hiding none when reasoning is mandatory. Each item records the concrete
+ * value its choice stores, so Default (X) resolves to X at save time. A row
+ * without choices leaves the popup disabled showing None. */
 static void PrefsEffortShow(PrefsDialog *d, const AgentModelInfo *info)
 {
-    int i, choose = 1;
+    int i, items = 0;
     d->effort_shown = info != NULL;
     d->effort_on = 0;
     d->effort_choice = 1;
+    d->effort_item_count = 0;
+    memset(d->effort_items, 0, sizeof(d->effort_items));
     if (!d->effort) return;
     while (CountMItems(d->effort) > 0) DeleteMenuItem(d->effort, CountMItems(d->effort));
-    if (!info || info->effort_count == 0) {
-        AppendMenu(d->effort, (ConstStr255Param)"\pNone");
-    } else {
+    if (info && info->effort_count > 0) {
+        /* The Default entry is skipped only when it would resolve to a value
+         * the menu hides: none under a mandatory-reasoning model. */
+        if (info->default_effort[0] && !(info->mandatory && !strcmp(info->default_effort, "none"))) {
+            char text[AGENT_EFFORT_CAP + 16];
+            Str255 label;
+            snprintf(text, sizeof(text), "Default (%s)", info->default_effort);
+            PStr(label, text);
+            AppendMenu(d->effort, label);
+            SetMenuItemText(d->effort, (short)(items + 1), label);
+            strcpy(d->effort_items[items++], info->default_effort);
+        }
         for (i = 0; i < info->effort_count; i++) {
             Str255 label;
+            if (info->mandatory && !strcmp(info->supported_efforts[i], "none")) continue;
             PStr(label, info->supported_efforts[i]);
             AppendMenu(d->effort, label);
             /* AppendMenu reads metacharacters; the efforts are plain words,
              * but set the text outright so a stray one cannot become a flag. */
-            SetMenuItemText(d->effort, (short)(i + 1), label);
+            SetMenuItemText(d->effort, (short)(items + 1), label);
+            strcpy(d->effort_items[items], info->supported_efforts[i]);
+            items++;  /* the item table holds AGENT_EFFORT_MAX + 1 values */
         }
-        for (i = 0; i < info->effort_count; i++)
-            if (info->default_effort[0] && !strcmp(info->supported_efforts[i], info->default_effort)) {
-                choose = i + 1;
-                break;
-            }
+    }
+    if (items > 0) {
         d->effort_on = 1;
-        d->effort_choice = choose;
+        d->effort_item_count = items;
+        d->effort_choice = 1;   /* the default effort, or the first supported */
+    } else {
+        AppendMenu(d->effort, (ConstStr255Param)"\pNone");
     }
     InvalRect(&d->popup);
+}
+
+/* The concrete effort value the chosen popup item stores, or "" when the
+ * popup is disabled or the choice is out of range. */
+static const char *PrefsEffortValue(const PrefsDialog *d)
+{
+    if (!d->effort_on || d->effort_choice < 1 || d->effort_choice > d->effort_item_count) return "";
+    return d->effort_items[d->effort_choice - 1];
 }
 
 /* Click on the popup: track the menu at the box and keep the chosen item. */
@@ -1116,6 +1147,7 @@ static void ShowPreferences(void)
                          * unreachable. */
                         PrefsFetchStart(d, kPrefsFetchValidate, model);
                     } else {
+                        const char *effort;
                         candidate = gPrefs;
                         strcpy(candidate.model, model);
                         strcpy(candidate.api_key, key);
@@ -1123,6 +1155,13 @@ static void ShowPreferences(void)
                         candidate.max_rounds = rounds;
                         candidate.max_tools = tools;
                         candidate.show_tool_debug = debug;
+                        /* A confirmed row supplies the effort its popup chose
+                         * (empty when the row exposes none); the trusted saved
+                         * model keeps its saved effort. A provider word
+                         * outside the known set is not stored. */
+                        effort = confirmed ? PrefsEffortValue(d) : gPrefs.effort;
+                        if (!prefs_effort_ok(effort)) effort = "";
+                        strcpy(candidate.effort, effort);
                         if (PrefsSave(&candidate)) {
                             PrefsProblem(dlg, "Could not save the preferences file. Nothing was changed.");
                         } else {
@@ -2275,7 +2314,7 @@ static void StartHandoff(void)
     if (*gRunModel && !model_id_valid(gRunModel)) {
         SetStatus("Use an OpenRouter model ID without spaces."); return;
     }
-    length = agent_handoff_request(&gAgent, gRunModel, gJSON, sizeof(gJSON));
+    length = agent_handoff_request(&gAgent, gRunModel, gPrefs.effort, gJSON, sizeof(gJSON));
     if (length < 0) { SetStatus("Could not prepare handoff; conversation retained."); return; }
     if (sherclawk_attribution(SHERCLAWK_APP_URL, attribution, sizeof(attribution)) < 0) {
         SetStatus("Attribution URL is too long; conversation retained."); return;
@@ -2378,7 +2417,7 @@ static int StartModelRequest(void)
     if (gAgent.rounds >= gPrefs.max_rounds || gAgent.tool_count >= gPrefs.max_tools) {
         PauseRunAtLimit(); return -1;
     }
-    length = agent_request_image(&gAgent, gRunModel, view_image_held(), gJSON, sizeof(gJSON));
+    length = agent_request_image(&gAgent, gRunModel, gPrefs.effort, view_image_held(), gJSON, sizeof(gJSON));
     if (length < 0) { AbortChat("Request limit reached. Start a new session."); return -1; }
     if (sherclawk_attribution(SHERCLAWK_APP_URL, attribution, sizeof(attribution)) < 0) {
         AbortChat("Attribution URL is too long."); return -1;

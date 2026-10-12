@@ -24,6 +24,7 @@ typedef struct {
     char model[CHAT_MODEL_CAP];
     char api_key[PREFS_KEY_CAP];
     char workspace[PREFS_WORKSPACE_CAP];
+    char effort[AGENT_EFFORT_CAP];
     int max_rounds;
     int max_tools;
     int show_tool_debug;
@@ -44,4 +45,7 @@ int prefs_model_ok(const char *s);     /* non-empty, printable ASCII, < 256 */
 int prefs_key_ok(const char *s);       /* printable ASCII, may be empty, < 256 */
 int prefs_workspace_ok(const char *s); /* MacRoman colon path ending in ':' */
 int prefs_limit_value(const char *s);  /* decimal 1-128, else -1 */
+/* Empty, or one exact provider effort name (max, xhigh, high, medium, low,
+ * minimal, none). The dialog stores only what the confirmed row supports. */
+int prefs_effort_ok(const char *s);
 #endif

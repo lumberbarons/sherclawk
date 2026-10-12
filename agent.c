@@ -249,20 +249,32 @@ static int system_content(char *out, size_t cap, size_t *at)
     if (n < 0 || (size_t)n >= sizeof(joined)) return -1;
     return quote(out, cap, at, joined);
 }
-int agent_request_image(const Agent *a, const char *model, const AgentImage *image, char *out, size_t cap)
+/* The reasoning member when an effort is set; empty (or NULL) sends nothing,
+ * preserving the body earlier builders produced. */
+static int append_reasoning(const char *effort, char *out, size_t cap, size_t *at)
+{
+    if (!effort || !effort[0]) return 0;
+    return append(out, cap, at, ",\"reasoning\":{\"effort\":") ||
+           quote(out, cap, at, effort) ||
+           append(out, cap, at, "}");
+}
+int agent_request_image(const Agent *a, const char *model, const char *effort,
+                        const AgentImage *image, char *out, size_t cap)
 {
     size_t at = 0;
     if (!a->active || a->next < a->count || !*model) return -1;
     if (append(out, cap, &at, "{\"model\":") || quote(out, cap, &at, model) ||
-        append(out, cap, &at, ",\"stream\":false,\"max_tokens\":" STRINGIFY(AGENT_MAX_TOKENS) ",\"parallel_tool_calls\":false,\"messages\":[{\"role\":\"system\",\"content\":") ||
+        append(out, cap, &at, ",\"stream\":false,\"max_tokens\":" STRINGIFY(AGENT_MAX_TOKENS) ",\"parallel_tool_calls\":false") ||
+        append_reasoning(effort, out, cap, &at) ||
+        append(out, cap, &at, ",\"messages\":[{\"role\":\"system\",\"content\":") ||
         system_content(out, cap, &at) || append(out, cap, &at, "},") ||
         append_history(a, image, out, cap, &at) || append(out, cap, &at, "],\"tools\":") ||
         append(out, cap, &at, agent_tool_schemas()) || append(out, cap, &at, "}")) return -1;
     return (int)at;
 }
-int agent_request(const Agent *a, const char *model, char *out, size_t cap)
+int agent_request(const Agent *a, const char *model, const char *effort, char *out, size_t cap)
 {
-    return agent_request_image(a, model, NULL, out, cap);
+    return agent_request_image(a, model, effort, NULL, out, cap);
 }
 /* Bytes of one request other than the history and an image. */
 static size_t request_overhead(void)
@@ -332,7 +344,7 @@ int agent_attach_image(Agent *a, const AgentImage *image)
     }
     return 0;
 }
-int agent_handoff_request(const Agent *a, const char *model, char *out, size_t cap)
+int agent_handoff_request(const Agent *a, const char *model, const char *effort, char *out, size_t cap)
 {
     static const char instructions[] =
         "Summarize this conversation for a successor assistant. Return only concise Markdown, "
@@ -345,7 +357,9 @@ int agent_handoff_request(const Agent *a, const char *model, char *out, size_t c
     size_t at = 0;
     if (a->active || a->next < a->count || !a->messages || !*model) return -1;
     if (append(out, cap, &at, "{\"model\":") || quote(out, cap, &at, model) ||
-        append(out, cap, &at, ",\"stream\":false,\"max_tokens\":" STRINGIFY(AGENT_HANDOFF_MAX_TOKENS) ",\"messages\":[{\"role\":\"system\",\"content\":") ||
+        append(out, cap, &at, ",\"stream\":false,\"max_tokens\":" STRINGIFY(AGENT_HANDOFF_MAX_TOKENS)) ||
+        append_reasoning(effort, out, cap, &at) ||
+        append(out, cap, &at, ",\"messages\":[{\"role\":\"system\",\"content\":") ||
         quote(out, cap, &at, instructions) || append(out, cap, &at, "},") ||
         append(out, cap, &at, a->history) ||
         append(out, cap, &at, ",{\"role\":\"user\",\"content\":\"Write the handoff summary now.\"}]}")) return -1;
