@@ -231,6 +231,7 @@ static void list_processes(const AgentCall *call, const JsonToken *tokens, char 
         is_front = psn.highLongOfPSN == front.highLongOfPSN && psn.lowLongOfPSN == front.lowLongOfPSN;
         snprintf(psn_text, sizeof(psn_text), "%08lx:%08lx",
             (unsigned long)psn.highLongOfPSN, (unsigned long)psn.lowLongOfPSN);
+        entry[0] = 0;
         if (json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), "{\"name\":") || json_buf_quote(JSON_BUF(entry, sizeof(entry), &pos), name_utf) ||
             json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), ",\"psn\":") || json_buf_quote(JSON_BUF(entry, sizeof(entry), &pos), psn_text) ||
             json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), is_front ? ",\"front\":true" : ",\"front\":false") ||
@@ -289,6 +290,7 @@ static void list_fonts(const AgentCall *call, const JsonToken *tokens, char *out
         name[0] = 0;
         FMGetFontFamilyName(family, name);
         if (text_to_utf8((const char *)name + 1, name[0], utf, sizeof(utf)) < 0) utf[0] = 0;
+        entry[0] = 0;
         if (json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), "{\"id\":")) goto limit;
         snprintf(entry + pos, sizeof(entry) - pos, "%d,\"name\":", (int)family);
         pos += strlen(entry + pos);
@@ -655,6 +657,7 @@ static void list_resources(const AgentCall *call, const JsonToken *tokens, char 
                 size_t pos = 0;
                 int name_cut = 0;
                 type_name(actual, type_text);
+                entry[0] = 0;
                 if (json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), "{\"type\":") || json_buf_quote(JSON_BUF(entry, sizeof(entry), &pos), type_text)) goto limit;
                 snprintf(entry + pos, sizeof(entry) - pos, ",\"id\":%d,\"bytes\":%ld,\"name\":", (int)id, bytes);
                 pos += strlen(entry + pos);
