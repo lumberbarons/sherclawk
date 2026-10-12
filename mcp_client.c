@@ -47,8 +47,14 @@ static int start(McpClient *c, McpExchange *e, const char *body, int ack)
     mcp_stream_init(&e->stream, ack);
     if (e == &c->exchange) c->pending_len = 0;
     e->ctx = MacTLS_Create(c->config.host, c->config.port);
-    if (!e->ctx) { memset(e->request, 0, sizeof(e->request)); return -1; }
+    if (!e->ctx) { memset(e->request, 0, sizeof(e->request)); return -2; }
     return 0;
+}
+/* Fail the client for an exchange that did not start, naming an exhausted
+ * heap (no TLS context) rather than the request that needed it. */
+static int fail_start(McpClient *c, int started, const char *what)
+{
+    return fail(c, started == -2 ? "not enough memory for a TLS connection" : what);
 }
 /* -1 failure, 0 nothing yet, 1 exchange complete, 3 a message is ready in the
  * stream and is processed by later steps. */
@@ -104,24 +110,28 @@ static int step_exchange(McpClient *c, McpExchange *e)
 }
 int mcp_client_discover(McpClient *c, const McpConfig *config, unsigned long ticks)
 {
+    int r;
     static const char initialize[] = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"" MCP_VERSION "\",\"capabilities\":{},\"clientInfo\":{\"name\":\"Sherclawk\",\"version\":\"1.0\"}}}";
     if (c->exchange.ctx || c->auxiliary.ctx) return -1;
     memset(c, 0, sizeof(*c));
     c->config = *config; c->started = ticks; c->id = 1;
     if (!config->enabled) { c->state = MCP_READY; return 1; }
     c->state = MCP_INITIALIZE;
-    return start(c, &c->exchange, initialize, 0) < 0 ? fail(c, "TLS initialization failed") : 0;
+    r = start(c, &c->exchange, initialize, 0);
+    return r < 0 ? fail_start(c, r, "TLS initialization failed") : 0;
 }
 static int list(McpClient *c)
 {
     char quoted[2048], body[2304];
+    int r;
     c->id++;
     if (c->registry.cursor[0]) {
         if (json_quote(c->registry.cursor, quoted, sizeof(quoted)) < 0) return fail(c, "cursor limit");
         snprintf(body, sizeof(body), "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"method\":\"tools/list\",\"params\":{\"cursor\":%s}}", c->id, quoted);
     } else snprintf(body, sizeof(body), "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"method\":\"tools/list\",\"params\":{}}", c->id);
     c->state = MCP_LIST;
-    return start(c, &c->exchange, body, 0) < 0 ? fail(c, "discovery request failed") : 0;
+    r = start(c, &c->exchange, body, 0);
+    return r < 0 ? fail_start(c, r, "discovery request failed") : 0;
 }
 int mcp_client_call(McpClient *c, const char *name, const char *arguments, unsigned long ticks)
 {
@@ -137,7 +147,8 @@ int mcp_client_call(McpClient *c, const char *name, const char *arguments, unsig
         c->id, c->registry.tools[i].original, arguments);
     if (n < 0 || (size_t)n >= sizeof(body)) return -1;
     c->state = MCP_CALL;
-    return start(c, &c->exchange, body, 0) < 0 ? fail(c, "tool request failed") : 0;
+    n = start(c, &c->exchange, body, 0);
+    return n < 0 ? fail_start(c, n, "tool request failed") : 0;
 }
 void mcp_client_stop(McpClient *c, unsigned long ticks)
 {
@@ -197,7 +208,8 @@ int mcp_client_step(McpClient *c, unsigned long ticks)
         return 0;
     }
     if (c->reply_count) {
-        if (start(c, &c->auxiliary, c->replies[0], 1) < 0) return fail(c, "server-request reply failed");
+        r = start(c, &c->auxiliary, c->replies[0], 1);
+        if (r < 0) return fail_start(c, r, "server-request reply failed");
         c->reply_count--;
         memmove(c->replies[0], c->replies[1], (size_t)c->reply_count * sizeof(c->replies[0]));
         memset(c->replies[c->reply_count], 0, sizeof(c->replies[0]));
@@ -245,7 +257,8 @@ int mcp_client_step(McpClient *c, unsigned long ticks)
     if (c->state == MCP_INITIALIZE) {
         if (c->work.status < 0) return fail(c, "unsupported initialization/version");
         c->state = MCP_INITIALIZED;
-        return start(c, &c->exchange, "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}", 1) < 0 ? fail(c, "initialized notification failed") : 0;
+        r = start(c, &c->exchange, "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}", 1);
+        return r < 0 ? fail_start(c, r, "initialized notification failed") : 0;
     }
     if (c->state == MCP_INITIALIZED) return list(c);
     if (c->state == MCP_LIST) {

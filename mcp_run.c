@@ -205,12 +205,23 @@ int mcp_run_owns(const char *name)
  * continues. */
 int mcp_run_call(const AgentCall *call, char *out, size_t cap)
 {
+    char detail[320];
+    int ready = client.state == MCP_READY || client.state == MCP_COMPLETE;
     /* The idle client holds no endpoint, so Open Transport is torn down
      * between model rounds; a call needs it open again. */
     host->open_transport();
     if (mcp_client_call(&client, call->name, call->arguments, host->ticks()) == 0) {
         phase = MCP_RUN_CALLING;
         return 1;
+    }
+    /* A ready client that fails here could not start this call's exchange
+     * (no memory for a TLS context, say); its error names why. */
+    if (ready && client.state == MCP_FAILED) {
+        snprintf(detail, sizeof(detail),
+            "The remote MCP tool could not be called: %s No request was sent and the call was not retried.",
+            client.error);
+        error_result(out, cap, "MCP_UNAVAILABLE", detail);
+        return 0;
     }
     error_result(out, cap, "MCP_UNAVAILABLE",
         "The remote MCP tool could not be called: the connection is closed after an earlier failure or stop. No request was sent and the call was not retried.");
