@@ -35,13 +35,15 @@ struct MacTLS_Context {
 };
 static struct MacTLS_Context contexts[2];
 static int creates, closes, lists, calls, cancels;
-static int bad_version, reflect;
+static int bad_version, reflect, create_fail;
 static char error[256];
 
 MacTLS_Context *MacTLS_Create(const char *host, uint16_t port)
 {
     int i;
     assert(!strcmp(host, "mcp.tavily.com") && port == 443);
+    /* Certainly's NewPtrClear of the context failed: the heap is exhausted. */
+    if (create_fail) return NULL;
     for (i = 0; i < 2; i++) if (!contexts[i].used) {
         memset(&contexts[i], 0, sizeof(contexts[i])); contexts[i].used = 1;
         contexts[i].state = kMacTLS_Connected;
@@ -199,7 +201,7 @@ static void reset(void)
     drain();
     memset(contexts, 0, sizeof(contexts));
     creates = closes = lists = calls = cancels = opens = journal_calls = 0;
-    bad_version = reflect = 0;
+    bad_version = reflect = create_fail = 0;
     events[0] = last_event[0] = last_body[0] = 0;
     assert(agent_set_mcp_schemas(NULL) == 0);
     mcp_result_new_session();
@@ -500,6 +502,46 @@ int main(void)
     request_pins(NULL, 0);
     assert(!agent_stop(&agent, "discovery failed"));
 
+    /* ---- No memory for a TLS context at a remote call: the model gets an
+     * explicit error naming the cause, nothing was sent, nothing is left to
+     * drain, and later calls in the run are refused without another
+     * attempt. ---- */
+    reset();
+    begin_run("Search with the heap exhausted.");
+    assert(discover() == MCP_DISCOVERY_ADMITTED);
+    model_calls("mcp_tavily_tavily_search", "{\"query\":\"mac os 9\"}");
+    create_fail = 1;
+    assert(mcp_run_call(&agent.calls[0], result, sizeof(result)) == 0);
+    assert(!strcmp(result_str("status"), "error") && !strcmp(result_str("code"), "MCP_UNAVAILABLE"));
+    assert(strstr(result_str("message"), "not enough memory for a TLS connection"));
+    assert(strstr(result_str("message"), "No request was sent"));
+    assert(!strstr(result_str("message"), "earlier failure"));
+    assert(calls == 0 && creates == closes);
+    assert(mcp_run_phase() == MCP_RUN_IDLE && !mcp_run_draining());
+    assert(!agent_tool_result(&agent, result, error, sizeof(error)));
+    create_fail = 0;
+    model_calls("mcp_tavily_tavily_search", "{\"query\":\"mac os 9\"}");
+    assert(mcp_run_call(&agent.calls[0], result, sizeof(result)) == 0);
+    assert(strstr(result_str("message"), "earlier failure") && calls == 0 && creates == closes);
+    mcp_run_end();
+    assert(!mcp_run_draining() && agent_mcp_tool_count() == 0);
+    assert(!agent_stop(&agent, "no memory for the call"));
+
+    /* ---- No memory for a TLS context at discovery: a notice naming the
+     * cause and a native-only run, with no MCP traffic. ---- */
+    reset();
+    begin_run("Discover with the heap exhausted.");
+    create_fail = 1;
+    assert(mcp_run_start() == 0 && mcp_run_phase() == MCP_RUN_IDLE);
+    assert(!strcmp(last_event, "mcp_notice"));
+    assert(strstr(last_body, "not enough memory for a TLS connection"));
+    assert(strstr(last_body, "Continuing with native tools only."));
+    assert(creates == 0 && closes == 0 && lists == 0 && calls == 0);
+    assert(!mcp_run_draining() && agent_mcp_tool_count() == 0);
+    assert(agent_request(&agent, "model", req, sizeof(req)) > 0);
+    request_pins(NULL, 0);
+    assert(!agent_stop(&agent, "no memory for discovery"));
+
     /* ---- Missing, disabled, invalid or unreadable configuration causes no
      * MCP traffic and no transport: a notice and a native-only run. ---- */
     reset();
@@ -525,6 +567,6 @@ int main(void)
     assert(agent_request(&agent, "model", req, sizeof(req)) > 0);
     request_pins(NULL, 0);
 
-    puts("PASS MCP run controller: load, discovery, freeze, sequential dispatch, retention, paging, Stop, drain, fallback");
+    puts("PASS MCP run controller: load, discovery, freeze, sequential dispatch, retention, paging, Stop, drain, fallback, TLS allocation failure");
     return 0;
 }

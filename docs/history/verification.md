@@ -673,6 +673,33 @@ guest sessions from before the integration, and fell to between 0.4 and
 a remote call; model rounds alone reached 768 bytes), then recovered. Stack
 space at the remote call was about 35.7 KB. The free-heap figure did not grow
 with the partition, so a larger partition does not by itself add headroom to
-that region; whether it is the true limit has not been established. Not
+that region; whether it is the true limit has not been established (it is not:
+see the next section). Not
 exercised: extraction and multi-page results, failed discovery against a live
 server, quit during a call and repeated long sessions.
+
+## Application heap headroom, October 11, 2026
+
+A temporary probe (not shipped) logged the application zone, its limit,
+`FreeMem`, `MaxBlock`, `MaxMem`, `StackSpace` and the addresses of `gNet`,
+`gAgent` and the code to `Retro68:Sherclawk.log`. The app was built from
+`main` at `73a3d3b`, published to the AFP share and launched in the OS 9.2.2
+UTM guest by keyboard over QMP; one prompt asked the live model to call
+`get_environment`.
+
+At the 16 MiB preferred size, at entry to `main`, the zone had grown to
+6,979,344 bytes with 3,888 free and 10,574,064 bytes still below the
+application limit; `gNet` and `gAgent` lay inside it and the code above the
+limit. After window setup it was 7,005,008 bytes with 10,016 free. Calling
+`MaxApplZone` then grew it to 17,553,392 bytes with 10,558,400 free, and with
+the model's TLS context open `FreeMem` read 10,440,608. So the 118 KB figure
+in the previous section was the slack of a heap the Memory Manager grows on
+demand, not the heap's capacity.
+
+With `MaxApplZone` at the top of `main` (as shipped) and `SIZE` temporarily set
+to 10 MiB preferred, the zone was 11,261,824 bytes, `FreeMem` read 4,267,344
+after setup and 4,149,520 with a TLS context open, and `get_environment`
+reported `free_heap_bytes` 4,266,608 to the model. Both runs completed their two
+model rounds normally. The shipped build (16 MiB preferred) was republished
+afterwards. A failed TLS context allocation was not induced in the guest; host
+tests inject it for the model request and for MCP discovery and calls.

@@ -3,9 +3,10 @@
  *
  * 'SIZE' asks for 16 MB preferred / 10 MB minimum — the Certainly TLS
  * stack, BearSSL tables, the static copies of the model history and the
- * response buffers need far more than Retro68's 1 MB default (see
- * docs/limits.md). 'MBAR' and the 'MENU' resources define the
- * menu bar; the app uses SetMenuBar(GetNewMBar(128)). Retro68 adds
+ * response buffers need far more than Retro68's 1 MB default. At the
+ * minimum about 4 MB of heap stays free once main's MaxApplZone has grown
+ * the zone (measured in docs/limits.md). 'MBAR' and the 'MENU' resources
+ * define the menu bar; the app uses SetMenuBar(GetNewMBar(128)). Retro68 adds
  * 'cfrg' and the rest of the application resources automatically.
  */
 #include "Processes.r"

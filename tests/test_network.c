@@ -70,7 +70,16 @@ int main(void)
     state = kMacTLS_Error;
     assert(network_step(&net) == -1 && pumps == 2);
     assert(strstr(net.error, "TLS error: code=6 bssl=-4242 OT=-3155")); network_close(&net);
+    /* No memory for a TLS context (Certainly's NewPtrClear failed): the
+     * model request fails with a reason the caller shows, holds no context,
+     * further steps report the error without touching TLS, and the next
+     * request starts normally. */
     reset(); create_fail = 1; assert(network_start(&net, "x", 1) == -1);
+    assert(!net.ctx && net.result == -1 && !strcmp(net.error, "TLS context allocation failed."));
+    assert(network_step(&net) == -1 && !pumps && !writes);
+    network_close(&net); assert(!closes && !net.ctx && !net.request[0]);
+    create_fail = 0; assert(network_start(&net, "x", 1) == 0 && net.ctx && !net.result && !net.error[0]);
+    network_close(&net); assert(closes == 1);
     reset(); assert(network_start(&net, "x", 1) == 0);
     state = kMacTLS_Closed; assert(network_step(&net) == -1); network_close(&net);
     reset(); destination = "mcp.example"; destination_port = 8443;

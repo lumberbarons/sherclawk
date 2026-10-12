@@ -258,9 +258,6 @@ of the configuration credentials; the next run re-discovers from the file.
   results, failed-discovery fallback, and absence of credentials in
   model-visible output. Model-triggered search with a source link, retention,
   paging and Stop mid-call are demonstrated.
-- Measure the integrated linked footprint against the guest minimum
-  partition (the Docker-linked app measured 7,562,128 bytes on 2026-10-11; see
-  [limits](limits.md)).
 
 ## Verification evidence (2026-10-08)
 

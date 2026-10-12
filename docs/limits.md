@@ -42,6 +42,45 @@ in the headers today; the headers win if this drifts.
 `SIZE` asks for 16 MiB preferred and 10 MiB minimum. The static data below counts
 against it, along with dynamic TLS and UI allocations.
 
+Where the application zone goes, measured in the OS 9.2.2 guest on 2026-10-11
+with a temporary startup probe (not shipped; see
+[history](history/verification.md#application-heap-headroom-october-11-2026)):
+
+- The zone runs from the start of the heap to the application limit: 11,261,824
+  bytes (10.74 MiB) at the 10 MiB setting and 17,553,392 bytes (16.74 MiB) at
+  16 MiB. The code fragment is loaded outside it.
+- The data section, almost all of it bss, is instantiated in the zone at launch:
+  7,578,952 bytes of text, data and bss linked, of which 6,900,696 are bss
+  (`gNet`, the handoff `candidate` and `gAgent` at about 1.1 MiB each, `gJSON`
+  at 1 MiB, the MCP `client` at 530 KiB). At entry to `main` the zone had grown
+  to 6,979,344 bytes with 3,888 free.
+- Window, TextEdit and control setup uses about 20 KB more.
+- The rest, 10,548,400 bytes at 16 MiB, was not yet part of the heap. The
+  Memory Manager grows the zone toward the application limit only when an
+  allocation needs it, and `FreeMem` counts only the grown part, so before
+  `main` called `MaxApplZone` it read about 10 KB after setup and about 118 KB
+  after the first TLS exchange (the freed context), whatever the partition.
+  The "0.4 to 1.2 KB during a TLS exchange" recorded earlier was that slack,
+  not a shortage: the heap would have grown to fit.
+
+`main` now calls `MaxApplZone` before anything else, so the zone is fully grown
+at launch and `FreeMem` (`get_environment`'s `free_heap_bytes`) reports real
+headroom:
+
+| Partition | Free after setup | Free with a model TLS context open |
+|---|---|---|
+| 10 MiB (minimum) | 4,267,344 bytes | 4,149,520 bytes |
+| 16 MiB (preferred) | 10,558,400 bytes | 10,440,608 bytes |
+
+A TLS context with its transport costs about 117,800 bytes while open (one
+model request, or up to two for an MCP exchange plus its acknowledgment POST).
+This margin is accepted: the minimum partition leaves roughly 35 times that.
+If a context cannot be allocated, a model request stops with "TLS context
+allocation failed.", an MCP call returns an `MCP_UNAVAILABLE` result saying
+"not enough memory for a TLS connection" to the model, and discovery falls back
+to native tools with a notice saying the same; host tests in
+`tests/test_network.c` and `tests/test_mcp_run.c` inject that failure.
+
 ### Generated-app starter (`templates/ppc-toolbox`)
 
 The starter that `create_project` copies has its own partition in `app.r`:
@@ -181,7 +220,8 @@ measured on 2026-10-10 with the command above on `build/Sherclawk.xcoff`. The
 old 6 MiB minimum partition could not hold that, so `SIZE` was raised to 10 MiB
 minimum / 16 MiB preferred, which leaves more room for dynamic allocations than
 the old pair did. The app launched and filled its history to 99% in the OS 9.2.2
-guest (see `history/verification.md`); guest heap headroom is not measured. History capacity
+guest (see `history/verification.md`); heap headroom is measured under
+[Memory partition](#memory-partition-hellor). History capacity
 also increases per-round upload and input-token costs and is not a guarantee
 of provider context capacity. The TextEdit transcript remains independently
 bounded. With `copy_file` linked (the 8 KiB fork chunk, result record and
@@ -374,10 +414,8 @@ editor the main app linked at 585,728 bytes text, 9,664 data and 3,173,888
 bss: 3,769,280 total (3.59 MiB). On 2026-10-11, with the client linked into
 the run loop (one global `McpClient` beside the agent), the main app linked
 at 667,648 bytes text, 10,496 data and 6,883,984 bss: 7,562,128 total
-(7.21 MiB). These measurements exclude dynamic TLS/UI allocations and stack;
-they do not prove the integrated minimum partition is sufficient — guest
-heap headroom at the 10 MiB minimum is pending (see
-[MCP](mcp.md#remaining-implementation-and-acceptance)).
+(7.21 MiB). Guest heap headroom at the 10 MiB minimum is about 4 MB; see
+[Memory partition](#memory-partition-hellor).
 
 ## Owned process Quit
 
