@@ -330,8 +330,11 @@ TLS allocations, so its footprint must also be measured on the guest.
   exactly as discovery redacted them. `MCP_SCHEMA_CAP` (16 KiB) still bounds
   discovery; an admitted set that does not fit the freeze is refused whole
   and the run proceeds natively with a notice.
-- The merged tools array must fit `AGENT_TOOL_SCHEMA_CAP` (16 KiB) beside
-  the native rows. The freeze re-validates before anything is advertised:
+- The merged tools array must fit `AGENT_TOOL_SCHEMA_CAP` (24 KiB) beside
+  the native rows, which take about 14.6 KB of it, so a frozen set can use
+  the whole `AGENT_MCP_SCHEMA_CAP`. (At 16 KiB only about 1.7 KB was left, and
+  the real Tavily schemas, 4,129 bytes, were refused in the guest.) The
+  freeze re-validates before anything is advertised:
   each row is a function object with a name, names are unique, none collides
   with a native tool, there are at most `AGENT_MCP_TOOL_MAX` (8) of them,
   and mapped names stay at most 63 bytes so they fit `AgentCall.name`.

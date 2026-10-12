@@ -96,7 +96,7 @@ static int append_n(char *out, size_t cap, size_t *at, const char *s, size_t n)
  * registry bug; the host registry test fails first because it asserts every
  * row appears here and the whole array parses. The freeze re-checks the fit
  * and refuses over-cap sets, so the merge cannot fail here. */
-#define AGENT_TOOL_SCHEMA_CAP 16384
+#define AGENT_TOOL_SCHEMA_CAP 24576
 /* Frozen remote MCP tool schemas, in the request tools array after the
  * native rows. The text is exactly what discovery redacted; the freeze
  * re-checks structure, name uniqueness and native-name collisions, and

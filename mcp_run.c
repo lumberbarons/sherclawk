@@ -205,6 +205,9 @@ int mcp_run_owns(const char *name)
  * continues. */
 int mcp_run_call(const AgentCall *call, char *out, size_t cap)
 {
+    /* The idle client holds no endpoint, so Open Transport is torn down
+     * between model rounds; a call needs it open again. */
+    host->open_transport();
     if (mcp_client_call(&client, call->name, call->arguments, host->ticks()) == 0) {
         phase = MCP_RUN_CALLING;
         return 1;

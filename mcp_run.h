@@ -63,9 +63,10 @@ int mcp_run_admitted(void);
 
 /* True when `name` is a frozen remote tool of this run. */
 int mcp_run_owns(const char *name);
-/* Dispatch one model-selected call with its arguments verbatim. Returns 1
- * with the phase CALLING, or 0 with an error result in `out` (the client
- * cannot take the call; nothing was sent and nothing is retried). */
+/* Dispatch one model-selected call with its arguments verbatim, opening Open
+ * Transport first (the application closes it between rounds). Returns 1 with
+ * the phase CALLING, or 0 with an error result in `out` (the client cannot
+ * take the call; nothing was sent and nothing is retried). */
 int mcp_run_call(const AgentCall *call, char *out, size_t cap);
 /* Advance the call through retention. Returns 0 while work remains (the
  * phase moves to RETAINING once a response arrives) or 1 with the tool's

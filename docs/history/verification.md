@@ -634,3 +634,45 @@ Command-Q during a connecting request exited to the Finder with no crash.
 Three earlier handoff stops landed after the connect (`handshake` and `sent`
 set, `up=1133`) and closed at once, as designed for a connected exchange. Not
 exercised: the 30 s forced-close backstop and a long hidden-window quit wait.
+
+## MCP run loop in the guest, October 11, 2026
+
+The app built from the integration branch was published to the AFP `Retro68`
+volume and driven in the OS 9.2.2 UTM guest with the owner's saved MCP
+configuration (Tavily) and a live model. It found two defects the host
+fixtures could not:
+
+- Discovery succeeded but the freeze refused the real Tavily schemas
+  (4,129 bytes for the two eligible tools): the native rows leave about
+  1.7 KB of the 16 KiB merged buffer, far below the nominal remote cap. The
+  merged buffer is now 24 KiB, and a host test freezes a set exactly at the
+  cap.
+- The app exited silently at the first remote call. Open Transport is closed
+  between model rounds (an idle client holds no endpoint), and only discovery
+  reopened it, so the call created a TLS context with Open Transport closed.
+  The controller now opens it before every call, asserted by the host
+  fixture.
+
+With both fixed, one prompt asking the model to search the web produced, in
+order: discovery admitted both tools (`mcp_discovery`), a model call to
+`mcp_tavily_tavily_search` with the model's arguments verbatim, a retained
+result (`mcp_result_retained`, 4,744 bytes, one item, source links in the
+summary), a `read_mcp_result` page, and a final answer with a source link.
+Stop pressed while the call was in flight recorded a `STOPPED` result (outcome
+unknown, not replayed), journaled the stop notice and left the app running;
+the next prompt re-discovered, searched and retained a second result with a
+session-scoped ID. This passed with the partition set to the 10 MiB minimum
+and at the 16 MiB preferred size.
+
+Memory, read with temporary `FreeMem`/`MaxBlock`/`StackSpace`/zone logging
+(not shipped): the application zone measured 10.74 MiB at the 10 MiB setting
+and 16.74 MiB at 16 MiB, and the system had roughly 480 MiB of temporary
+memory free. Toolbox free heap was about 118 KB at rest in both, as it was in
+guest sessions from before the integration, and fell to between 0.4 and
+1.2 KB whenever a TLS exchange was open (the lowest seen was 400 bytes during
+a remote call; model rounds alone reached 768 bytes), then recovered. Stack
+space at the remote call was about 35.7 KB. The free-heap figure did not grow
+with the partition, so a larger partition does not by itself add headroom to
+that region; whether it is the true limit has not been established. Not
+exercised: extraction and multi-page results, failed discovery against a live
+server, quit during a call and repeated long sessions.

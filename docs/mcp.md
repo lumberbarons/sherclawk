@@ -9,8 +9,10 @@ cooperatively (see [Agent integration](#agent-integration)). Completed,
 redacted responses are retained as immutable artifacts and paged back with
 `read_mcp_result`. The client redacts credentials from everything it would
 hand on (see [Credential redaction](#credential-redaction)). The OS 9.2.2 Tavily diagnostic gate passed on October 10,
-2026 (see [guest evidence](history/verification.md#mcp-tavily-diagnostic-october-10-2026)).
-Integrated guest acceptance remains a separate gate.
+2026 (see [guest evidence](history/verification.md#mcp-tavily-diagnostic-october-10-2026)),
+and the integrated run loop completed a Tavily search, retention, paging and
+Stop in the guest on October 11, 2026 (see
+[guest evidence](history/verification.md#mcp-run-loop-in-the-guest-october-11-2026)).
 
 ## Configuration editor
 
@@ -252,10 +254,10 @@ of the configuration credentials; the next run re-discovers from the file.
 
 ## Remaining implementation and acceptance
 
-- Demonstrate model-triggered search with source links, extraction and
-  multi-page results, failed-discovery fallback, responsive Stop without
-  replay, and absence of credentials in model-visible output in the OS 9.2.2
-  guest.
+- Demonstrate in the guest the remaining cases: extraction and multi-page
+  results, failed-discovery fallback, and absence of credentials in
+  model-visible output. Model-triggered search with a source link, retention,
+  paging and Stop mid-call are demonstrated.
 - Measure the integrated linked footprint against the guest minimum
   partition (the Docker-linked app measured 7,562,128 bytes on 2026-10-11; see
   [limits](limits.md)).

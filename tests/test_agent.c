@@ -291,6 +291,35 @@ static void remote_schemas(void)
     too_big[AGENT_MCP_SCHEMA_CAP + 1] = 0;
     assert(agent_set_mcp_schemas(too_big) == -1);
     assert(agent_mcp_tool_count() == 0);
+    /* A set exactly at the cap is admitted beside the full native rows, and
+     * the next request carries both (real discovered schemas are large). */
+    {
+        static char first[AGENT_MCP_SCHEMA_CAP], second[AGENT_MCP_SCHEMA_CAP], full[AGENT_MCP_SCHEMA_CAP + 1];
+        const char *full_names[2] = { "mcp_big_first", "mcp_big_second" };
+        size_t head, tail, pad;
+        int n = snprintf(first, sizeof(first),
+            "{\"type\":\"function\",\"function\":{\"name\":\"mcp_big_first\",\"description\":\"%*s\","
+            "\"parameters\":{\"type\":\"object\",\"properties\":{}}}}", 3000, "");
+        assert(n > 0 && (size_t)n < sizeof(first));
+        head = (size_t)n;
+        n = snprintf(second, sizeof(second),
+            "{\"type\":\"function\",\"function\":{\"name\":\"mcp_big_second\",\"description\":\"\","
+            "\"parameters\":{\"type\":\"object\",\"properties\":{}}}}");
+        assert(n > 0);
+        tail = (size_t)n;
+        pad = AGENT_MCP_SCHEMA_CAP - head - 1 - tail;
+        n = snprintf(second, sizeof(second),
+            "{\"type\":\"function\",\"function\":{\"name\":\"mcp_big_second\",\"description\":\"%*s\","
+            "\"parameters\":{\"type\":\"object\",\"properties\":{}}}}", (int)pad, "");
+        assert(n > 0 && (size_t)n == tail + pad);
+        n = snprintf(full, sizeof(full), "%s,%s", first, second);
+        assert(n == AGENT_MCP_SCHEMA_CAP);
+        assert(agent_set_mcp_schemas(full) == 0);
+        assert(agent_mcp_tool_count() == 2);
+        begin();
+        assert(pin_remote(agent_request(&a, "model", req, sizeof(req)), full_names, 2) > 0);
+        assert(agent_set_mcp_schemas(NULL) == 0);
+    }
     begin();
     assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0);
 

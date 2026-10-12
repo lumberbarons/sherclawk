@@ -358,7 +358,10 @@ int main(void)
 
     /* ---- A model-selected remote call, dispatched sequentially. ---- */
     model_calls("mcp_tavily_tavily_search", "{\"query\":\"mac os 9\"}");
+    n = opens;
     assert(mcp_run_call(&agent.calls[0], result, sizeof(result)) == 1);
+    /* Open Transport is closed between model rounds, so every call opens it. */
+    assert(opens == n + 1);
     /* Only one remote call is in flight at a time: a second is refused with
      * an explicit result, sends nothing and leaves the first running. */
     assert(mcp_run_call(&agent.calls[0], result, sizeof(result)) == 0);
