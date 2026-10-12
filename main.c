@@ -567,6 +567,7 @@ typedef struct {
     int           effort_on;         /* the menu holds real choices */
     int           effort_choice;     /* 1-based chosen item */
     int           effort_shown;      /* popup lists confirmed_info's efforts */
+    int           effort_saved_label;/* disabled popup shows the saved effort */
     int           effort_item_count; /* menu items backed by effort_items */
     char          effort_items[AGENT_EFFORT_MAX + 1][AGENT_EFFORT_CAP];
                                      /* stored value of each menu item: the
@@ -715,15 +716,39 @@ static void PrefsEffortDraw(PrefsDialog *d)
     ForeColor(blackColor);
 }
 
-/* Rebuild the effort menu from a confirmed row: a Default (X) entry first,
- * where X is the row's default effort, then the supported efforts in order,
+/* Append an item with a plain placeholder, then set its text outright:
+ * AppendMenu reads metacharacters such as the '(' in "Default (X)", which
+ * would create the item disabled, and SetMenuItemText never clears that. */
+static void PrefsEffortAppend(PrefsDialog *d, const char *text)
+{
+    Str255 label;
+    PStr(label, text);
+    AppendMenu(d->effort, (ConstStr255Param)"\px");
+    SetMenuItemText(d->effort, CountMItems(d->effort), label);
+}
+
+/* An effort the popup may offer: a provider word the preferences file would
+ * also accept, so a pick is never discarded at save time. */
+static int PrefsEffortOffered(const AgentModelInfo *info, const char *effort)
+{
+    return effort[0] && prefs_effort_ok(effort) &&
+           !(info->mandatory && !strcmp(effort, "none"));
+}
+
+/* Rebuild the effort menu for the text `model`. From a confirmed row: a
+ * Default (X) entry first, where X is the row's default effort when it is one
+ * of the offered supported efforts, then the supported efforts in order,
  * hiding none when reasoning is mandatory. Each item records the concrete
- * value its choice stores, so Default (X) resolves to X at save time. A row
- * without choices leaves the popup disabled showing None. */
-static void PrefsEffortShow(PrefsDialog *d, const AgentModelInfo *info)
+ * value its choice stores, so Default (X) resolves to X at save time. When
+ * `model` is the saved model its saved effort is preselected instead of the
+ * default. Without a row the popup is disabled, showing the saved effort for
+ * the saved model and None otherwise. */
+static void PrefsEffortShow(PrefsDialog *d, const AgentModelInfo *info, const char *model)
 {
     int i, items = 0;
+    const char *saved = !strcmp(model, gPrefs.model) ? gPrefs.effort : "";
     d->effort_shown = info != NULL;
+    d->effort_saved_label = !info && saved[0];
     d->effort_on = 0;
     d->effort_choice = 1;
     d->effort_item_count = 0;
@@ -731,25 +756,19 @@ static void PrefsEffortShow(PrefsDialog *d, const AgentModelInfo *info)
     if (!d->effort) return;
     while (CountMItems(d->effort) > 0) DeleteMenuItem(d->effort, CountMItems(d->effort));
     if (info && info->effort_count > 0) {
-        /* The Default entry is skipped only when it would resolve to a value
-         * the menu hides: none under a mandatory-reasoning model. */
-        if (info->default_effort[0] && !(info->mandatory && !strcmp(info->default_effort, "none"))) {
+        int default_ok = 0;
+        for (i = 0; i < info->effort_count; i++)
+            if (!strcmp(info->supported_efforts[i], info->default_effort) &&
+                PrefsEffortOffered(info, info->default_effort)) default_ok = 1;
+        if (default_ok) {
             char text[AGENT_EFFORT_CAP + 16];
-            Str255 label;
             snprintf(text, sizeof(text), "Default (%s)", info->default_effort);
-            PStr(label, text);
-            AppendMenu(d->effort, label);
-            SetMenuItemText(d->effort, (short)(items + 1), label);
+            PrefsEffortAppend(d, text);
             strcpy(d->effort_items[items++], info->default_effort);
         }
         for (i = 0; i < info->effort_count; i++) {
-            Str255 label;
-            if (info->mandatory && !strcmp(info->supported_efforts[i], "none")) continue;
-            PStr(label, info->supported_efforts[i]);
-            AppendMenu(d->effort, label);
-            /* AppendMenu reads metacharacters; the efforts are plain words,
-             * but set the text outright so a stray one cannot become a flag. */
-            SetMenuItemText(d->effort, (short)(items + 1), label);
+            if (!PrefsEffortOffered(info, info->supported_efforts[i])) continue;
+            PrefsEffortAppend(d, info->supported_efforts[i]);
             strcpy(d->effort_items[items], info->supported_efforts[i]);
             items++;  /* the item table holds AGENT_EFFORT_MAX + 1 values */
         }
@@ -758,8 +777,10 @@ static void PrefsEffortShow(PrefsDialog *d, const AgentModelInfo *info)
         d->effort_on = 1;
         d->effort_item_count = items;
         d->effort_choice = 1;   /* the default effort, or the first supported */
+        for (i = 0; saved[0] && i < items; i++)
+            if (!strcmp(d->effort_items[i], saved)) { d->effort_choice = i + 1; break; }
     } else {
-        AppendMenu(d->effort, (ConstStr255Param)"\pNone");
+        PrefsEffortAppend(d, d->effort_saved_label ? saved : "None");
     }
     InvalRect(&d->popup);
 }
@@ -845,7 +866,7 @@ static void PrefsConfirm(PrefsDialog *d, int index)
     SetPrefsText(d->dlg, kPrefsModelItem, d->rows[index].id);
     strcpy(d->last_text, d->rows[index].id);
     d->filter[0] = 0;
-    PrefsEffortShow(d, &d->confirmed_info);
+    PrefsEffortShow(d, &d->confirmed_info, d->confirmed_id);
     PrefsHint(d, "Model confirmed. Press OK to save.");
     PrefsDrawRows(d);
 }
@@ -912,7 +933,7 @@ static void PrefsFetchComplete(PrefsDialog *d)
             d->selected = at;
             d->confirmed_info = d->rows[at].info;
             strcpy(d->confirmed_id, d->rows[at].id);
-            PrefsEffortShow(d, &d->confirmed_info);
+            PrefsEffortShow(d, &d->confirmed_info, d->confirmed_id);
             PrefsHint(d, "Model confirmed. Press OK again to save.");
         } else PrefsHint(d, "No exact match. Pick a candidate or press Find.");
     } else if (kind == kPrefsFetchPopular) {
@@ -924,7 +945,7 @@ static void PrefsFetchComplete(PrefsDialog *d)
             d->selected = at;
             d->confirmed_info = d->rows[at].info;
             strcpy(d->confirmed_id, d->rows[at].id);
-            PrefsEffortShow(d, &d->confirmed_info);
+            PrefsEffortShow(d, &d->confirmed_info, d->confirmed_id);
         }
         PrefsHint(d, "Popular models loaded. Type to filter or Find.");
     } else {
@@ -1013,7 +1034,7 @@ static void ShowPreferences(void)
     effort = NewMenu(kPrefsEffortMenuID, (ConstStr255Param)"\p");
     if (effort) InsertMenu(effort, hierMenu);
     d->effort = effort;
-    PrefsEffortShow(d, NULL);
+    PrefsEffortShow(d, NULL, gPrefs.model);
 
     SetPrefsText(dlg, kPrefsModelItem, gPrefs.model);
     SetPrefsText(dlg, kPrefsKeyItem, gPrefs.api_key);
@@ -1039,7 +1060,7 @@ static void ShowPreferences(void)
             d->selected = i;
             d->confirmed_info = d->rows[i].info;
             strcpy(d->confirmed_id, d->rows[i].id);
-            PrefsEffortShow(d, &d->confirmed_info);
+            PrefsEffortShow(d, &d->confirmed_info, d->confirmed_id);
         }
         PrefsHint(d, "Type to filter, or press Find to search.");
         PrefsDrawRows(d);
@@ -1192,8 +1213,11 @@ static void ShowPreferences(void)
             /* The popup describes the confirmed row only while the text
              * still names it. */
             if (d->confirmed_id[0] && !strcmp(model, d->confirmed_id)) {
-                if (!d->effort_shown) PrefsEffortShow(d, &d->confirmed_info);
-            } else if (d->effort_shown) PrefsEffortShow(d, NULL);
+                if (!d->effort_shown) PrefsEffortShow(d, &d->confirmed_info, d->confirmed_id);
+            } else if (d->effort_shown ||
+                       d->effort_saved_label != (!strcmp(model, gPrefs.model) && gPrefs.effort[0])) {
+                PrefsEffortShow(d, NULL, model);
+            }
             PrefsDrawRows(d);
         }
         if (d->fetch || d->draining) PrefsFetchStep(d);
