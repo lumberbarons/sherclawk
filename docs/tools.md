@@ -308,6 +308,31 @@ picture, so it must not describe one.
 If the conversation is already so full that the encoded image could not fit in
 one request, the image is not attached and the note says so explicitly.
 
+## Remote MCP tools
+
+A configured remote MCP server contributes read-only tools to the run under
+mapped names (`mcp_<server>_<tool>`). They appear in the request's tool
+list after the native tools for the whole run that discovered them, and the
+model calls them by that exact name with ordinary JSON arguments. Calls run
+one at a time, in order; the arguments are forwarded verbatim (only the
+mapped name is translated back to the server's original). A remote call that
+completes retains its redacted response and returns the retention summary —
+`result_id` with `read_mcp_result` for the content, `links` for source URLs,
+`is_error` for a tool or protocol error (see
+[retained results](#retained-remote-mcp-results)).
+
+A call that cannot start or that fails mid-flight returns an explicit error
+result and is never silently retried: `MCP_UNAVAILABLE` names a connection
+closed by an earlier failure or stop (no request was sent in that case) or a
+call that failed in flight; `STOPPED` says the call was stopped before it
+completed, that the server may still finish it, and that it was not replayed.
+Remote tools are admitted read-only ([ADR-0003](adr/0003-admit-tools-read-only-first.md));
+their schemas are redacted before the model ever sees them, and their
+results only ever reach the model through the retained, re-redacted
+artifacts. They are not registry tools: the run loop dispatches a frozen
+remote name before the registry-driven argument preflight, so the arguments
+are bounded by the common argument cap and the server validates them.
+
 ## Retained remote MCP results
 
 When a configured remote MCP tool call completes, its response — already

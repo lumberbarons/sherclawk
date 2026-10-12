@@ -31,6 +31,17 @@
 /* Largest AGENTS.md text, in UTF-8 bytes, that rides in the system message or
  * a project note. A longer file is cut on a line boundary with a marker. */
 #define AGENT_INSTRUCTIONS_CAP 4096
+/* Largest frozen remote MCP schema text, in bytes: the comma-separated
+ * function objects of one run's admitted remote tools, exactly as discovery
+ * redacted them. A larger discovery, one whose rows do not parse, or one
+ * whose names collide with native tools or each other is refused whole and
+ * the run proceeds with native tools only (see docs/limits.md). */
+#define AGENT_MCP_SCHEMA_CAP 8192
+/* Frozen remote function names: discovery maps names to at most 63 bytes, so
+ * one name also fits AgentCall.name. AGENT_MCP_TOOL_MAX must equal the
+ * registry's MCP_TOOL_MAX (a LIMIT_CHECK in agent.c enforces it). */
+#define AGENT_MCP_TOOL_MAX 8
+#define AGENT_MCP_NAME_CAP 64
 /* Projects whose AGENTS.md is tracked per chat, and the longest tracked name
  * (UTF-8 bytes, terminator included); past either, a project counts as seen. */
 #define AGENT_PROJECT_MAX 8
@@ -165,4 +176,12 @@ int agent_model_query(char *out, size_t cap, const char *model);
  * 0 when the completion count is present, -1 otherwise. */
 int agent_usage_completion(const char *body, size_t len, long *completion, long *reasoning);
 const char *agent_tool_schemas(void);
+/* Freeze the run's remote MCP tool schemas (NULL or "" clears): the merged
+ * tools array of the next requests carries them after the native rows, and
+ * their bytes count toward the request overhead. Returns 0, or -1 with
+ * nothing changed when the text is refused (see AGENT_MCP_SCHEMA_CAP). */
+int agent_set_mcp_schemas(const char *schemas);
+/* The frozen remote function names are the run's dispatchable set. */
+int agent_mcp_tool_count(void);
+int agent_mcp_tool_frozen(const char *name); /* 1 when `name` is one of them */
 #endif

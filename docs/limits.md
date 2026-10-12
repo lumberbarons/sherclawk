@@ -95,7 +95,9 @@ in bss and 8,224 bytes of text and data, mostly the embedded starter.
 3. **`CHAT_REQUEST_CAP` = `AGENT_HISTORY_CAP` + overhead.** The overhead is the
    system prompt, tool schemas and the workspace `AGENTS.md` (about 13 KB plus
    up to `AGENT_INSTRUCTIONS_CAP` today, with room to 32 KiB; the compile-time
-   guard demands 16 KiB plus the instruction cap).
+   guards demand 16 KiB plus the instruction cap, and with remote MCP tools
+   also `AGENT_MCP_SCHEMA_CAP` — see
+   [frozen remote schemas](#frozen-remote-schemas-agenth)).
    Raising history means raising the request cap and the HTTP request buffer in
    `network.h`, which is `CHAT_REQUEST_CAP` plus header room.
 4. **A cut-off reply is a model round.** At the token limit the reply is
@@ -147,7 +149,8 @@ in bss and 8,224 bytes of text and data, mostly the embedded starter.
 | `CHAT_PROMPT_CAP` | `gPending` (three times) and the `SendChat` prompt buffer | 4 |
 | `AGENT_RESULT_CAP` | `gToolResult`, the static record scratch in `tools.c`, and the wire message (`AGENT_RESULT_WIRE_CAP`) | about 15 |
 | `AGENT_IMAGE_CAP` | the `view_image` PNG buffer | 1 |
-| `AGENT_TOOL_SCHEMA_CAP` | the joined registry schemas in `agent.c` (one buffer, built once) | 1 |
+| `AGENT_TOOL_SCHEMA_CAP` | the native schema array and the merged native-plus-remote array in `agent.c` (two buffers) | 2 |
+| `AGENT_MCP_SCHEMA_CAP` | the frozen remote schema text and its validation copy in `agent.c` | 2 |
 | `AGENT_MAX_TOKENS` | none | 0 |
 
 Linked static size is measured, not estimated, with `powerpc-apple-macos-size`
@@ -248,15 +251,17 @@ and `down=<bytes>`. Divide `down` by `out` for the real bytes per token, and see
 bytes-per-token figures in invariant 1 against fresh logs whenever the model or
 provider changes.
 
-## MCP diagnostic limits (`mcp.h`, `mcp_client.h`)
+## MCP limits (`mcp.h`, `mcp_client.h`)
 
-The protocol and client buffers below belong to `SherclawkMCPCheck`, not the
-main app. The main app links only the configuration parser and the editor
-(`mcp_editor.c`, `mcp_store.c`). Its static buffers hold the editor text, its
-UTF-8 conversion (up to three bytes per MacRoman byte), the file contents and
-the read-back copies that verify a save, plus the parser's scratch and
-`McpConfig`; they are wiped after use. The editor's TextEdit record is bounded
-by the same 8 KiB configuration cap.
+The protocol and client buffers below are shared by `SherclawkMCPCheck` and,
+since the run-loop integration, by the main app: every run loads the saved
+configuration, discovers the server's tools and dispatches remote calls
+through this client (see [MCP](mcp.md#agent-integration)). The editor buffers
+remain separate (`mcp_editor.c`, `mcp_store.c`): editor text, its UTF-8
+conversion (up to three bytes per MacRoman byte), the file contents and the
+read-back copies that verify a save, plus the parser's scratch and
+`McpConfig`, wiped after use and bounded by the same 8 KiB configuration
+cap.
 
 | Limit | Value | Bounds |
 |---|---|---|
@@ -318,6 +323,30 @@ header block once per exchange, and the diagnostic's own final summary of a
 search result remains synchronous. The separate acknowledgment connection adds
 TLS allocations, so its footprint must also be measured on the guest.
 
+### Frozen remote schemas (`agent.h`)
+
+- `AGENT_MCP_SCHEMA_CAP` (8192) bounds the frozen schema text of one run's
+  admitted remote tools: the registry's comma-separated function objects,
+  exactly as discovery redacted them. `MCP_SCHEMA_CAP` (16 KiB) still bounds
+  discovery; an admitted set that does not fit the freeze is refused whole
+  and the run proceeds natively with a notice.
+- The merged tools array must fit `AGENT_TOOL_SCHEMA_CAP` (24 KiB) beside
+  the native rows, which take about 14.6 KB of it, so a frozen set can use
+  the whole `AGENT_MCP_SCHEMA_CAP`. (At 16 KiB only about 1.7 KB was left, and
+  the real Tavily schemas, 4,129 bytes, were refused in the guest.) The
+  freeze re-validates before anything is advertised:
+  each row is a function object with a name, names are unique, none collides
+  with a native tool, there are at most `AGENT_MCP_TOOL_MAX` (8) of them,
+  and mapped names stay at most 63 bytes so they fit `AgentCall.name`.
+- Their bytes ride in every request of the run: the headroom
+  `CHAT_REQUEST_CAP - AGENT_HISTORY_CAP` (32 KiB) must cover the frozen
+  schemas, the workspace instructions (4 KiB) and the native schemas with the
+  policy and framing (16 KiB) — a relation the build enforces
+  (`LIMIT_CHECK(request_holds_mcp_schemas)`).
+- The client's copy of the configuration is wiped by `mcp_client_close` at
+  each run's end; the run's parse buffer is wiped before the first request
+  whenever discovery does not consume it.
+
 ### Retained results (`mcp_result.h`)
 
 Completed, redacted call responses are retained as immutable UTF-8 artifacts
@@ -340,11 +369,15 @@ in `MCP_RESULT_FOLDER` under the workspace and paged back by
   argument caps are unchanged.
 
 On 2026-10-08 the Docker-linked MCP diagnostic measured 339,968 bytes text,
-6,624 data and 1,190,632 bss (1,537,224 total). The main app remains 3,036,744
-bytes because it did not yet link MCP. With the configuration editor the main
-app linked at 585,728 bytes text, 9,664 data and 3,173,888 bss: 3,769,280 total
-(3.59 MiB). These measurements exclude dynamic TLS/UI allocations and stack;
-they do not prove the integrated minimum partition is sufficient.
+6,624 data and 1,190,632 bss (1,537,224 total). With the configuration
+editor the main app linked at 585,728 bytes text, 9,664 data and 3,173,888
+bss: 3,769,280 total (3.59 MiB). On 2026-10-11, with the client linked into
+the run loop (one global `McpClient` beside the agent), the main app linked
+at 667,648 bytes text, 10,496 data and 6,883,984 bss: 7,562,128 total
+(7.21 MiB). These measurements exclude dynamic TLS/UI allocations and stack;
+they do not prove the integrated minimum partition is sufficient — guest
+heap headroom at the 10 MiB minimum is pending (see
+[MCP](mcp.md#remaining-implementation-and-acceptance)).
 
 ## Owned process Quit
 

@@ -42,6 +42,7 @@
 #include "display.h"
 #include "mcp_editor.h"
 #include "mcp_store.h"
+#include "mcp_run.h"
 
 /* ── Menu IDs ─────────────────────────────────────────────────────── */
 enum {
@@ -124,11 +125,13 @@ typedef enum {
     RUN_LAUNCH,          /* run_application pending */
     RUN_VIEW_IMAGE,      /* view_image reading a PNG */
     RUN_COPY_FILE,      /* copy_file streaming and verifying both forks */
-    RUN_HANDOFF,         /* handoff summary HTTPS exchange in flight */
-    RUN_CONTEXT_LOOKUP   /* model context-window lookup in flight */
+    RUN_HANDOFF,          /* handoff summary HTTPS exchange in flight */
+    RUN_CONTEXT_LOOKUP,   /* model context-window lookup in flight */
+    RUN_MCP               /* remote MCP discovery, call or retention (mcp_run_phase) */
 } RunState;
 static RunState gRun = RUN_IDLE;
 static int RunBusy(void) { return gRun != RUN_IDLE; }
+static int gOTClosePending;   /* OT teardown deferred behind the MCP client's drain */
 static int gOTOpen = 0;
 static int gExchangeDrain = 0;
 static char gHandoffSummary[8192], gHandoffPath[256];
@@ -142,6 +145,7 @@ static void SendChat(void);
 static void AbortChat(const char *reason);
 static void NewChat(void);
 static void StartHandoff(void);
+static int StartModelRequest(void);
 
 /* ── Small helpers ────────────────────────────────────────────────── */
 
@@ -354,7 +358,14 @@ static void CloseChatContext(void)
 {
     network_close(&gNet);
     YieldTicks(SHERCLAWK_OT_YIELD_TICKS);
-    if (gOTOpen) { CloseOpenTransport(); gOTOpen = 0; }
+    if (gOTOpen) {
+        /* The MCP client's endpoints live in the same OT instance: tearing
+         * it down while one is still connecting is the classic wedge. The
+         * drain in the event loop finishes the teardown once the client is
+         * terminal (DrainMcpClient). */
+        if (mcp_run_draining()) gOTClosePending = 1;
+        else { CloseOpenTransport(); gOTOpen = 0; gOTClosePending = 0; }
+    }
     YieldTicks(SHERCLAWK_OT_YIELD_TICKS);
 }
 
@@ -1557,7 +1568,7 @@ static void ShowMcpServers(void)
     gMcpTE = NULL; gMcpScroll = NULL;
     CloseDialog(dlg);
     if (gWindow) SetPort(gWindow);
-    if (saved) SetStatus("MCP configuration saved. The agent does not use it yet.");
+    if (saved) SetStatus("MCP configuration saved. The next run discovers its tools.");
     FocusSet(gPromptTE);
 }
 
@@ -1592,6 +1603,7 @@ static int HandleMenu(long menuChoice)
         }
         if (item == kEditMcpItem) {
             if (RunBusy()) SetStatus("Finish the current run before changing MCP Servers.");
+            else if (mcp_run_draining()) SetStatus("The stopped MCP connection is still closing; try again in a moment.");
             else if (gExchangeDrain) SetStatus("The stopped request is still closing; try again in a moment.");
             else ShowMcpServers();
             break;
@@ -2100,9 +2112,88 @@ static void NewChat(void)
     session_close(&gSession); agent_reset(&gAgent, session_journal, &gSession); chat_reset(&gChat);
     agent_set_instructions(NULL);
     view_image_reset();
+    mcp_run_end();
     ResponseSetText("", 0); TESetText("", 0, gPromptTE); InvalRect(&gPromptRect);
     FocusSet(gPromptTE); SetStatus("Ready. What shall we investigate?");
 }
+
+/* ── Remote MCP tools in the run loop ───────────────────────────────
+ * The controller (discovery, freeze, calls, retention, Stop, drain) is
+ * mcp_run.c, built and tested on the host; this is its Toolbox glue and the
+ * run-state transitions around it. */
+static McpRunLoad McpHostLoad(char *bytes, size_t cap, size_t *len)
+{
+    FSSpec spec;
+    OSErr err = McpSpec(&spec);
+    if (err && err != fnfErr) return MCP_RUN_LOAD_NO_FOLDER;
+    switch (mcp_store_load(&spec, bytes, cap, len)) {
+    case MCP_STORE_OK: return MCP_RUN_LOAD_OK;
+    case MCP_STORE_ABSENT: return MCP_RUN_LOAD_ABSENT;
+    case MCP_STORE_RECOVER: return MCP_RUN_LOAD_RECOVER;
+    default: return MCP_RUN_LOAD_UNREADABLE;
+    }
+}
+static void McpHostOpenTransport(void) { EnsureOpenTransport(); }
+static unsigned long McpHostTicks(void) { return (unsigned long)TickCount(); }
+static const McpRunHost kMcpHost = {
+    McpHostLoad, tools_workspace, McpHostOpenTransport, McpHostTicks, ToolEventJournal, &gSession
+};
+
+/* Step a stopped or finished client until its connects have drained, then
+ * finish any OT teardown the drain was holding back. */
+static void DrainMcpClient(void)
+{
+    if (!mcp_run_drain_pending()) return;
+    mcp_run_drain_step();
+    if (!mcp_run_drain_pending() && gOTClosePending && !gNet.ctx) {
+        CloseOpenTransport();
+        gOTOpen = 0; gOTClosePending = 0;
+    }
+}
+
+/* Record the finished remote tool result and return to the tool queue. */
+static void McpToolDone(void)
+{
+    char error[256];
+    const AgentCall *call = &gAgent.calls[gAgent.next];
+    gRun = RUN_TOOLS;
+    LogToolTiming(gAgent.next + 1, call->name);
+    if (agent_tool_result(&gAgent, gToolResult, error, sizeof(error))) { AbortChat(error); return; }
+    ShowToolResult(call, call->name, gToolResult);
+}
+
+/* Discovery ends in the model request, natively when nothing was admitted. */
+static void StepMcpDiscovery(void)
+{
+    McpDiscovery found = mcp_run_discover_step();
+    if (found == MCP_DISCOVERY_PENDING) return;
+    if (found == MCP_DISCOVERY_ADMITTED)
+        SetStatus("%d remote MCP tool(s) available; contacting the model...", mcp_run_admitted());
+    else if (*mcp_run_alert()) ShowMessage("Notice", mcp_run_alert());
+    /* Discovery is over: an early abort in StartModelRequest is not MCP work. */
+    gRun = RUN_NEXT_REQUEST;
+    StartModelRequest();
+}
+
+static void StartMcpCall(AgentCall *call)
+{
+    if (mcp_run_call(call, gToolResult, sizeof(gToolResult))) {
+        gRun = RUN_MCP;
+        SetStatus("Calling remote tool %s (%d/%d)...", call->name, gAgent.next + 1, gAgent.count);
+        return;
+    }
+    McpToolDone();
+}
+
+static void StepMcp(void)
+{
+    McpRunPhase before = mcp_run_phase();
+    if (before == MCP_RUN_DISCOVERING) { StepMcpDiscovery(); return; }
+    if (mcp_run_call_step(gToolResult, sizeof(gToolResult))) { McpToolDone(); return; }
+    if (before == MCP_RUN_CALLING && mcp_run_phase() == MCP_RUN_RETAINING)
+        SetStatus("Retaining remote result...");
+}
+
 /* Long-running tools finish over many event-loop steps. A row here pairs a
  * registry row with its run state, start and step functions and messages;
  * Stop and normal completion both finish it through PendingToolStep. A new
@@ -2173,6 +2264,7 @@ static void StartHandoff(void)
     char attribution[256];
     if (RunBusy()) return;
     if (gExchangeDrain) { SetStatus("The stopped request is still closing; try again in a moment."); return; }
+    if (mcp_run_draining()) { SetStatus("The stopped MCP connection is still closing; try again in a moment."); return; }
     if (!gSession.open || !gAgent.messages || gAgent.active || gAgent.next < gAgent.count) {
         SetStatus("Finish or stop the current run before saving a handoff."); return;
     }
@@ -2227,11 +2319,30 @@ static void AbortChat(const char *reason)
         LogAbort("Model context lookup stopped. Reason", reason);
         return;
     }
+    if (gRun == RUN_MCP) {
+        char error[256];
+        /* The in-flight remote work concludes first, exactly like a pending
+         * native tool: its result is recorded before agent_stop fills the
+         * unstarted calls. */
+        if (mcp_run_stop(gToolResult, sizeof(gToolResult))) {
+            LogToolTiming(gAgent.next + 1, gAgent.calls[gAgent.next].name);
+            if (agent_tool_result(&gAgent, gToolResult, error, sizeof(error))) {
+                SetStatus("Session recording failed. Start a new session before continuing.");
+                session_close(&gSession);
+            }
+        }
+    }
     if (pending) {
         char error[256];
         int result;
         PendingToolStep(pending, 1, &result, error, sizeof(error));
     }
+    /* Every run abort ends the run's remote state, whatever stopped it (a
+     * model error, the time or round limit, Stop between calls, quit): the
+     * client's endpoints close before Open Transport can be torn down and its
+     * credentials are wiped now, not at the next run. A no-op when no MCP
+     * client is open. */
+    mcp_run_end();
     AbandonChatContext();
     LogRoundTiming("abort");
     if (agent_stop(&gAgent, reason)) {
@@ -2298,7 +2409,15 @@ static void SendBegin(void)
     view_image_reset();
     ShowMessage("You", gPending);
     TESetText("", 0, gPromptTE); InvalRect(&gPromptRect);
-    SetSendEnabled(0); StartModelRequest();
+    SetSendEnabled(0);
+    /* Remote MCP discovery runs before the first model request; everything
+     * else continues into the request, natively when no tools were admitted. */
+    if (mcp_run_start()) {
+        gRun = RUN_MCP;
+        SetStatus("Discovering remote MCP tools...");
+        return;
+    }
+    StartModelRequest();
 }
 static void StartContextLookup(void)
 {
@@ -2349,6 +2468,7 @@ static void SendChat(void)
     static char prompt[CHAT_PROMPT_CAP]; /* static: the application stack is small */
     if (RunBusy()) return;
     if (gExchangeDrain) { SetStatus("The stopped request is still closing; send again in a moment."); return; }
+    if (mcp_run_draining()) { SetStatus("The stopped MCP connection is still closing; send again in a moment."); return; }
     if (!gPrefs.api_key[0]) { SetStatus("No API key: choose Preferences from the Edit menu."); return; }
     strcpy(gRunModel, gPrefs.model);
     if (TEGetTextInto(gPromptTE, prompt, sizeof(prompt)) < 0) { SetStatus("Message is too long."); return; }
@@ -2415,6 +2535,11 @@ static void StepTools(void)
     }
     view_image_set_vision(gModelInfoAttempted && !strcmp(gModelInfoModel, gRunModel) ? gModelInfo.vision : AGENT_VISION_UNKNOWN);
     def = tools_lookup(call->name);
+    /* A frozen remote MCP name dispatches to its own run state before the
+     * native preflight: that guard is registry-driven and remote tools are
+     * not in the registry, so it would refuse them as unknown. The server
+     * validates their arguments (ADR-0003 keeps them read-only). */
+    if (!def && mcp_run_owns(call->name)) { StartMcpCall(call); return; }
     pending = def ? PendingStateForDef(def) : NULL;
     /* One registry-driven preflight before either dispatch path. Pending rows
      * inherit the guard even when their begin function belongs to a module. */
@@ -2488,6 +2613,7 @@ static void StepModelExchange(void)
     if (gAgent.count) {
         gRun = RUN_TOOLS; SetStatus("Model requested %d tool(s).", gAgent.count);
     } else {
+        mcp_run_end(); /* the run is over: wipe the client and its credentials */
         gRun = RUN_IDLE; SetSendEnabled(1); FocusSet(gPromptTE);
         if (gAgent.limited) ShowMessage("Notice", "Reply incomplete: output token limit reached.");
         if (gAgent.used >= AGENT_HISTORY_CAP * 3 / 4)
@@ -2509,6 +2635,7 @@ static void DriveChatStep(void)
     case RUN_LAUNCH:
     case RUN_VIEW_IMAGE:
     case RUN_COPY_FILE: StepPendingTool(); break;
+    case RUN_MCP: StepMcp(); break;
     case RUN_TOOLS: StepTools(); break;
     case RUN_MODEL_REQUEST:
     case RUN_HANDOFF: StepModelExchange(); break;
@@ -2541,6 +2668,7 @@ int main(void)
     TEInit(); InitDialogs(NULL); InitCursor(); MacTLS_Init();
     PrefsLoad();
     tools_set_workspace(gPrefs.workspace);
+    mcp_run_init(&kMcpHost);
     UIInit();
     if (!gWindow || !gPromptTE || !gResponseTE ||
         !gSendBtn || !gStopBtn || !gNewBtn || !gHandoffBtn || !gResponseScroll || !gScrollActionUPP) {
@@ -2556,6 +2684,7 @@ int main(void)
         SetPort(gWindow); HandleEvent(&event);
         if (RunBusy()) DriveChatStep();
         DrainAbandonedExchange();
+        DrainMcpClient();
         selfbuild_drain((uint32_t)TickCount());
         UpdateHandoffControls();
         /* History changes during sends, tool results, New Chat and handoff.
@@ -2575,6 +2704,15 @@ int main(void)
         while (gExchangeDrain) {
             WaitNextEvent(everyEvent, &event, 1, NULL);
             DrainAbandonedExchange();
+        }
+    }
+    if (mcp_run_drain_pending()) {
+        /* Same pattern: the MCP drain is bounded by the client's own connect
+         * timeout and its 5 s cancellation deadline. */
+        HideWindow(gWindow);
+        while (mcp_run_drain_pending()) {
+            WaitNextEvent(everyEvent, &event, 1, NULL);
+            DrainMcpClient();
         }
     }
     if (gNet.ctx || gOTOpen) CloseChatContext();

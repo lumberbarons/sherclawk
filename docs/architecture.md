@@ -156,6 +156,28 @@ fault-injecting model. Saves stage, verify and swap rather than truncating in
 place: the file is hand-edited and holds credentials, so a failed save must
 never cost the previous version.
 
+## MCP run loop notes
+
+Remote MCP tools are driven by a controller (`mcp_run.c`) that owns the
+client, the retention folder and the deferred close, and reaches the
+application only through a small host callback struct: configuration loading,
+the workspace path, Open Transport, the tick clock and the journal. `main.c`
+keeps the run state and the Toolbox presentation around it, so the whole
+sequence — load, discover, freeze, call, retain, Stop, drain — runs on the
+host against a fake network (`tests/test_mcp_run.c`).
+
+The advertisement is frozen per run: discovery happens once before the first
+model request, and every request of that run carries the same schemas, so
+the model never sees a tool set change mid-run. Open Transport must not be
+torn down while a remote endpoint is still connecting, so a stopped client
+drains cooperatively from the event loop and `CloseChatContext` defers its
+teardown behind that drain. Remote calls are dispatched by exact frozen name
+before the native argument preflight: the preflight is registry-driven and
+remote tools are not in the registry, so their arguments are bounded by the
+argument cap and forwarded verbatim, never rewritten
+([ADR-0003](adr/0003-admit-tools-read-only-first.md) keeps admission
+read-only).
+
 ## Model catalog and context display
 
 The context window comes from the public

@@ -5,13 +5,16 @@
 #include "base64.h"
 #include "chat.h"
 #include "json.h"
+#include "mcp.h"
 #include "tools.h"
 #include <stdio.h>
 #include <string.h>
 
-/* One 4096-token scratch (64 KiB) is shared by the completion parser and the
- * usage/context extractors, which never nest while an outer parser still needs
- * its token indices: agent_response absorbs only after its own use has ended. */
+/* One 4096-token scratch (64 KiB) is shared by the completion parser, the
+ * usage/context extractors and the remote-schema freeze, which never nest
+ * while an outer parser still needs its token indices: agent_response
+ * absorbs only after its own use has ended, and the freeze runs at run
+ * start, before any response is parsed. */
 static JsonToken tokens[4096];
 
 /* Size relations documented in docs/limits.md; a build fails if one is broken. */
@@ -21,6 +24,13 @@ LIMIT_CHECK(tokens_fit_response, AGENT_MAX_TOKENS * 10 <= CHAT_RESPONSE_CAP);
 LIMIT_CHECK(handoff_tokens_fit_response, AGENT_HANDOFF_MAX_TOKENS * 10 <= CHAT_RESPONSE_CAP);
 LIMIT_CHECK(reply_fits_response, AGENT_REPLY_CAP < CHAT_RESPONSE_CAP);
 LIMIT_CHECK(request_holds_history, CHAT_REQUEST_CAP >= AGENT_HISTORY_CAP + 16384 + AGENT_INSTRUCTIONS_CAP);
+/* Frozen remote schemas ride in every request beside the history, the
+ * policy, the native schemas and the instructions: the headroom above the
+ * history must cover them all (see docs/limits.md). */
+LIMIT_CHECK(request_holds_mcp_schemas,
+    CHAT_REQUEST_CAP - AGENT_HISTORY_CAP >= AGENT_MCP_SCHEMA_CAP + AGENT_INSTRUCTIONS_CAP + 16384);
+/* Discovery never admits more rows than the freeze can hold. */
+LIMIT_CHECK(frozen_tools_match_registry, AGENT_MCP_TOOL_MAX == MCP_TOOL_MAX);
 /* A prompt is composed in MacRoman and recorded as UTF-8, up to three bytes each. */
 LIMIT_CHECK(prompt_fits_text, (CHAT_PROMPT_CAP - 1) * 3 + 64 <= AGENT_TEXT_CAP);
 
@@ -81,25 +91,97 @@ static int append_n(char *out, size_t cap, size_t *at, const char *s, size_t n)
     memcpy(out + *at, s, n); out[*at + n] = 0; *at += n; return 0;
 }
 
-/* The joined registry schemas, built once. A row that does not fit is a
+/* The joined registry schemas, native rows built once; the frozen remote
+ * rows ride after them in the merged array. A row that does not fit is a
  * registry bug; the host registry test fails first because it asserts every
- * row appears here and the whole array parses. */
-#define AGENT_TOOL_SCHEMA_CAP 16384
+ * row appears here and the whole array parses. The freeze re-checks the fit
+ * and refuses over-cap sets, so the merge cannot fail here. */
+#define AGENT_TOOL_SCHEMA_CAP 24576
+/* Frozen remote MCP tool schemas, in the request tools array after the
+ * native rows. The text is exactly what discovery redacted; the freeze
+ * re-checks structure, name uniqueness and native-name collisions, and
+ * refuses whole sets so a hostile server cannot widen the native set. */
+static char mcp_text[AGENT_MCP_SCHEMA_CAP + 1];
+static char mcp_names[AGENT_MCP_TOOL_MAX][AGENT_MCP_NAME_CAP];
+static int mcp_count;
+
 const char *agent_tool_schemas(void)
 {
-    static char joined[AGENT_TOOL_SCHEMA_CAP];
+    static char native[AGENT_TOOL_SCHEMA_CAP], merged[AGENT_TOOL_SCHEMA_CAP];
+    static size_t native_len;
     static int built;
     size_t at = 0, i;
     if (!built) {
-        if (append(joined, sizeof(joined), &at, "[")) return "";
+        if (append(native, sizeof(native), &at, "[")) return "";
         for (i = 0; i < tools_count(); i++) {
-            if ((i && append(joined, sizeof(joined), &at, ",")) ||
-                append(joined, sizeof(joined), &at, tools_at(i)->schema_json)) return "";
+            if ((i && append(native, sizeof(native), &at, ",")) ||
+                append(native, sizeof(native), &at, tools_at(i)->schema_json)) return "";
         }
-        if (append(joined, sizeof(joined), &at, "]")) return "";
-        built = 1;
+        if (append(native, sizeof(native), &at, "]")) return "";
+        native_len = at; built = 1;
     }
-    return joined;
+    if (!mcp_count) return native;
+    memcpy(merged, native, native_len - 1);
+    at = native_len - 1;
+    merged[at++] = ',';
+    strcpy(merged + at, mcp_text);
+    at += strlen(mcp_text);
+    merged[at++] = ']'; merged[at] = 0;
+    return merged;
+}
+
+int agent_set_mcp_schemas(const char *schemas)
+{
+    static char wrapped[AGENT_MCP_SCHEMA_CAP + 3];
+    char names[AGENT_MCP_TOOL_MAX][AGENT_MCP_NAME_CAP];
+    size_t len, native_len;
+    int count = 0, parsed, i, j, function;
+    if (!schemas || !*schemas) {
+        mcp_text[0] = 0; mcp_count = 0; return 0;
+    }
+    len = strlen(schemas);
+    if (len > AGENT_MCP_SCHEMA_CAP) return -1;
+    /* Validate into locals: a refusal changes nothing. */
+    wrapped[0] = '[';
+    memcpy(wrapped + 1, schemas, len);
+    wrapped[1 + len] = ']'; wrapped[2 + len] = 0;
+    parsed = json_parse(wrapped, 2 + len, tokens, 4096);
+    if (parsed < 1 || tokens[0].type != JSON_ARRAY) return -1;
+    for (i = 1; i < tokens[0].next; i = tokens[i].next) {
+        char type[16], name[AGENT_MCP_NAME_CAP];
+        if (tokens[i].type != JSON_OBJECT ||
+            json_string(wrapped, tokens, json_member(wrapped, tokens, i, "type"), type, sizeof(type)) < 0 ||
+            strcmp(type, "function")) return -1;
+        function = json_member(wrapped, tokens, i, "function");
+        if (function < 0 || tokens[function].type != JSON_OBJECT ||
+            json_string(wrapped, tokens, json_member(wrapped, tokens, function, "name"),
+                        name, sizeof(name)) <= 0) return -1;
+        if (count == AGENT_MCP_TOOL_MAX) return -1;
+        for (j = 0; j < count; j++) if (!strcmp(names[j], name)) return -1;
+        if (tools_lookup(name)) return -1;
+        strcpy(names[count++], name);
+    }
+    if (!count) return -1;
+    /* The merged array must fit beside the native rows (comma and bracket). */
+    native_len = 2;
+    for (i = 0; i < (int)tools_count(); i++)
+        native_len += strlen(tools_at(i)->schema_json) + (i ? 1 : 0);
+    if (native_len - 1 + 1 + len + 1 > AGENT_TOOL_SCHEMA_CAP) return -1;
+    memcpy(mcp_text, schemas, len + 1);
+    memcpy(mcp_names, names, sizeof(names));
+    mcp_count = count;
+    return 0;
+}
+int agent_mcp_tool_count(void)
+{
+    return mcp_count;
+}
+int agent_mcp_tool_frozen(const char *name)
+{
+    int i;
+    for (i = 0; i < mcp_count; i++)
+        if (!strcmp(name, mcp_names[i])) return 1;
+    return 0;
 }
 static int quote(char *out, size_t cap, size_t *at, const char *s)
 {

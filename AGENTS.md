@@ -82,6 +82,11 @@ cp config.example.h config.local.h  # optional local config; gitignored
   `registry.c` the one table defining every tool's name, wire
   schema and `mutates`/`pending` classification (pure data so host suites that
   link only `agent.c` can join the schemas without the executors); `chat.c`/`json.c`/`text.c`/`network.c`/`vendor/http.c` core.
+- Remote MCP in the run loop: `mcp_run.c` is the controller (load, discover,
+  freeze, call, retain, Stop, drain) behind a host callback struct;
+  `mcp_client.c`, `mcp_protocol.c`, `mcp_stream.c` and `mcp_config.c` are the
+  client, `mcp_result.c` retains and pages results, `mcp_editor.c` and
+  `mcp_store.c` back the configuration editor. See `docs/mcp.md`.
 - Native build/run machinery: `build_project.c`, `selfbuild.c`, `toolserver.c`,
   `run_application.c`, `jobs.c`. MPW ToolServer is the only build backend; the
   queue's `worker-lock` and `STOP` names are kept for existing queues.

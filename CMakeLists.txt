@@ -39,11 +39,14 @@ sherclawk_app(SherclawkMCPCheck tools/mcp-check.c ${MCP_CORE} json.c text.c vend
 # Editor-side MCP code (text rules, staged store); the config parser itself is
 # shared through TOOLS_SRC wherever mcp_result.c links.
 set(MCP_EDITOR_SRC mcp_editor.c mcp_store.c)
+# Agent-run MCP integration: the run controller and the client trio beyond
+# mcp_config.c, which TOOLS_SRC already carries for the result adapter.
+set(MCP_RUN_SRC mcp_run.c mcp_protocol.c mcp_stream.c mcp_client.c)
 # vendor/http.c comes with TOOLS_SRC, which every CHAT_CORE user also links.
 set(CHAT_CORE display.c chat.c json.c text.c network.c timing.c)
 # The shipping app and the diagnostics that #include main.c themselves.
 # Add a module here once and every one of those targets gets it.
-set(APP_SRC agent.c session.c preferences.c ${MCP_EDITOR_SRC} ${TOOLS_SRC}
+set(APP_SRC agent.c session.c preferences.c ${MCP_EDITOR_SRC} ${MCP_RUN_SRC} ${TOOLS_SRC}
     view_image.c build_project.c selfbuild.c toolserver.c ae_dispatch.c
     run_application.c application_process.c jobs.c ${CHAT_CORE} hello.r
     build/art.r CREATOR ShCk)
