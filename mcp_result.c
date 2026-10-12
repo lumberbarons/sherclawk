@@ -17,6 +17,9 @@ extern unsigned long TickCount(void);
 /* A Pascal string holds 255 bytes; longer paths would silently truncate and
  * resolve to some other file or folder, so they are refused instead. */
 #define MCP_RESULT_PATH_MAX 255
+/* Path buffers; the stage buffer also holds the ".new" suffix on a full final path. */
+#define MCP_RESULT_PATH_BUF 344
+#define MCP_RESULT_STAGE_BUF (MCP_RESULT_PATH_BUF + 4)
 
 typedef struct {
     char id[MCP_RESULT_ID_LEN + 1];
@@ -37,8 +40,8 @@ enum {
 static struct {
     McpResultRetain in;
     unsigned long scope;
-    char folder[344], id[MCP_RESULT_ID_LEN + 1];
-    char stage_path[344], final_path[344];
+    char folder[MCP_RESULT_PATH_BUF], id[MCP_RESULT_ID_LEN + 1];
+    char stage_path[MCP_RESULT_STAGE_BUF], final_path[MCP_RESULT_PATH_BUF];
     FSSpec stage_spec;
     int phase, item, text, list_end, items, unsupported, is_error, first_item;
     int stage_created, renamed, ref_open;
@@ -241,7 +244,7 @@ static int journal_event(void)
 
 int mcp_result_retain_begin(const McpResultRetain *in, char *out, size_t cap)
 {
-    char id[MCP_RESULT_ID_LEN + 1], final_path[344], stage_path[344];
+    char id[MCP_RESULT_ID_LEN + 1], final_path[MCP_RESULT_PATH_BUF], stage_path[MCP_RESULT_STAGE_BUF];
     FSSpec spec;
     CInfoPBRec pb;
     Str255 path;
