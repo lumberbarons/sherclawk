@@ -21,7 +21,7 @@ add_subdirectory("${CERTAINLY_DIR}" certainly-src)
 # place; source sets used by several targets are variables below, so a new
 # module cannot reach only some of the targets (the drift behind #148).
 macro(sherclawk_app name)
-    add_application(${name} ${ARGN})
+    add_application(${name} ${ARGN} jsonargs.c)
     target_include_directories(${name} PRIVATE . vendor)
     target_link_libraries(${name} certainly FontManager)
     target_compile_options(${name} PRIVATE -Wall -Wextra -ffunction-sections)

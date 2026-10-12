@@ -286,7 +286,9 @@ never decodes, converts or downscales, so a generated application must render
 a screenshot small enough to fit. The file must be a plain data-fork file of at
 most `AGENT_IMAGE_CAP` bytes (see [limits](limits.md)). It is read in slices of
 16 KiB per event-loop turn; the file is re-checked each slice and a change
-mid-read is reported as `CHANGED`. Stop ends the read and attaches nothing.
+mid-read is reported as `CHANGED`. The shared pin checks identity, modification
+time, both fork sizes, lock/directory bits and Finder type, creator and flags.
+Stop ends the read and attaches nothing.
 
 The tool is always advertised, but it fails closed. The selected model's
 OpenRouter catalog row lists its `architecture.input_modalities`; only a row

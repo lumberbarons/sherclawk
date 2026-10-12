@@ -2,6 +2,7 @@
  * bounded steps: parse, decode, redact-check, stage, flush, read back,
  * publish, journal, advertise. An artifact is never advertised before its
  * read-back verification and its journal record exist. */
+#include "jsonargs.h"
 #include "mcp_result.h"
 #include "json.h"
 #include <Files.h>
@@ -65,28 +66,6 @@ static void pstr(Str255 p, const char *s)
     memcpy(&p[1], s, n);
 }
 
-static int fail(char *out, size_t cap, const char *code, const char *message, int native)
-{
-    char q[512];
-    if (json_quote(message, q, sizeof(q)) < 0) strcpy(q, "\"Tool failed\"");
-    snprintf(out, cap, "{\"status\":\"error\",\"code\":\"%s\",\"message\":%s,\"os_error\":%d}", code, q, native);
-    return -1;
-}
-static int append(char *out, size_t cap, size_t *at, const char *s)
-{
-    size_t n = strlen(s);
-    if (*at >= cap || n >= cap - *at) return -1;
-    memcpy(out + *at, s, n + 1);
-    *at += n;
-    return 0;
-}
-static int quote_at(char *out, size_t cap, size_t *at, const char *s)
-{
-    int n = json_quote(s, out + *at, cap - *at);
-    if (n < 0) return -1;
-    *at += (size_t)n;
-    return 0;
-}
 
 /* End the retention with an error: an unrenamed stage is closed and deleted
  * (a busy file cannot be deleted), a renamed artifact stays on disk as
@@ -106,7 +85,7 @@ static int retain_fail(char *out, size_t cap, const char *code, const char *mess
         work.stage_created = 0;
     }
     active = 0;
-    fail(out, cap, code, message, native);
+    json_args_error(out, cap, code, message, native);
     return 1;
 }
 
@@ -211,20 +190,20 @@ static int summary_out(char *out, size_t cap, int retained)
     char tail[96];
     size_t at = 0;
     int i;
-    if (append(out, cap, &at, "{\"status\":\"ok\",\"content_type\":\"text\"") ||
-        (retained && (append(out, cap, &at, ",\"result_id\":") ||
-                      quote_at(out, cap, &at, work.id)))) return -1;
+    if (json_buf_append(JSON_BUF(out, cap, &at), "{\"status\":\"ok\",\"content_type\":\"text\"") ||
+        (retained && (json_buf_append(JSON_BUF(out, cap, &at), ",\"result_id\":") ||
+                      json_buf_quote(JSON_BUF(out, cap, &at), work.id)))) return -1;
     snprintf(tail, sizeof(tail), ",\"bytes\":%lu,\"is_error\":%s", (unsigned long)work.used,
              work.is_error ? "true" : "false");
-    if (append(out, cap, &at, tail)) return -1;
+    if (json_buf_append(JSON_BUF(out, cap, &at), tail)) return -1;
     if (work.error_code[0] &&
-        (append(out, cap, &at, ",\"error_code\":") || quote_at(out, cap, &at, work.error_code))) return -1;
+        (json_buf_append(JSON_BUF(out, cap, &at), ",\"error_code\":") || json_buf_quote(JSON_BUF(out, cap, &at), work.error_code))) return -1;
     snprintf(tail, sizeof(tail), ",\"items\":%d,\"unsupported\":%d", work.items, work.unsupported);
-    if (append(out, cap, &at, tail) || append(out, cap, &at, ",\"links\":[")) return -1;
+    if (json_buf_append(JSON_BUF(out, cap, &at), tail) || json_buf_append(JSON_BUF(out, cap, &at), ",\"links\":[")) return -1;
     for (i = 0; i < work.link_count; i++) {
-        if ((i && append(out, cap, &at, ",")) || quote_at(out, cap, &at, work.links[i])) return -1;
+        if ((i && json_buf_append(JSON_BUF(out, cap, &at), ",")) || json_buf_quote(JSON_BUF(out, cap, &at), work.links[i])) return -1;
     }
-    return append(out, cap, &at, "]}") ? -1 : 0;
+    return json_buf_append(JSON_BUF(out, cap, &at), "]}") ? -1 : 0;
 }
 
 static int journal_event(void)
@@ -251,19 +230,19 @@ int mcp_result_retain_begin(const McpResultRetain *in, char *out, size_t cap)
 
     if (cap < AGENT_RESULT_CAP) { if (cap) out[0] = 0; return 1; }
     cap = AGENT_RESULT_CAP;
-    if (active) { fail(out, cap, "RETAIN_BUSY", "A result retention is already active.", 0); return 1; }
+    if (active) { json_args_error(out, cap, "RETAIN_BUSY", "A result retention is already active.", 0); return 1; }
     if (!in || !in->response || !in->response_len || in->response_len > MCP_MESSAGE_CAP ||
         !in->folder || !*in->folder) {
-        fail(out, cap, "ARGUMENTS", "Retention needs a completed response and an artifact folder.", 0);
+        json_args_error(out, cap, "ARGUMENTS", "Retention needs a completed response and an artifact folder.", 0);
         return 0;
     }
     n = strlen(in->folder);
     if (n + MCP_RESULT_ID_LEN + 4 > MCP_RESULT_PATH_MAX || in->folder[n - 1] != ':') {
-        fail(out, cap, "ARGUMENTS", "The artifact folder path is not usable.", 0);
+        json_args_error(out, cap, "ARGUMENTS", "The artifact folder path is not usable.", 0);
         return 0;
     }
     if (result_count >= MCP_RESULT_MAX) {
-        fail(out, cap, "LIMIT", "The session's retained-result table is full; start a new chat to retain more.", 0);
+        json_args_error(out, cap, "LIMIT", "The session's retained-result table is full; start a new chat to retain more.", 0);
         return 0;
     }
     {
@@ -276,7 +255,7 @@ int mcp_result_retain_begin(const McpResultRetain *in, char *out, size_t cap)
         if (FSMakeFSSpec(0, 0, dir_name, &spec) == fnfErr) {
             long dir;
             OSErr err = FSpDirCreate(&spec, smSystemScript, &dir);
-            if (err) { fail(out, cap, "FOLDER", "The retained-results folder could not be created.", err); return 0; }
+            if (err) { json_args_error(out, cap, "FOLDER", "The retained-results folder could not be created.", err); return 0; }
         } else {
             memset(&pb, 0, sizeof(pb));
             pb.hFileInfo.ioNamePtr = spec.name;
@@ -284,7 +263,7 @@ int mcp_result_retain_begin(const McpResultRetain *in, char *out, size_t cap)
             pb.hFileInfo.ioDirID = spec.parID;
             if (PBGetCatInfoSync(&pb) || !(pb.hFileInfo.ioFlAttrib & 16) ||
                 (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000)) {
-                fail(out, cap, "FOLDER", "The retained-results folder is not a plain folder.", 0);
+                json_args_error(out, cap, "FOLDER", "The retained-results folder is not a plain folder.", 0);
                 return 0;
             }
         }
@@ -294,7 +273,7 @@ int mcp_result_retain_begin(const McpResultRetain *in, char *out, size_t cap)
     for (attempt = 0; attempt < 100 && !made; attempt++) {
         if (snprintf(id, sizeof(id), "mcp-%08lx-%04lx", (now + (unsigned long)attempt) & 0xffffffffUL,
                      (++result_sequence) & 0xffffUL) != MCP_RESULT_ID_LEN) {
-            fail(out, cap, "STAGE", "The retained-result ID does not fit.", 0);
+            json_args_error(out, cap, "STAGE", "The retained-result ID does not fit.", 0);
             return 0;
         }
         snprintf(final_path, sizeof(final_path), "%s%s", in->folder, id);
@@ -305,7 +284,7 @@ int mcp_result_retain_begin(const McpResultRetain *in, char *out, size_t cap)
         if (FSMakeFSSpec(0, 0, path, &spec) != fnfErr) continue; /* id taken */
         made = 1;
     }
-    if (!made) { fail(out, cap, "STAGE", "No unused retained-result ID was found.", 0); return 0; }
+    if (!made) { json_args_error(out, cap, "STAGE", "No unused retained-result ID was found.", 0); return 0; }
     memset(&work, 0, sizeof(work));
     work.in = *in;
     work.scope = result_scope;
@@ -318,7 +297,7 @@ int mcp_result_retain_begin(const McpResultRetain *in, char *out, size_t cap)
     pstr(path, stage_path);
     if (FSMakeFSSpec(0, 0, path, &work.stage_spec) != fnfErr) {
         active = 0;
-        fail(out, cap, "STAGE", "The retained-result stage could not be located.", 0);
+        json_args_error(out, cap, "STAGE", "The retained-result stage could not be located.", 0);
         return 0;
     }
     json_parser_init(&work.parser, in->response, in->response_len, tokens, MCP_RESULT_TOKENS);
@@ -335,7 +314,7 @@ int mcp_result_retain_step(char *out, size_t cap, int stop)
 
     if (cap < AGENT_RESULT_CAP) { if (cap) out[0] = 0; return 1; }
     cap = AGENT_RESULT_CAP;
-    if (!active) { fail(out, cap, "RETAIN_BUSY", "No result retention is active.", 0); return 1; }
+    if (!active) { json_args_error(out, cap, "RETAIN_BUSY", "No result retention is active.", 0); return 1; }
     if (work.scope != result_scope)
         return retain_fail(out, cap, "SESSION",
             "The session changed while the result was being retained; nothing was retained.", 0);
@@ -553,33 +532,9 @@ static int valid_id(const char *id)
 /* Only result_id and start_byte, no duplicates (the tools.c argument rules). */
 static int read_args(const char *s, const JsonToken *t, char *id, size_t cap, long *start)
 {
-    int i, j, at = -1;
-    char key[64];
-    *start = 0;
-    for (i = 1; i < t[0].next; i = t[i + 1].next) {
-        if (json_string(s, t, i, key, sizeof(key)) < 0 ||
-            (strcmp(key, "result_id") && strcmp(key, "start_byte"))) return -1;
-        for (j = 1; j < i; j = t[j + 1].next) {
-            char previous[64];
-            if (json_string(s, t, j, previous, sizeof(previous)) < 0 || !strcmp(previous, key)) return -1;
-        }
-    }
-    at = json_member(s, t, 0, "result_id");
-    if (at < 0 || json_string(s, t, at, id, cap) < 0) return -1;
-    at = json_member(s, t, 0, "start_byte");
-    if (at >= 0) {
-        long value = 0;
-        int k;
-        if (t[at].type != JSON_PRIMITIVE || t[at].end <= t[at].start || t[at].end - t[at].start > 10)
-            return -1;
-        for (k = t[at].start; k < t[at].end; k++) {
-            int d = (unsigned char)s[k] - '0';
-            if (d < 0 || d > 9 || value > (2147483647L - d) / 10) return -1;
-            value = value * 10 + d;
-        }
-        *start = value;
-    }
-    return 0;
+    return json_args_check_keys(s, t, 0, "|result_id||start_byte|") ||
+        json_args_string(s, t, "result_id", id, cap) < 0 ||
+        json_args_int(s, t, "start_byte", 0, 0, 2147483647L, start) ? -1 : 0;
 }
 
 int mcp_result_read(const AgentCall *call, char *out, size_t cap)
@@ -601,22 +556,22 @@ int mcp_result_read(const AgentCall *call, char *out, size_t cap)
     if (!call || strlen(call->arguments) >= AGENT_ARGUMENT_CAP ||
         json_parse(call->arguments, strlen(call->arguments), t, 32) < 1 || t[0].type != JSON_OBJECT ||
         read_args(call->arguments, t, id, sizeof(id), &start)) {
-        fail(out, cap, "ARGUMENTS", "Expected only result_id and a start_byte offset.", 0);
+        json_args_error(out, cap, "ARGUMENTS", "Expected only result_id and a start_byte offset.", 0);
         return 0;
     }
     if (!valid_id(id)) {
-        fail(out, cap, "STALE_ID", "No retained result with this ID is available in this session.", 0);
+        json_args_error(out, cap, "STALE_ID", "No retained result with this ID is available in this session.", 0);
         return 0;
     }
     for (i = 0; i < result_count; i++)
         if (!strcmp(results[i].id, id)) { entry = &results[i]; break; }
     if (!entry) {
-        fail(out, cap, "STALE_ID", "No retained result with this ID is available in this session.", 0);
+        json_args_error(out, cap, "STALE_ID", "No retained result with this ID is available in this session.", 0);
         return 0;
     }
     pstr(path, entry->path);
     err = FSMakeFSSpec(0, 0, path, &spec);
-    if (err) { fail(out, cap, "CHANGED", "The retained result changed on disk; it is no longer trustworthy.", err); return 0; }
+    if (err) { json_args_error(out, cap, "CHANGED", "The retained result changed on disk; it is no longer trustworthy.", err); return 0; }
     memset(&pb, 0, sizeof(pb));
     pb.hFileInfo.ioNamePtr = spec.name;
     pb.hFileInfo.ioVRefNum = spec.vRefNum;
@@ -625,15 +580,15 @@ int mcp_result_read(const AgentCall *call, char *out, size_t cap)
         (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000) ||
         pb.hFileInfo.ioFlFndrInfo.fdType != MCP_RESULT_TYPE ||
         pb.hFileInfo.ioFlLgLen != entry->bytes) {
-        fail(out, cap, "CHANGED", "The retained result changed on disk; it is no longer trustworthy.", 0);
+        json_args_error(out, cap, "CHANGED", "The retained result changed on disk; it is no longer trustworthy.", 0);
         return 0;
     }
     if (start > entry->bytes) {
-        fail(out, cap, "RANGE", "start_byte lies beyond the end of the retained result.", 0);
+        json_args_error(out, cap, "RANGE", "start_byte lies beyond the end of the retained result.", 0);
         return 0;
     }
     err = FSpOpenDF(&spec, fsRdPerm, &ref);
-    if (err) { fail(out, cap, "READ", "The retained result could not be read.", err); return 0; }
+    if (err) { json_args_error(out, cap, "READ", "The retained result could not be read.", err); return 0; }
     err = SetFPos(ref, fsFromStart, start);
     if (!err) {
         n = entry->bytes - start;
@@ -642,9 +597,9 @@ int mcp_result_read(const AgentCall *call, char *out, size_t cap)
         if (!err && n <= 0 && start < entry->bytes) err = ioErr;
     }
     if (FSClose(ref) && !err) err = ioErr;
-    if (err) { fail(out, cap, "READ", "The retained result could not be read.", err); return 0; }
+    if (err) { json_args_error(out, cap, "READ", "The retained result could not be read.", err); return 0; }
     if (n > 0 && (page[0] & 0xc0) == 0x80) {
-        fail(out, cap, "RANGE", "start_byte falls inside a multi-byte character; use a next_byte value.", 0);
+        json_args_error(out, cap, "RANGE", "start_byte falls inside a multi-byte character; use a next_byte value.", 0);
         return 0;
     }
     /* Never split a multi-byte character: extend the page to the next
@@ -658,12 +613,12 @@ int mcp_result_read(const AgentCall *call, char *out, size_t cap)
         "\"next_byte\":%ld,\"truncated\":%s,\"text\":",
         entry->bytes, entry->is_error ? "true" : "false",
         start, limit, limit < entry->bytes ? "true" : "false");
-    if (append(out, cap, &at, "{\"status\":\"ok\",\"result_id\":") ||
-        quote_at(out, cap, &at, id) ||
-        append(out, cap, &at, tail) ||
-        quote_at(out, cap, &at, page) ||
-        append(out, cap, &at, "}")) {
-        fail(out, cap, "ENCODING", "The retained result is no longer valid UTF-8.", 0);
+    if (json_buf_append(JSON_BUF(out, cap, &at), "{\"status\":\"ok\",\"result_id\":") ||
+        json_buf_quote(JSON_BUF(out, cap, &at), id) ||
+        json_buf_append(JSON_BUF(out, cap, &at), tail) ||
+        json_buf_quote(JSON_BUF(out, cap, &at), page) ||
+        json_buf_append(JSON_BUF(out, cap, &at), "}")) {
+        json_args_error(out, cap, "ENCODING", "The retained result is no longer valid UTF-8.", 0);
         return 0;
     }
     return 0;

@@ -5,6 +5,8 @@
  * never load whole resources: handles are opened with automatic loading
  * disabled, sizes come from the map, and bytes arrive in pages through
  * ReadPartialResource. */
+#include "fsutil.h"
+#include "jsonargs.h"
 #include "inspect.h"
 #include "tools.h"
 #include "mcp_guard.h"
@@ -33,81 +35,8 @@ static int resource_read(Handle resource, long offset, long count, char *buffer)
 
 static int fail(char *out, size_t cap, const char *code, const char *message, int native)
 {
-    char q[512];
     if (native == MCP_GUARD_DENIED) { code = MCP_GUARD_CODE; message = MCP_GUARD_MESSAGE; }
-    if (json_quote(message, q, sizeof(q)) < 0) strcpy(q, "\"Tool failed\"");
-    snprintf(out, cap, "{\"status\":\"error\",\"code\":\"%s\",\"message\":%s,\"os_error\":%d}", code, q, native);
-    return -1;
-}
-static int append(char *out, size_t cap, size_t *at, const char *s)
-{
-    size_t n = strlen(s);
-    if (*at >= cap || n >= cap - *at) return -1;
-    memcpy(out + *at, s, n + 1); *at += n; return 0;
-}
-static int quote(char *out, size_t cap, size_t *at, const char *s)
-{
-    int n = json_quote(s, out + *at, cap - *at);
-    if (n < 0) return -1;
-    *at += (size_t)n; return 0;
-}
-static int string_arg(const char *s, const JsonToken *tokens, const char *name, char *out, size_t cap)
-{
-    return json_string(s, tokens, json_member(s, tokens, 0, name), out, cap);
-}
-/* Optional signed integer; absent keeps the default, malformed fails. */
-static int number_arg(const char *s, const JsonToken *tokens, const char *name, long def,
-                      long low, long high, long *out)
-{
-    char value[24];
-    long n;
-    int i = json_member(s, tokens, 0, name), k, size, at = 0;
-    if (i < 0) { *out = def; return 0; }
-    size = tokens[i].end - tokens[i].start;
-    if (tokens[i].type != JSON_PRIMITIVE || size < 1 || size >= (int)sizeof(value)) return -1;
-    if (s[tokens[i].start] == '-') at = 1;
-    if (at >= size) return -1;
-    for (k = at; k < size; k++) if (s[tokens[i].start + k] < '0' || s[tokens[i].start + k] > '9') return -1;
-    memcpy(value, s + tokens[i].start, (size_t)size); value[size] = 0;
-    n = strtol(value, NULL, 10);
-    if (n < low || n > high) return -1;
-    *out = n; return 0;
-}
-static int valid_keys(const char *s, const JsonToken *tokens, const char *allowed)
-{
-    char key[64], padded[68];
-    int i, j;
-    for (i = 1; i < tokens[0].next; i = tokens[i + 1].next) {
-        if (json_string(s, tokens, i, key, sizeof(key)) < 0) return -1;
-        snprintf(padded, sizeof(padded), "|%s|", key);
-        if (!strstr(allowed, padded)) return -1;
-        for (j = 1; j < i; j = tokens[j + 1].next) {
-            char previous[64];
-            if (json_string(s, tokens, j, previous, sizeof(previous)) < 0 || !strcmp(previous, key)) return -1;
-        }
-    }
-    return 0;
-}
-static OSErr catalog(const FSSpec *spec, CInfoPBRec *pb)
-{
-    memset(pb, 0, sizeof(*pb)); pb->hFileInfo.ioNamePtr = (unsigned char *)spec->name;
-    pb->hFileInfo.ioVRefNum = spec->vRefNum; pb->hFileInfo.ioDirID = spec->parID;
-    return PBGetCatInfoSync(pb);
-}
-static int same_file(const CInfoPBRec *a, const CInfoPBRec *b)
-{
-    return a->hFileInfo.ioDirID == b->hFileInfo.ioDirID &&
-        a->hFileInfo.ioFlMdDat == b->hFileInfo.ioFlMdDat &&
-        a->hFileInfo.ioFlLgLen == b->hFileInfo.ioFlLgLen &&
-        a->hFileInfo.ioFlRLgLen == b->hFileInfo.ioFlRLgLen &&
-        (a->hFileInfo.ioFlAttrib & 0x11) == (b->hFileInfo.ioFlAttrib & 0x11) &&
-        a->hFileInfo.ioFlFndrInfo.fdType == b->hFileInfo.ioFlFndrInfo.fdType &&
-        a->hFileInfo.ioFlFndrInfo.fdCreator == b->hFileInfo.ioFlFndrInfo.fdCreator &&
-        a->hFileInfo.ioFlFndrInfo.fdFlags == b->hFileInfo.ioFlFndrInfo.fdFlags;
-}
-static int is_alias(const CInfoPBRec *pb)
-{
-    return pb->hFileInfo.ioFlFndrInfo.fdType == 'alis' || (pb->hFileInfo.ioFlFndrInfo.fdFlags & 0x8000);
+    return json_args_error(out, cap, code, message, native);
 }
 /* Four-character types stay readable; anything with control or high bytes is
  * rendered as a hex literal, which read_resource accepts in return. */
@@ -208,39 +137,39 @@ static void file_info(const AgentCall *call, const JsonToken *tokens, char *out,
     OSErr err;
     size_t at = 0;
     long flags;
-    if (valid_keys(call->arguments, tokens, "|path|") ||
-        string_arg(call->arguments, tokens, "path", path, sizeof(path)) < 0) {
+    if (json_args_check_keys(call->arguments, tokens, 0, "|path|") ||
+        json_args_string(call->arguments, tokens, "path", path, sizeof(path)) < 0) {
         fail(out, cap, "ARGUMENTS", "Expected only a path string.", 0); return;
     }
     err = tools_resolve(path, &spec);
-    if (!err) err = catalog(&spec, &pb);
+    if (!err) err = fs_catalog(&spec, &pb);
     if (err) { fail(out, cap, "FILE", "Cannot resolve the workspace path.", err); return; }
     format_date(pb.hFileInfo.ioFlCrDat, created, sizeof(created));
     format_date(pb.hFileInfo.ioFlMdDat, modified, sizeof(modified));
     flags = (long)pb.hFileInfo.ioFlFndrInfo.fdFlags;
-    if (append(out, cap, &at, "{\"status\":\"ok\",\"path\":") || quote(out, cap, &at, path)) goto limit;
+    if (json_buf_append(JSON_BUF(out, cap, &at), "{\"status\":\"ok\",\"path\":") || json_buf_quote(JSON_BUF(out, cap, &at), path)) goto limit;
     if (pb.hFileInfo.ioFlAttrib & 16) {
-        if (append(out, cap, &at, ",\"kind\":\"folder\"")) goto limit;
+        if (json_buf_append(JSON_BUF(out, cap, &at), ",\"kind\":\"folder\"")) goto limit;
     } else {
         type_name(pb.hFileInfo.ioFlFndrInfo.fdType, file_type);
         type_name(pb.hFileInfo.ioFlFndrInfo.fdCreator, creator);
         tools_catalog_revision(&pb, revision, sizeof(revision));
-        if (append(out, cap, &at, ",\"kind\":\"file\",\"file_type\":") || quote(out, cap, &at, file_type) ||
-            append(out, cap, &at, ",\"creator\":") || quote(out, cap, &at, creator) ||
-            append(out, cap, &at, ",\"revision\":") || quote(out, cap, &at, revision)) goto limit;
+        if (json_buf_append(JSON_BUF(out, cap, &at), ",\"kind\":\"file\",\"file_type\":") || json_buf_quote(JSON_BUF(out, cap, &at), file_type) ||
+            json_buf_append(JSON_BUF(out, cap, &at), ",\"creator\":") || json_buf_quote(JSON_BUF(out, cap, &at), creator) ||
+            json_buf_append(JSON_BUF(out, cap, &at), ",\"revision\":") || json_buf_quote(JSON_BUF(out, cap, &at), revision)) goto limit;
     }
     snprintf(tail, sizeof(tail), ",\"finder_flags\":\"0x%04lx\",\"alias\":%s,\"custom_icon\":%s,\"bundle\":%s,"
         "\"invisible\":%s,\"locked\":%s,\"label\":%ld,\"data_bytes\":%ld,\"resource_bytes\":%ld,"
         "\"created\":\"%s\",\"modified\":\"%s\"}",
         (unsigned long)flags & 0xffffUL,
-        is_alias(&pb) ? "true" : "false",
+        fs_is_alias(&pb) ? "true" : "false",
         (flags & 0x0400) ? "true" : "false", (flags & 0x2000) ? "true" : "false",
         (flags & 0x4000) ? "true" : "false", (pb.hFileInfo.ioFlAttrib & 1) ? "true" : "false",
         (flags >> 1) & 7,
         (long)((pb.hFileInfo.ioFlAttrib & 16) ? 0 : pb.hFileInfo.ioFlLgLen),
         (long)((pb.hFileInfo.ioFlAttrib & 16) ? 0 : pb.hFileInfo.ioFlRLgLen),
         created, modified);
-    if (append(out, cap, &at, tail)) goto limit;
+    if (json_buf_append(JSON_BUF(out, cap, &at), tail)) goto limit;
     return;
 limit:
     fail(out, cap, "LIMIT", "File information exceeds the result capacity.", 0);
@@ -257,10 +186,10 @@ static void list_processes(const AgentCall *call, const JsonToken *tokens, char 
     long limit;
     int count = 0, done = 0, truncated = 0;
     size_t at = 0;
-    if (valid_keys(call->arguments, tokens, "|cursor||limit|") ||
-        number_arg(call->arguments, tokens, "limit", 8, 1, 12, &limit) ||
+    if (json_args_check_keys(call->arguments, tokens, 0, "|cursor||limit|") ||
+        json_args_int(call->arguments, tokens, "limit", 8, 1, 12, &limit) ||
         (json_member(call->arguments, tokens, 0, "cursor") >= 0 &&
-         string_arg(call->arguments, tokens, "cursor", cursor, sizeof(cursor)) < 0)) {
+         json_args_string(call->arguments, tokens, "cursor", cursor, sizeof(cursor)) < 0)) {
         fail(out, cap, "ARGUMENTS", "Expected optional cursor (returned value) and limit 1-12.", 0); return;
     }
     memset(&psn, 0, sizeof(psn));
@@ -277,7 +206,7 @@ static void list_processes(const AgentCall *call, const JsonToken *tokens, char 
     GetCurrentProcess(&current);
     GetFrontProcess(&front);
     last = psn;
-    if (append(out, cap, &at, "{\"status\":\"ok\",\"processes\":[")) goto limit;
+    if (json_buf_append(JSON_BUF(out, cap, &at), "{\"status\":\"ok\",\"processes\":[")) goto limit;
     while (count < limit) {
         char entry[400], psn_text[24], name_utf[512], app_utf[512];
         size_t pos = 0;
@@ -302,33 +231,33 @@ static void list_processes(const AgentCall *call, const JsonToken *tokens, char 
         is_front = psn.highLongOfPSN == front.highLongOfPSN && psn.lowLongOfPSN == front.lowLongOfPSN;
         snprintf(psn_text, sizeof(psn_text), "%08lx:%08lx",
             (unsigned long)psn.highLongOfPSN, (unsigned long)psn.lowLongOfPSN);
-        if (append(entry, sizeof(entry), &pos, "{\"name\":") || quote(entry, sizeof(entry), &pos, name_utf) ||
-            append(entry, sizeof(entry), &pos, ",\"psn\":") || quote(entry, sizeof(entry), &pos, psn_text) ||
-            append(entry, sizeof(entry), &pos, is_front ? ",\"front\":true" : ",\"front\":false") ||
-            append(entry, sizeof(entry), &pos, self ? ",\"self\":true" : ",\"self\":false")) {
+        if (json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), "{\"name\":") || json_buf_quote(JSON_BUF(entry, sizeof(entry), &pos), name_utf) ||
+            json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), ",\"psn\":") || json_buf_quote(JSON_BUF(entry, sizeof(entry), &pos), psn_text) ||
+            json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), is_front ? ",\"front\":true" : ",\"front\":false") ||
+            json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), self ? ",\"self\":true" : ",\"self\":false")) {
             fail(out, cap, "LIMIT", "Process entry exceeds the result capacity.", 0); return;
         }
         if (have_app) {
-            if (append(entry, sizeof(entry), &pos, ",\"app\":") || quote(entry, sizeof(entry), &pos, app_utf)) {
+            if (json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), ",\"app\":") || json_buf_quote(JSON_BUF(entry, sizeof(entry), &pos), app_utf)) {
                 fail(out, cap, "LIMIT", "Process entry exceeds the result capacity.", 0); return;
             }
         }
-        if (append(entry, sizeof(entry), &pos, "}")) { fail(out, cap, "LIMIT", "Process entry exceeds the result capacity.", 0); return; }
+        if (json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), "}")) { fail(out, cap, "LIMIT", "Process entry exceeds the result capacity.", 0); return; }
         if (at + pos + 120 >= cap) { truncated = 1; break; }
-        if (count && append(out, cap, &at, ",")) { fail(out, cap, "LIMIT", "Result exceeds capacity.", 0); return; }
-        if (append(out, cap, &at, entry)) { fail(out, cap, "LIMIT", "Result exceeds capacity.", 0); return; }
+        if (count && json_buf_append(JSON_BUF(out, cap, &at), ",")) { fail(out, cap, "LIMIT", "Result exceeds capacity.", 0); return; }
+        if (json_buf_append(JSON_BUF(out, cap, &at), entry)) { fail(out, cap, "LIMIT", "Result exceeds capacity.", 0); return; }
         last = psn;
         count++;
     }
     if (count == limit && !done) truncated = 1;
-    if (append(out, cap, &at, "],\"truncated\":")) goto limit;
-    if (append(out, cap, &at, truncated ? "true" : "false")) goto limit;
+    if (json_buf_append(JSON_BUF(out, cap, &at), "],\"truncated\":")) goto limit;
+    if (json_buf_append(JSON_BUF(out, cap, &at), truncated ? "true" : "false")) goto limit;
     if (truncated) {
         char psn_text[40];
         snprintf(psn_text, sizeof(psn_text), ",\"next_cursor\":\"%08lx:%08lx\"}",
             (unsigned long)last.highLongOfPSN, (unsigned long)last.lowLongOfPSN);
-        if (append(out, cap, &at, psn_text)) goto limit;
-    } else if (append(out, cap, &at, ",\"next_cursor\":null}")) goto limit;
+        if (json_buf_append(JSON_BUF(out, cap, &at), psn_text)) goto limit;
+    } else if (json_buf_append(JSON_BUF(out, cap, &at), ",\"next_cursor\":null}")) goto limit;
     return;
 limit:
     fail(out, cap, "LIMIT", "Process listing exceeds the result capacity.", 0);
@@ -342,14 +271,14 @@ static void list_fonts(const AgentCall *call, const JsonToken *tokens, char *out
     long cursor, limit, index = 0, count = 0;
     int truncated = 0;
     size_t at = 0;
-    if (valid_keys(call->arguments, tokens, "|cursor||limit|") ||
-        number_arg(call->arguments, tokens, "cursor", 0, 0, 100000, &cursor) ||
-        number_arg(call->arguments, tokens, "limit", 16, 1, 24, &limit)) {
+    if (json_args_check_keys(call->arguments, tokens, 0, "|cursor||limit|") ||
+        json_args_int(call->arguments, tokens, "cursor", 0, 0, 100000, &cursor) ||
+        json_args_int(call->arguments, tokens, "limit", 16, 1, 24, &limit)) {
         fail(out, cap, "ARGUMENTS", "Expected optional cursor (returned value) and limit 1-24.", 0); return;
     }
     status = FMCreateFontFamilyIterator(NULL, NULL, 0, &iterator);
     if (status) { fail(out, cap, "FONTS", "Font Manager enumeration is unavailable.", (int)status); return; }
-    if (append(out, cap, &at, "{\"status\":\"ok\",\"fonts\":[")) goto limit;
+    if (json_buf_append(JSON_BUF(out, cap, &at), "{\"status\":\"ok\",\"fonts\":[")) goto limit;
     /* A nonzero return means the iterator is exhausted. */
     while (!FMGetNextFontFamily(&iterator, &family)) {
         Str255 name;
@@ -360,24 +289,24 @@ static void list_fonts(const AgentCall *call, const JsonToken *tokens, char *out
         name[0] = 0;
         FMGetFontFamilyName(family, name);
         if (text_to_utf8((const char *)name + 1, name[0], utf, sizeof(utf)) < 0) utf[0] = 0;
-        if (append(entry, sizeof(entry), &pos, "{\"id\":")) goto limit;
+        if (json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), "{\"id\":")) goto limit;
         snprintf(entry + pos, sizeof(entry) - pos, "%d,\"name\":", (int)family);
         pos += strlen(entry + pos);
-        if (quote(entry, sizeof(entry), &pos, utf)) goto limit;
-        if (append(entry, sizeof(entry), &pos, "}")) goto limit;
+        if (json_buf_quote(JSON_BUF(entry, sizeof(entry), &pos), utf)) goto limit;
+        if (json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), "}")) goto limit;
         if (at + pos + 60 >= cap) { truncated = 1; break; }
-        if (count && append(out, cap, &at, ",")) goto limit;
-        if (append(out, cap, &at, entry)) goto limit;
+        if (count && json_buf_append(JSON_BUF(out, cap, &at), ",")) goto limit;
+        if (json_buf_append(JSON_BUF(out, cap, &at), entry)) goto limit;
         count++;
     }
     FMDisposeFontFamilyIterator(&iterator);
-    if (append(out, cap, &at, "],\"truncated\":")) goto limit;
-    if (append(out, cap, &at, truncated ? "true" : "false")) goto limit;
+    if (json_buf_append(JSON_BUF(out, cap, &at), "],\"truncated\":")) goto limit;
+    if (json_buf_append(JSON_BUF(out, cap, &at), truncated ? "true" : "false")) goto limit;
     if (truncated) {
         char tail[64];
         snprintf(tail, sizeof(tail), ",\"next_cursor\":%ld}", cursor + count);
-        if (append(out, cap, &at, tail)) goto limit;
-    } else if (append(out, cap, &at, ",\"next_cursor\":null}")) goto limit;
+        if (json_buf_append(JSON_BUF(out, cap, &at), tail)) goto limit;
+    } else if (json_buf_append(JSON_BUF(out, cap, &at), ",\"next_cursor\":null}")) goto limit;
     return;
 limit:
     fail(out, cap, "LIMIT", "Font listing exceeds the result capacity.", 0);
@@ -459,14 +388,14 @@ static void measure_text(const AgentCall *call, const JsonToken *tokens, char *o
     short old_font, old_size, width;
     long size, bits, font_id = -1;
     int length, have_name, have_id, i;
-    if (valid_keys(call->arguments, tokens, "|text||font||font_id||size||style|") ||
-        string_arg(call->arguments, tokens, "text", text, sizeof(text)) < 0 ||
-        number_arg(call->arguments, tokens, "font_id", -1, 0, 32767, &font_id) ||
-        number_arg(call->arguments, tokens, "size", 12, 1, 127, &size)) {
+    if (json_args_check_keys(call->arguments, tokens, 0, "|text||font||font_id||size||style|") ||
+        json_args_string(call->arguments, tokens, "text", text, sizeof(text)) < 0 ||
+        json_args_int(call->arguments, tokens, "font_id", -1, 0, 32767, &font_id) ||
+        json_args_int(call->arguments, tokens, "size", 12, 1, 127, &size)) {
         fail(out, cap, "ARGUMENTS", "Expected text, one of font (name) or font_id, optional size 1-127 and style.", 0); return;
     }
     have_name = json_member(call->arguments, tokens, 0, "font") >= 0;
-    if (have_name && string_arg(call->arguments, tokens, "font", font, sizeof(font)) < 0) {
+    if (have_name && json_args_string(call->arguments, tokens, "font", font, sizeof(font)) < 0) {
         fail(out, cap, "ARGUMENTS", "font must be a name string.", 0); return;
     }
     if (have_name && !font[0]) have_name = 0; /* models may send an empty placeholder */
@@ -485,7 +414,7 @@ static void measure_text(const AgentCall *call, const JsonToken *tokens, char *o
         }
     }
     if (json_member(call->arguments, tokens, 0, "style") >= 0) {
-        if (string_arg(call->arguments, tokens, "style", style, sizeof(style)) < 0) {
+        if (json_args_string(call->arguments, tokens, "style", style, sizeof(style)) < 0) {
             fail(out, cap, "ARGUMENTS", "style must be a string.", 0); return;
         }
     } else strcpy(style, "plain");
@@ -512,7 +441,7 @@ static void measure_text(const AgentCall *call, const JsonToken *tokens, char *o
     {
         char fields[320];
         size_t at = 0;
-        if (append(out, cap, &at, "{\"status\":\"ok\",\"font\":") || quote(out, cap, &at, display)) {
+        if (json_buf_append(JSON_BUF(out, cap, &at), "{\"status\":\"ok\",\"font\":") || json_buf_quote(JSON_BUF(out, cap, &at), display)) {
             fail(out, cap, "LIMIT", "Font name exceeds the result capacity.", 0); return;
         }
         snprintf(fields, sizeof(fields), ",\"font_id\":%d,\"size\":%ld,\"style\":\"%s\",\"style_bits\":%ld,"
@@ -520,7 +449,7 @@ static void measure_text(const AgentCall *call, const JsonToken *tokens, char *o
             (int)family, size, canonical, bits, length, (int)width,
             (int)info.ascent, (int)info.descent, (int)info.leading,
             (int)(info.ascent + info.descent + info.leading));
-        if (append(out, cap, &at, fields)) {
+        if (json_buf_append(JSON_BUF(out, cap, &at), fields)) {
             fail(out, cap, "LIMIT", "Measure result exceeds the result capacity.", 0);
         }
     }
@@ -539,15 +468,15 @@ static void resolve_alias(const AgentCall *call, const JsonToken *tokens, char *
     short ref = -1, previous;
     long size;
     int budget = WALK_BUDGET, complete = 1, have_relative = 0, outside = -1;
-    if (valid_keys(call->arguments, tokens, "|path|") ||
-        string_arg(call->arguments, tokens, "path", path, sizeof(path)) < 0) {
+    if (json_args_check_keys(call->arguments, tokens, 0, "|path|") ||
+        json_args_string(call->arguments, tokens, "path", path, sizeof(path)) < 0) {
         fail(out, cap, "ARGUMENTS", "Expected only a path string.", 0); return;
     }
     err = tools_resolve(path, &spec);
-    if (!err) err = catalog(&spec, &pb);
+    if (!err) err = fs_catalog(&spec, &pb);
     if (err) { fail(out, cap, "FILE", "Cannot resolve the workspace alias file.", err); return; }
     if (pb.hFileInfo.ioFlAttrib & 16) { fail(out, cap, "FOLDER", "Expected an alias file, not a folder.", 0); return; }
-    if (!is_alias(&pb)) { fail(out, cap, "NOT_ALIAS", "This file is not an alias between its Finder type and flags.", 0); return; }
+    if (!fs_is_alias(&pb)) { fail(out, cap, "NOT_ALIAS", "This file is not an alias between its Finder type and flags.", 0); return; }
     /* Finder aliases keep their record in 'alis'/0, not the data fork.
      * Read a bounded copy so ResolveAlias cannot update the stored record. */
     previous = CurResFile();
@@ -582,11 +511,11 @@ static void resolve_alias(const AgentCall *call, const JsonToken *tokens, char *
     workspace_name[0] = (unsigned char)strlen(tools_workspace());
     memcpy(workspace_name + 1, tools_workspace(), workspace_name[0]);
     err = FSMakeFSSpec(0, 0, workspace_name, &workspace);
-    if (!err) err = catalog(&workspace, &workspace_pb);
+    if (!err) err = fs_catalog(&workspace, &workspace_pb);
     if (err || !(workspace_pb.hFileInfo.ioFlAttrib & 16)) {
         fail(out, cap, "WORKSPACE", "Cannot resolve the configured workspace root.", err); return;
     }
-    target_err = catalog(&target, &target_pb);
+    target_err = fs_catalog(&target, &target_pb);
     if (target.vRefNum == workspace.vRefNum && target_err == noErr) {
         if (target.parID == workspace_pb.dirInfo.ioDrDirID) {
             snprintf(relative, sizeof(relative), "%.*s", (int)target.name[0], (const char *)target.name + 1);
@@ -611,15 +540,15 @@ static void resolve_alias(const AgentCall *call, const JsonToken *tokens, char *
         if (target_err == noErr) kind = (target_pb.hFileInfo.ioFlAttrib & 16) ? "folder" : "file";
         if (text_to_utf8((const char *)target.name + 1, target.name[0], target_utf, sizeof(target_utf)) < 0)
             target_utf[0] = 0;
-        if (append(out, cap, &at, "{\"status\":\"ok\",\"path\":") || quote(out, cap, &at, path)) goto limit;
-        if (append(out, cap, &at, changed ? ",\"was_changed\":true" : ",\"was_changed\":false")) goto limit;
+        if (json_buf_append(JSON_BUF(out, cap, &at), "{\"status\":\"ok\",\"path\":") || json_buf_quote(JSON_BUF(out, cap, &at), path)) goto limit;
+        if (json_buf_append(JSON_BUF(out, cap, &at), changed ? ",\"was_changed\":true" : ",\"was_changed\":false")) goto limit;
         {
             char fields[200];
             snprintf(fields, sizeof(fields), ",\"alias_bytes\":%ld,\"target_name\":", size);
-            if (append(out, cap, &at, fields) || quote(out, cap, &at, target_utf)) goto limit;
+            if (json_buf_append(JSON_BUF(out, cap, &at), fields) || json_buf_quote(JSON_BUF(out, cap, &at), target_utf)) goto limit;
         }
-        if (append(out, cap, &at, ",\"target_kind\":\"") || append(out, cap, &at, kind) ||
-            append(out, cap, &at, "\",\"target_exists\":") || append(out, cap, &at, target_err == noErr ? "true" : "false")) goto limit;
+        if (json_buf_append(JSON_BUF(out, cap, &at), ",\"target_kind\":\"") || json_buf_append(JSON_BUF(out, cap, &at), kind) ||
+            json_buf_append(JSON_BUF(out, cap, &at), "\",\"target_exists\":") || json_buf_append(JSON_BUF(out, cap, &at), target_err == noErr ? "true" : "false")) goto limit;
         if (have_relative) {
             if (text_to_utf8(relative, strlen(relative), relative_utf, sizeof(relative_utf)) < 0) {
                 fail(out, cap, "ENCODING", "Target path conversion failed.", 0); return;
@@ -627,13 +556,13 @@ static void resolve_alias(const AgentCall *call, const JsonToken *tokens, char *
             if (json_quote(relative_utf, quoted, sizeof(quoted)) < 0) {
                 fail(out, cap, "LIMIT", "Target path exceeds the result capacity.", 0); return;
             }
-            if (append(out, cap, &at, ",\"relative_path\":") || append(out, cap, &at, quoted)) goto limit;
-        } else if (append(out, cap, &at, ",\"relative_path\":null")) goto limit;
+            if (json_buf_append(JSON_BUF(out, cap, &at), ",\"relative_path\":") || json_buf_append(JSON_BUF(out, cap, &at), quoted)) goto limit;
+        } else if (json_buf_append(JSON_BUF(out, cap, &at), ",\"relative_path\":null")) goto limit;
         {
             char fields[160];
             snprintf(fields, sizeof(fields), ",\"outside_workspace\":%s,\"volume\":%d,\"parent_dir_id\":%ld}",
                 outside == 1 ? "true" : outside == 0 ? "false" : "null", (int)target.vRefNum, (long)target.parID);
-            if (append(out, cap, &at, fields)) goto limit;
+            if (json_buf_append(JSON_BUF(out, cap, &at), fields)) goto limit;
         }
     }
     return;
@@ -668,11 +597,11 @@ static void list_resources(const AgentCall *call, const JsonToken *tokens, char 
     long limit, cursor_type = 1, cursor_res = 1;
     int count = 0, truncated = 0, names_truncated = 0;
     size_t at = 0;
-    if (valid_keys(call->arguments, tokens, "|path||cursor||limit|") ||
-        string_arg(call->arguments, tokens, "path", path, sizeof(path)) < 0 ||
-        number_arg(call->arguments, tokens, "limit", 8, 1, 16, &limit) ||
+    if (json_args_check_keys(call->arguments, tokens, 0, "|path||cursor||limit|") ||
+        json_args_string(call->arguments, tokens, "path", path, sizeof(path)) < 0 ||
+        json_args_int(call->arguments, tokens, "limit", 8, 1, 16, &limit) ||
         (json_member(call->arguments, tokens, 0, "cursor") >= 0 &&
-         string_arg(call->arguments, tokens, "cursor", cursor, sizeof(cursor)) < 0)) {
+         json_args_string(call->arguments, tokens, "cursor", cursor, sizeof(cursor)) < 0)) {
         fail(out, cap, "ARGUMENTS", "Expected path, optional returned cursor and limit 1-16.", 0); return;
     }
     if (json_member(call->arguments, tokens, 0, "cursor") >= 0 && cursor[0]) {
@@ -684,17 +613,17 @@ static void list_resources(const AgentCall *call, const JsonToken *tokens, char 
         cursor_type = a; cursor_res = b;
     }
     err = tools_resolve(path, &spec);
-    if (!err) err = catalog(&spec, &before);
+    if (!err) err = fs_catalog(&spec, &before);
     if (err) { fail(out, cap, "FILE", "Cannot resolve the workspace file.", err); return; }
     if (before.hFileInfo.ioFlAttrib & 16) { fail(out, cap, "FOLDER", "Expected a file, not a folder.", 0); return; }
-    if (is_alias(&before)) { fail(out, cap, "ALIAS", "Aliases are not resource files.", 0); return; }
+    if (fs_is_alias(&before)) { fail(out, cap, "ALIAS", "Aliases are not resource files.", 0); return; }
     if (before.hFileInfo.ioFlRLgLen == 0) { fail(out, cap, "NO_RESOURCE_FORK", "This file has no resource fork.", 0); return; }
     previous = CurResFile();
     err = resource_open(&spec, &ref);
     if (err) { fail(out, cap, "RESOURCE_MAP", "Cannot open the resource fork's map.", err); return; }
     types = Count1Types();
-    if (append(out, cap, &at, "{\"status\":\"ok\",\"path\":") || quote(out, cap, &at, path) ||
-        append(out, cap, &at, ",\"resources\":[")) goto limit;
+    if (json_buf_append(JSON_BUF(out, cap, &at), "{\"status\":\"ok\",\"path\":") || json_buf_quote(JSON_BUF(out, cap, &at), path) ||
+        json_buf_append(JSON_BUF(out, cap, &at), ",\"resources\":[")) goto limit;
     for (type_index = 1; type_index <= types && !truncated; type_index++) {
         ResType type = 0;
         short resources, resource_index;
@@ -726,34 +655,34 @@ static void list_resources(const AgentCall *call, const JsonToken *tokens, char 
                 size_t pos = 0;
                 int name_cut = 0;
                 type_name(actual, type_text);
-                if (append(entry, sizeof(entry), &pos, "{\"type\":") || quote(entry, sizeof(entry), &pos, type_text)) goto limit;
+                if (json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), "{\"type\":") || json_buf_quote(JSON_BUF(entry, sizeof(entry), &pos), type_text)) goto limit;
                 snprintf(entry + pos, sizeof(entry) - pos, ",\"id\":%d,\"bytes\":%ld,\"name\":", (int)id, bytes);
                 pos += strlen(entry + pos);
                 if (name_json(name, quoted, sizeof(quoted), &name_cut)) goto limit;
-                if (append(entry, sizeof(entry), &pos, quoted) || append(entry, sizeof(entry), &pos, "}")) goto limit;
+                if (json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), quoted) || json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), "}")) goto limit;
                 if (name_cut) names_truncated = 1;
                 if (at + pos + 80 >= cap) {
                     truncated = 1;
                     cursor_type = type_index; cursor_res = resource_index;
                     break;
                 }
-                if (count && append(out, cap, &at, ",")) goto limit;
-                if (append(out, cap, &at, entry)) goto limit;
+                if (count && json_buf_append(JSON_BUF(out, cap, &at), ",")) goto limit;
+                if (json_buf_append(JSON_BUF(out, cap, &at), entry)) goto limit;
                 count++;
             }
         }
     }
     resource_close(ref, previous);
-    err = catalog(&spec, &after);
-    if (err || !same_file(&before, &after)) { fail(out, cap, "CHANGED", "File changed during resource listing; list resources again.", err); return; }
+    err = fs_catalog(&spec, &after);
+    if (err || !fs_same_file(&before, &after)) { fail(out, cap, "CHANGED", "File changed during resource listing; list resources again.", err); return; }
     snprintf(tail, sizeof(tail), "],\"resource_fork_bytes\":%ld,\"types\":%d,\"names_truncated\":%s,\"truncated\":%s",
         (long)before.hFileInfo.ioFlRLgLen, (int)types, names_truncated ? "true" : "false", truncated ? "true" : "false");
-    if (append(out, cap, &at, tail)) goto limit;
+    if (json_buf_append(JSON_BUF(out, cap, &at), tail)) goto limit;
     if (truncated) {
         char next[64];
         snprintf(next, sizeof(next), ",\"next_cursor\":\"%ld:%ld\"}", cursor_type, cursor_res);
-        if (append(out, cap, &at, next)) goto limit;
-    } else if (append(out, cap, &at, ",\"next_cursor\":null}")) goto limit;
+        if (json_buf_append(JSON_BUF(out, cap, &at), next)) goto limit;
+    } else if (json_buf_append(JSON_BUF(out, cap, &at), ",\"next_cursor\":null}")) goto limit;
     return;
 arguments:
     fail(out, cap, "ARGUMENTS", "Cursor must be a returned type:resource index pair.", 0); return;
@@ -822,9 +751,9 @@ static void read_vers(Handle resource, short id, const Str255 name, long size,
         name_json(name, name_q, sizeof(name_q), &name_cut)) {
         fail(out, cap, "LIMIT", "Version strings exceed the result capacity.", 0); return;
     }
-    if (append(out, cap, &at, "{\"status\":\"ok\",\"path\":") || quote(out, cap, &at, path) ||
-        append(out, cap, &at, ",\"type\":") || quote(out, cap, &at, type_text) ||
-        append(out, cap, &at, ",\"name\":") || append(out, cap, &at, name_q)) goto limit;
+    if (json_buf_append(JSON_BUF(out, cap, &at), "{\"status\":\"ok\",\"path\":") || json_buf_quote(JSON_BUF(out, cap, &at), path) ||
+        json_buf_append(JSON_BUF(out, cap, &at), ",\"type\":") || json_buf_quote(JSON_BUF(out, cap, &at), type_text) ||
+        json_buf_append(JSON_BUF(out, cap, &at), ",\"name\":") || json_buf_append(JSON_BUF(out, cap, &at), name_q)) goto limit;
     {
         char fields[256];
         snprintf(fields, sizeof(fields), ",\"id\":%d,\"resource_bytes\":%ld,\"format\":\"vers\","
@@ -832,10 +761,10 @@ static void read_vers(Handle resource, short id, const Str255 name, long size,
             "\"version\":\"%s\",\"stage\":\"%s\",\"prerelease\":%d,\"region\":%d,\"short\":",
             (int)id, size, size, size, version, stage,
             (int)b[3], (int)((b[4] << 8) | b[5]));
-        if (append(out, cap, &at, fields) || append(out, cap, &at, short_q) ||
-            append(out, cap, &at, ",\"long\":") || append(out, cap, &at, long_q)) goto limit;
+        if (json_buf_append(JSON_BUF(out, cap, &at), fields) || json_buf_append(JSON_BUF(out, cap, &at), short_q) ||
+            json_buf_append(JSON_BUF(out, cap, &at), ",\"long\":") || json_buf_append(JSON_BUF(out, cap, &at), long_q)) goto limit;
         snprintf(fields, sizeof(fields), ",\"strings_truncated\":%s}", strings_cut ? "true" : "false");
-        if (append(out, cap, &at, fields)) goto limit;
+        if (json_buf_append(JSON_BUF(out, cap, &at), fields)) goto limit;
     }
     (void)name_cut;
     return;
@@ -856,12 +785,12 @@ static void read_resource(const AgentCall *call, const JsonToken *tokens, char *
     unsigned long requested_type;
     long resource_id, start, maximum, size, offset = 0, length = 0, count, i;
     size_t at = 0;
-    if (valid_keys(call->arguments, tokens, "|path||type||id||start_byte||max_bytes|") ||
-        string_arg(call->arguments, tokens, "path", path, sizeof(path)) < 0 ||
-        string_arg(call->arguments, tokens, "type", type_text, sizeof(type_text)) < 0 ||
-        number_arg(call->arguments, tokens, "id", 0, -32768, 32767, &resource_id) ||
-        number_arg(call->arguments, tokens, "start_byte", 0, 0, 1048576, &start) ||
-        number_arg(call->arguments, tokens, "max_bytes", 128, 1, 256, &maximum)) {
+    if (json_args_check_keys(call->arguments, tokens, 0, "|path||type||id||start_byte||max_bytes|") ||
+        json_args_string(call->arguments, tokens, "path", path, sizeof(path)) < 0 ||
+        json_args_string(call->arguments, tokens, "type", type_text, sizeof(type_text)) < 0 ||
+        json_args_int(call->arguments, tokens, "id", 0, -32768, 32767, &resource_id) ||
+        json_args_int(call->arguments, tokens, "start_byte", 0, 0, 1048576, &start) ||
+        json_args_int(call->arguments, tokens, "max_bytes", 128, 1, 256, &maximum)) {
         fail(out, cap, "ARGUMENTS", "Expected path, four-character type, integer id, optional start_byte and max_bytes 1-256.", 0); return;
     }
     if (parse_type(type_text, &requested_type)) {
@@ -869,10 +798,10 @@ static void read_resource(const AgentCall *call, const JsonToken *tokens, char *
     }
     type = (ResType)requested_type;
     err = tools_resolve(path, &spec);
-    if (!err) err = catalog(&spec, &before);
+    if (!err) err = fs_catalog(&spec, &before);
     if (err) { fail(out, cap, "FILE", "Cannot resolve the workspace file.", err); return; }
     if (before.hFileInfo.ioFlAttrib & 16) { fail(out, cap, "FOLDER", "Expected a file, not a folder.", 0); return; }
-    if (is_alias(&before)) { fail(out, cap, "ALIAS", "Aliases are not resource files.", 0); return; }
+    if (fs_is_alias(&before)) { fail(out, cap, "ALIAS", "Aliases are not resource files.", 0); return; }
     if (before.hFileInfo.ioFlRLgLen == 0) { fail(out, cap, "NO_RESOURCE_FORK", "This file has no resource fork.", 0); return; }
     previous = CurResFile();
     err = resource_open(&spec, &ref);
@@ -897,8 +826,8 @@ static void read_resource(const AgentCall *call, const JsonToken *tokens, char *
         ReleaseResource(resource);
         resource_close(ref, previous);
         if (strstr(out, "\"status\":\"ok\"")) {
-            err = catalog(&spec, &after);
-            if (err || !same_file(&before, &after)) fail(out, cap, "CHANGED", "File changed during resource read.", err);
+            err = fs_catalog(&spec, &after);
+            if (err || !fs_same_file(&before, &after)) fail(out, cap, "CHANGED", "File changed during resource read.", err);
         }
         return;
     }
@@ -919,8 +848,8 @@ static void read_resource(const AgentCall *call, const JsonToken *tokens, char *
     }
     ReleaseResource(resource);
     resource_close(ref, previous);
-    err = catalog(&spec, &after);
-    if (err || !same_file(&before, &after)) { fail(out, cap, "CHANGED", "File changed during resource read.", err); return; }
+    err = fs_catalog(&spec, &after);
+    if (err || !fs_same_file(&before, &after)) { fail(out, cap, "CHANGED", "File changed during resource read.", err); return; }
     page[count] = 0;
     {
         int text = (actual == 'TEXT' || actual == 'STR ');
@@ -931,15 +860,15 @@ static void read_resource(const AgentCall *call, const JsonToken *tokens, char *
         if (name_json(name, name_out, sizeof(name_out), NULL)) {
             fail(out, cap, "LIMIT", "Resource name exceeds the result capacity.", 0); return;
         }
-        if (append(out, cap, &at, "{\"status\":\"ok\",\"path\":") || quote(out, cap, &at, path) ||
-            append(out, cap, &at, ",\"type\":") || quote(out, cap, &at, type_text)) goto limit;
+        if (json_buf_append(JSON_BUF(out, cap, &at), "{\"status\":\"ok\",\"path\":") || json_buf_quote(JSON_BUF(out, cap, &at), path) ||
+            json_buf_append(JSON_BUF(out, cap, &at), ",\"type\":") || json_buf_quote(JSON_BUF(out, cap, &at), type_text)) goto limit;
         {
             char fields[1000];
             snprintf(fields, sizeof(fields), ",\"id\":%d,\"name\":%s,\"resource_bytes\":%ld,\"format\":\"%s\","
                 "\"content_bytes\":%ld,\"start_byte\":%ld,\"next_byte\":%ld,\"truncated\":%s",
                 (int)id, name_out, size, text ? "text" : "hex", length, start, start + count,
                 (start + count < length) ? "true" : "false");
-            if (append(out, cap, &at, fields)) goto limit;
+            if (json_buf_append(JSON_BUF(out, cap, &at), fields)) goto limit;
         }
         if (text) {
             char utf[1000], quoted[1100];
@@ -947,7 +876,7 @@ static void read_resource(const AgentCall *call, const JsonToken *tokens, char *
                 fail(out, cap, "MALFORMED", "Resource text is not MacRoman.", 0); return;
             }
             if (json_quote(utf, quoted, sizeof(quoted)) < 0) { fail(out, cap, "LIMIT", "Result exceeds the result capacity.", 0); return; }
-            if (append(out, cap, &at, ",\"text\":") || append(out, cap, &at, quoted)) goto limit;
+            if (json_buf_append(JSON_BUF(out, cap, &at), ",\"text\":") || json_buf_append(JSON_BUF(out, cap, &at), quoted)) goto limit;
         } else {
             static const char digits[] = "0123456789ABCDEF";
             char hex[520];
@@ -957,9 +886,9 @@ static void read_resource(const AgentCall *call, const JsonToken *tokens, char *
                 hex[pos++] = digits[c >> 4]; hex[pos++] = digits[c & 15];
             }
             hex[pos] = 0;
-            if (append(out, cap, &at, ",\"hex\":\"") || append(out, cap, &at, hex) || append(out, cap, &at, "\"")) goto limit;
+            if (json_buf_append(JSON_BUF(out, cap, &at), ",\"hex\":\"") || json_buf_append(JSON_BUF(out, cap, &at), hex) || json_buf_append(JSON_BUF(out, cap, &at), "\"")) goto limit;
         }
-        if (append(out, cap, &at, "}")) goto limit;
+        if (json_buf_append(JSON_BUF(out, cap, &at), "}")) goto limit;
     }
     return;
 limit:

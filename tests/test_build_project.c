@@ -6,6 +6,7 @@
 #define FSClose model_FSClose
 #define SetFPos model_SetFPos
 #define FSpOpenRF model_FSpOpenRF
+#define TEST_BUILD_REVISIONS 1
 #define main text_tools_main
 #include "test_tools.c"
 #undef main
@@ -75,7 +76,7 @@ OSErr GetProcessInformation(const ProcessSerialNumber *p,ProcessInfoRec *i)
   GetCurrentProcess(&i->processLauncher);
   if(launcher_override)i->processLauncher.lowLongOfPSN=launcher_override;
   return process_error ? ioErr : 0; }
-static int build_journals, build_result_failure;
+static int build_journals, build_result_failure, check_revisions;
 static char build_events[12][20];
 static int build_event_count;
 static int build_journal(void *ctx,const char *event,const char *json)
@@ -84,6 +85,7 @@ static int build_journal(void *ctx,const char *event,const char *json)
     if((run_journal_error==1 && !strcmp(event,"run_intent")) || (run_journal_error==2 && !strcmp(event,"run_observed")))return -1;
     if(build_result_failure && !strcmp(event,"build_result"))return -1;
     assert(json_parse(json,strlen(json),t,128)>0); build_journals++;
+    if(check_revisions && !strcmp(event,"build_snapshot")) { manifest_matches_read_text(json); check_revisions=0; }
     if(!strcmp(event,"queue_intent") || !strcmp(event,"queue_created")) {
         assert(build_event_count<12);
         strcpy(build_events[build_event_count++],event);
@@ -193,6 +195,26 @@ int main(void)
     assert(build_project_recipe("{\"protocol\":2,\"toolchain\":\"mpw-ppc-v2\",\"sources\":[\"main.c\"],\"output\":\"sample\",\"settings\":{\"flags\":\"-o evil\"}}",recipe,sizeof(recipe)));
     assert(build_project_recipe("{\"protocol\":2,\"toolchain\":\"mpw-ppc-v2\",\"sources\":[\"main.c\"],\"output\":\"sample\",\"settings\":{\"libraries\":[\"OtherLib\"]}}",recipe,sizeof(recipe)));
     assert(build_project_recipe("{\"protocol\":2,\"protocol\":2,\"toolchain\":\"mpw-ppc-v2\",\"sources\":[\"main.c\"],\"output\":\"sample\"}",recipe,sizeof(recipe)));
+    /* A locked bit or Finder flag change must invalidate the same source pin
+     * used by read_text/edit_text, before reservation or any journal. */
+    for(int change=0;change<2;change++) {
+        i=fixture(good);
+        assert(build_project_step(result,sizeof(result),2,0)==2);
+        assert(build_project_step(result,sizeof(result),3,0)==2);
+        if(change)files[i].info.fdFlags=0x4000; else files[i].locked=1;
+        r=build_project_step(result,sizeof(result),4,0);
+        assert(r==0 && strstr(result,"INPUT_CHANGED") && !creates && !build_journals);
+    }
+    const long revision_sizes[]={0,31,6000,65536};
+    for(size_t k=0;k<sizeof(revision_sizes)/sizeof(*revision_sizes);k++) {
+        i=fixture(good);files[i].size=revision_sizes[k];
+        memset(files[i].bytes,0x8e,(size_t)files[i].size); /* high MacRoman bytes */
+        check_revisions=1;r=2;
+        for(steps=0;r==2 && check_revisions && steps<300;steps++)r=build_project_step(result,sizeof(result),(uint32_t)steps+2,0);
+        assert(!check_revisions && r==2);
+        assert(build_project_step(result,sizeof(result),400,1)==1);
+    }
+    puts("PASS manifest/read_text revision agreement and metadata drift refusal");
     i=fixture(good);assert(build_project_step(result,sizeof(result),2,0)==2);assert(build_project_step(result,sizeof(result),3,0)==2);
     assert(build_project_step(result,sizeof(result),4,0)==2);files[i].bytes[0]='x';
     assert(build_project_step(result,sizeof(result),5,0)==0 && strstr(result,"INPUT_CHANGED") && !creates && !build_journals);
