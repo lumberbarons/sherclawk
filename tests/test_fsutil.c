@@ -66,8 +66,38 @@ static void reset(void)
 static OSErr write_body(CInfoPBRec *info) { return fs_write_verified(&dest,'ShCk','ShRR',body,sizeof(body),info); }
 static void sentinel(CInfoPBRec *info) { memset(info,0x5a,sizeof(*info)); }
 static int untouched(const CInfoPBRec *info) { return ((const unsigned char *)info)[0]==0x5a && ((const unsigned char *)info)[sizeof(*info)-1]==0x5a; }
+static void identity_and_revision(void)
+{
+    CInfoPBRec a, b;
+    char revision[80];
+    memset(&a,0,sizeof(a));a.hFileInfo.ioDirID=11;a.hFileInfo.ioFlMdDat=1234;
+    a.hFileInfo.ioFlLgLen=5;a.hFileInfo.ioFlFndrInfo.fdType='TEXT';
+    a.hFileInfo.ioFlFndrInfo.fdCreator='ttxt';b=a;
+    assert(fs_same_file(&a,&b) && !fs_is_alias(&a));
+    b.hFileInfo.ioFlAttrib=0x60;assert(fs_same_file(&a,&b)); /* transient open bits */
+    b=a;b.hFileInfo.ioFlAttrib=1;assert(!fs_same_file(&a,&b));
+    b=a;b.hFileInfo.ioFlAttrib=16;assert(!fs_same_file(&a,&b));
+    b=a;b.hFileInfo.ioDirID++;assert(!fs_same_file(&a,&b));
+    b=a;b.hFileInfo.ioFlMdDat++;assert(!fs_same_file(&a,&b));
+    b=a;b.hFileInfo.ioFlLgLen++;assert(!fs_same_file(&a,&b));
+    b=a;b.hFileInfo.ioFlRLgLen++;assert(!fs_same_file(&a,&b));
+    b=a;b.hFileInfo.ioFlFndrInfo.fdCreator='Oops';assert(!fs_same_file(&a,&b));
+    b=a;b.hFileInfo.ioFlFndrInfo.fdFlags=0x4000;assert(!fs_same_file(&a,&b));
+    b=a;b.hFileInfo.ioFlFndrInfo.fdFlags=0x8000;assert(fs_is_alias(&b) && !fs_same_file(&a,&b));
+    b=a;b.hFileInfo.ioFlFndrInfo.fdType='alis';assert(fs_is_alias(&b) && !fs_same_file(&a,&b));
+    assert(fs_fnv1a(NULL,0)==0x811c9dc5UL && fs_fnv1a("hello",5)==0x4f9f2cabUL);
+    unsigned char high[]={0,0x80,0xff};
+    assert(fs_fnv1a(high,sizeof(high))==0xb0eecb36UL);
+    assert(fs_fnv1a_more(fs_fnv1a("he",2),"llo",3)==0x4f9f2cabUL);
+    fs_revision(&a,"hello",5,revision,sizeof(revision));
+    assert(!strcmp(revision,"full-0000000b-000004d2-00000005-4f9f2cab"));
+    fs_revision_hash(&a,5,fs_fnv1a_more(fs_fnv1a("he",2),"llo",3),revision,sizeof(revision));
+    assert(!strcmp(revision,"full-0000000b-000004d2-00000005-4f9f2cab"));
+}
+
 int main(void)
 {
+    identity_and_revision();
     CInfoPBRec info;
     reset(); sentinel(&info);
     assert(write_body(&info)==noErr && open_count==0 && !untouched(&info));

@@ -26,16 +26,9 @@ static void leaf(long parent,const char *name,FSSpec *s)
     memset(s,0,sizeof(*s)); s->vRefNum=snapshot.volume; s->parID=parent;
     s->name[0]=(unsigned char)strlen(name); memcpy(s->name+1,name,s->name[0]);
 }
-static OSErr catalog(const FSSpec *s,CInfoPBRec *p)
+static int is_native_data_file(const CInfoPBRec *p)
 {
-    memset(p,0,sizeof(*p)); p->hFileInfo.ioNamePtr=(unsigned char *)s->name;
-    p->hFileInfo.ioVRefNum=s->vRefNum; p->hFileInfo.ioDirID=s->parID;
-    return PBGetCatInfoSync(p);
-}
-static int plain(const CInfoPBRec *p)
-{
-    return !(p->hFileInfo.ioFlAttrib & 16) && !(p->hFileInfo.ioFlFndrInfo.fdFlags & 0x8000) &&
-        p->hFileInfo.ioFlFndrInfo.fdType!='alis' && !p->hFileInfo.ioFlRLgLen;
+    return !(p->hFileInfo.ioFlAttrib & 16) && !fs_is_alias(p) && !p->hFileInfo.ioFlRLgLen;
 }
 static OSErr transfer(const FSSpec *s,long at,void *bytes,long n,int write)
 {
@@ -47,7 +40,7 @@ static OSErr transfer(const FSSpec *s,long at,void *bytes,long n,int write)
     return e && !(e==eofErr && got==n) ? e : c ? c : got==n ? noErr : ioErr;
 }
 static int absent(long parent,const char *name)
-{ FSSpec s; CInfoPBRec p; leaf(parent,name,&s); return catalog(&s,&p)==fnfErr; }
+{ FSSpec s; CInfoPBRec p; leaf(parent,name,&s); return fs_catalog(&s,&p)==fnfErr; }
 static int create_file(long parent,const char *name,FSSpec *s)
 {
     leaf(parent,name,s);
@@ -70,7 +63,7 @@ static void release(void)
     CInfoPBRec p;
     if(!owned || toolserver_busy())return;
     /* Never remove a replacement lock. A failed unlock is left for inspection. */
-    if(!catalog(&lock,&p) && (p.hFileInfo.ioFlAttrib & 16) &&
+    if(!fs_catalog(&lock,&p) && (p.hFileInfo.ioFlAttrib & 16) &&
         !(p.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000) && p.dirInfo.ioDrDirID==lock_id)
         if(!FSpDelete(&lock))FlushVol(NULL,lock.vRefNum);
     owned=0;
@@ -116,7 +109,7 @@ static int refusal(const FSSpec *queue,long *dir)
     CInfoPBRec q;
     if(!initialized)return SELFBUILD_UNAVAILABLE;
     if(owned || running || toolserver_busy())return SELFBUILD_BUSY;
-    if(catalog(queue,&q) || !(q.hFileInfo.ioFlAttrib & 16) ||
+    if(fs_catalog(queue,&q) || !(q.hFileInfo.ioFlAttrib & 16) ||
         (q.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000))return SELFBUILD_BLOCKED;
     snapshot.volume=queue->vRefNum;  /* leaf()/absent() resolve names on it; idle here */
     if(!absent(q.dirInfo.ioDrDirID,"STOP") || !absent(q.dirInfo.ioDrDirID,"worker-lock"))return SELFBUILD_BLOCKED;
@@ -143,7 +136,7 @@ SelfBuildStart selfbuild_begin(const NativeJob *j,const FSSpec *queue,const Buil
         build_project_plan(j->inputs[0].bytes,&checked) || memcmp(&checked,p,sizeof(checked)))goto fail;
     for(int i=0;i<p->count;i++)if(strcmp(j->inputs[i+1].name,p->staged[i]))goto fail;
     leaf(j->directory,"ready",&s);
-    if(catalog(&s,&cat) || !plain(&cat) || cat.hFileInfo.ioFlLgLen!=11 ||
+    if(fs_catalog(&s,&cat) || !is_native_data_file(&cat) || cat.hFileInfo.ioFlLgLen!=11 ||
         transfer(&s,0,marker,11,0) || memcmp(marker,"protocol=1\n",11))goto fail;
     if(FSpRename(&s,(const unsigned char *)"\007claimed") || FlushVol(NULL,s.vRefNum))goto fail;
     snprintf(text,sizeof(text),"protocol=1\nid=%s\nstate=claimed\n",j->id);
@@ -158,7 +151,7 @@ fail:
 }
 static int folder(long parent,const char *name,long *id,int existing)
 {
-    FSSpec s; CInfoPBRec p; OSErr e; leaf(parent,name,&s); e=catalog(&s,&p);
+    FSSpec s; CInfoPBRec p; OSErr e; leaf(parent,name,&s); e=fs_catalog(&s,&p);
     if(e==fnfErr)return FSpDirCreate(&s,smSystemScript,id) || FlushVol(NULL,s.vRefNum) ? -1 : 0;
     if(e || !existing || !(p.hFileInfo.ioFlAttrib & 16) ||
         (p.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000))return -1;
@@ -177,7 +170,7 @@ static int log_bytes(int stream,const char *bytes,long n)
 {
     FSSpec s; CInfoPBRec p; char verify[JOB_PAGE];
     leaf(snapshot.directory,stream ? "stderr" : "stdout",&s);
-    if(n>JOB_PAGE || catalog(&s,&p) || !plain(&p) || p.hFileInfo.ioFlLgLen!=log_offsets[stream] ||
+    if(n>JOB_PAGE || fs_catalog(&s,&p) || !is_native_data_file(&p) || p.hFileInfo.ioFlLgLen!=log_offsets[stream] ||
         transfer(&s,log_offsets[stream],(void *)bytes,n,1) || FlushVol(NULL,s.vRefNum) ||
         transfer(&s,log_offsets[stream],verify,n,0) || memcmp(verify,bytes,(size_t)n))return -1;
     log_offsets[stream]+=n; return 0;
@@ -203,7 +196,7 @@ void selfbuild_step(uint32_t now,int stop)
         /* Re-read every published input in bounded pages before executing. */
         const JobInput *in=&snapshot.inputs[input]; leaf(snapshot.directory,in->name,&s);
         n=(long)in->size-offset; if(n>JOB_PAGE)n=JOB_PAGE;
-        if(catalog(&s,&p) || !plain(&p) || p.hFileInfo.ioFlLgLen!=(long)in->size ||
+        if(fs_catalog(&s,&p) || !is_native_data_file(&p) || p.hFileInfo.ioFlLgLen!=(long)in->size ||
             transfer(&s,offset,page,n,0) || memcmp(page,(const char *)in->bytes+offset,(size_t)n))goto fail;
         offset+=n;
         if(offset==(long)in->size) { offset=0; if(++input==snapshot.count) {phase=1;input=0;} }
@@ -263,12 +256,12 @@ void selfbuild_step(uint32_t now,int stop)
     } else if(phase==6) {
         FInfo finder; unsigned char header[12];
         leaf(native_dir,plan.output,&s);
-        if(catalog(&s,&p) || (p.hFileInfo.ioFlAttrib & 16) || (p.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000) ||
+        if(fs_catalog(&s,&p) || (p.hFileInfo.ioFlAttrib & 16) || (p.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000) ||
             p.hFileInfo.ioFlLgLen<40 || p.hFileInfo.ioFlRLgLen<=0 ||
             transfer(&s,0,header,12,0) || memcmp(header,"Joy!peffpwpc",12) || FSpGetFInfo(&s,&finder))goto fail;
         finder.fdType='APPL'; finder.fdCreator=((unsigned long)(unsigned char)plan.creator[0]<<24) |
             ((unsigned long)(unsigned char)plan.creator[1]<<16) | ((unsigned long)(unsigned char)plan.creator[2]<<8) | (unsigned char)plan.creator[3];
-        if(FSpSetFInfo(&s,&finder) || FlushVol(NULL,s.vRefNum) || catalog(&s,&p) ||
+        if(FSpSetFInfo(&s,&finder) || FlushVol(NULL,s.vRefNum) || fs_catalog(&s,&p) ||
             p.hFileInfo.ioFlFndrInfo.fdType!='APPL' || p.hFileInfo.ioFlFndrInfo.fdCreator!=finder.fdCreator)goto fail;
         snprintf(text,sizeof(text),"artifact=%s\n",plan.output);
         if(record(native_dir,"success.txt",text) || log_bytes(0,"stage=complete status=0\n",24) || terminal(0))goto fail;

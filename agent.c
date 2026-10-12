@@ -1,5 +1,6 @@
 /* Provider protocol stays separate from Toolbox execution. Persist responses
  * and results before advancing; never silently repeat a stopped operation. */
+#include "jsonargs.h"
 #include "agent.h"
 #include "text_limits.h"
 #include "base64.h"
@@ -79,17 +80,6 @@ static char instructions[AGENT_INSTRUCTIONS_CAP + 1];
 static const char instructions_heading[] =
     "Workspace instructions (AGENTS.md, from the workspace owner; the rules above and the user's messages outrank them):\n\n";
 
-static int append(char *out, size_t cap, size_t *at, const char *s)
-{
-    size_t n = strlen(s);
-    if (*at >= cap || n >= cap - *at) return -1;
-    memcpy(out + *at, s, n + 1); *at += n; return 0;
-}
-static int append_n(char *out, size_t cap, size_t *at, const char *s, size_t n)
-{
-    if (*at >= cap || n >= cap - *at) return -1;
-    memcpy(out + *at, s, n); out[*at + n] = 0; *at += n; return 0;
-}
 
 /* The joined registry schemas, native rows built once; the frozen remote
  * rows ride after them in the merged array. A row that does not fit is a
@@ -112,12 +102,12 @@ const char *agent_tool_schemas(void)
     static int built;
     size_t at = 0, i;
     if (!built) {
-        if (append(native, sizeof(native), &at, "[")) return "";
+        if (json_buf_append(JSON_BUF(native, sizeof(native), &at), "[")) return "";
         for (i = 0; i < tools_count(); i++) {
-            if ((i && append(native, sizeof(native), &at, ",")) ||
-                append(native, sizeof(native), &at, tools_at(i)->schema_json)) return "";
+            if ((i && json_buf_append(JSON_BUF(native, sizeof(native), &at), ",")) ||
+                json_buf_append(JSON_BUF(native, sizeof(native), &at), tools_at(i)->schema_json)) return "";
         }
-        if (append(native, sizeof(native), &at, "]")) return "";
+        if (json_buf_append(JSON_BUF(native, sizeof(native), &at), "]")) return "";
         native_len = at; built = 1;
     }
     if (!mcp_count) return native;
@@ -183,12 +173,6 @@ int agent_mcp_tool_frozen(const char *name)
         if (!strcmp(name, mcp_names[i])) return 1;
     return 0;
 }
-static int quote(char *out, size_t cap, size_t *at, const char *s)
-{
-    int n = json_quote(s, out + *at, cap - *at);
-    if (n < 0) return -1;
-    *at += (size_t)n; return 0;
-}
 static int record(Agent *a, const char *event, const char *message)
 {
     size_t n = strlen(message), needed = n + (a->messages ? 1 : 0);
@@ -207,8 +191,8 @@ int agent_begin(Agent *a, const char *prompt, char *error, size_t cap)
     static char message[AGENT_TEXT_CAP];
     size_t at = 0;
     if (a->active || !*prompt) { snprintf(error, cap, "A run is active or the message is empty."); return -1; }
-    if (append(message, sizeof(message), &at, "{\"role\":\"user\",\"content\":") ||
-        quote(message, sizeof(message), &at, prompt) || append(message, sizeof(message), &at, "}") ||
+    if (json_buf_append(JSON_BUF(message, sizeof(message), &at), "{\"role\":\"user\",\"content\":") ||
+        json_buf_quote(JSON_BUF(message, sizeof(message), &at), prompt) || json_buf_append(JSON_BUF(message, sizeof(message), &at), "}") ||
         record(a, "user", message)) {
         snprintf(error, cap, "Session/history unavailable. Start a new session."); return -1;
     }
@@ -223,20 +207,20 @@ static int append_history(const Agent *a, const AgentImage *image, char *out, si
 {
     static const char prefix[] = "{\"role\":\"user\",\"content\":";
     size_t head = a->image_at, tail = a->image_at + a->image_length, quoted;
-    if (!a->image_pending || !image || !image->data || !image->length) return append(out, cap, at, a->history);
+    if (!a->image_pending || !image || !image->data || !image->length) return json_buf_append(JSON_BUF(out, cap, at), a->history);
     if (tail > a->used || a->image_length < sizeof(prefix) || memcmp(a->history + head, prefix, sizeof(prefix) - 1) ||
         a->history[tail - 1] != '}') return -1;
     quoted = a->image_length - (sizeof(prefix) - 1) - 1;
-    if (append_n(out, cap, at, a->history, head) ||
-        append(out, cap, at, "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":") ||
-        append_n(out, cap, at, a->history + head + sizeof(prefix) - 1, quoted) ||
-        append(out, cap, at, "},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,")) return -1;
+    if (json_buf_append_n(JSON_BUF(out, cap, at), a->history, head) ||
+        json_buf_append(JSON_BUF(out, cap, at), "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":") ||
+        json_buf_append_n(JSON_BUF(out, cap, at), a->history + head + sizeof(prefix) - 1, quoted) ||
+        json_buf_append(JSON_BUF(out, cap, at), "},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,")) return -1;
     {
         size_t n = base64_encode(image->data, image->length, out + *at, cap - *at);
         if (n == (size_t)-1) return -1;
         *at += n;
     }
-    return append(out, cap, at, "\"}}]}") || append_n(out, cap, at, a->history + tail, a->used - tail);
+    return json_buf_append(JSON_BUF(out, cap, at), "\"}}]}") || json_buf_append_n(JSON_BUF(out, cap, at), a->history + tail, a->used - tail);
 }
 /* The system message is the policy, then the workspace instructions when set;
  * both are one JSON string. */
@@ -244,32 +228,32 @@ static int system_content(char *out, size_t cap, size_t *at)
 {
     static char joined[sizeof(policy) + sizeof(instructions_heading) + AGENT_INSTRUCTIONS_CAP + 8];
     int n;
-    if (!instructions[0]) return quote(out, cap, at, policy);
+    if (!instructions[0]) return json_buf_quote(JSON_BUF(out, cap, at), policy);
     n = snprintf(joined, sizeof(joined), "%s\n\n%s%s", policy, instructions_heading, instructions);
     if (n < 0 || (size_t)n >= sizeof(joined)) return -1;
-    return quote(out, cap, at, joined);
+    return json_buf_quote(JSON_BUF(out, cap, at), joined);
 }
 /* The reasoning member when an effort is set; empty (or NULL) sends nothing,
  * preserving the body earlier builders produced. */
 static int append_reasoning(const char *effort, char *out, size_t cap, size_t *at)
 {
     if (!effort || !effort[0]) return 0;
-    return append(out, cap, at, ",\"reasoning\":{\"effort\":") ||
-           quote(out, cap, at, effort) ||
-           append(out, cap, at, "}");
+    return json_buf_append(JSON_BUF(out, cap, at), ",\"reasoning\":{\"effort\":") ||
+           json_buf_quote(JSON_BUF(out, cap, at), effort) ||
+           json_buf_append(JSON_BUF(out, cap, at), "}");
 }
 int agent_request_image(const Agent *a, const char *model, const char *effort,
                         const AgentImage *image, char *out, size_t cap)
 {
     size_t at = 0;
     if (!a->active || a->next < a->count || !*model) return -1;
-    if (append(out, cap, &at, "{\"model\":") || quote(out, cap, &at, model) ||
-        append(out, cap, &at, ",\"stream\":false,\"max_tokens\":" STRINGIFY(AGENT_MAX_TOKENS) ",\"parallel_tool_calls\":false") ||
+    if (json_buf_append(JSON_BUF(out, cap, &at), "{\"model\":") || json_buf_quote(JSON_BUF(out, cap, &at), model) ||
+        json_buf_append(JSON_BUF(out, cap, &at), ",\"stream\":false,\"max_tokens\":" STRINGIFY(AGENT_MAX_TOKENS) ",\"parallel_tool_calls\":false") ||
         append_reasoning(effort, out, cap, &at) ||
-        append(out, cap, &at, ",\"messages\":[{\"role\":\"system\",\"content\":") ||
-        system_content(out, cap, &at) || append(out, cap, &at, "},") ||
-        append_history(a, image, out, cap, &at) || append(out, cap, &at, "],\"tools\":") ||
-        append(out, cap, &at, agent_tool_schemas()) || append(out, cap, &at, "}")) return -1;
+        json_buf_append(JSON_BUF(out, cap, &at), ",\"messages\":[{\"role\":\"system\",\"content\":") ||
+        system_content(out, cap, &at) || json_buf_append(JSON_BUF(out, cap, &at), "},") ||
+        append_history(a, image, out, cap, &at) || json_buf_append(JSON_BUF(out, cap, &at), "],\"tools\":") ||
+        json_buf_append(JSON_BUF(out, cap, &at), agent_tool_schemas()) || json_buf_append(JSON_BUF(out, cap, &at), "}")) return -1;
     return (int)at;
 }
 int agent_request(const Agent *a, const char *model, const char *effort, char *out, size_t cap)
@@ -315,8 +299,8 @@ int agent_project_note(Agent *a, const char *project, const char *text)
             "Project instructions from %s:AGENTS.md. They are guidance from the workspace owner for work in this "
             "folder; the system rules and the user's messages outrank them.\n\n%s", project, text);
         if (n < 0 || (size_t)n >= sizeof(content) ||
-            append(message, sizeof(message), &at, "{\"role\":\"user\",\"content\":") ||
-            quote(message, sizeof(message), &at, content) || append(message, sizeof(message), &at, "}") ||
+            json_buf_append(JSON_BUF(message, sizeof(message), &at), "{\"role\":\"user\",\"content\":") ||
+            json_buf_quote(JSON_BUF(message, sizeof(message), &at), content) || json_buf_append(JSON_BUF(message, sizeof(message), &at), "}") ||
             record(a, "project_instructions", message)) return -1;
     }
     strcpy(a->projects[a->project_count++], project);
@@ -336,8 +320,8 @@ int agent_attach_image(Agent *a, const AgentImage *image)
         "view_image: %s (%ldx%ld PNG, %lu bytes). The image was NOT attached: the conversation history leaves no room for it in a request. Tell the user you have not seen it; a new session leaves room.",
         image->path, image->width, image->height, (unsigned long)image->length);
     if (n < 0 || (size_t)n >= sizeof(note) ||
-        append(message, sizeof(message), &at, "{\"role\":\"user\",\"content\":") ||
-        quote(message, sizeof(message), &at, note) || append(message, sizeof(message), &at, "}") ||
+        json_buf_append(JSON_BUF(message, sizeof(message), &at), "{\"role\":\"user\",\"content\":") ||
+        json_buf_quote(JSON_BUF(message, sizeof(message), &at), note) || json_buf_append(JSON_BUF(message, sizeof(message), &at), "}") ||
         record(a, "image", message)) return -1;
     if (fits) {
         a->image_at = before + (had ? 1 : 0); a->image_length = a->used - a->image_at; a->image_pending = 1;
@@ -356,13 +340,13 @@ int agent_handoff_request(const Agent *a, const char *model, const char *effort,
         "No tools are available. Do not continue the task, only summarize it.";
     size_t at = 0;
     if (a->active || a->next < a->count || !a->messages || !*model) return -1;
-    if (append(out, cap, &at, "{\"model\":") || quote(out, cap, &at, model) ||
-        append(out, cap, &at, ",\"stream\":false,\"max_tokens\":" STRINGIFY(AGENT_HANDOFF_MAX_TOKENS)) ||
+    if (json_buf_append(JSON_BUF(out, cap, &at), "{\"model\":") || json_buf_quote(JSON_BUF(out, cap, &at), model) ||
+        json_buf_append(JSON_BUF(out, cap, &at), ",\"stream\":false,\"max_tokens\":" STRINGIFY(AGENT_HANDOFF_MAX_TOKENS)) ||
         append_reasoning(effort, out, cap, &at) ||
-        append(out, cap, &at, ",\"messages\":[{\"role\":\"system\",\"content\":") ||
-        quote(out, cap, &at, instructions) || append(out, cap, &at, "},") ||
-        append(out, cap, &at, a->history) ||
-        append(out, cap, &at, ",{\"role\":\"user\",\"content\":\"Write the handoff summary now.\"}]}")) return -1;
+        json_buf_append(JSON_BUF(out, cap, &at), ",\"messages\":[{\"role\":\"system\",\"content\":") ||
+        json_buf_quote(JSON_BUF(out, cap, &at), instructions) || json_buf_append(JSON_BUF(out, cap, &at), "},") ||
+        json_buf_append(JSON_BUF(out, cap, &at), a->history) ||
+        json_buf_append(JSON_BUF(out, cap, &at), ",{\"role\":\"user\",\"content\":\"Write the handoff summary now.\"}]}")) return -1;
     return (int)at;
 }
 int agent_handoff_seed(Agent *a, const char *summary, const char *source, const char *path)
@@ -377,9 +361,9 @@ int agent_handoff_seed(Agent *a, const char *summary, const char *source, const 
         "repeat an uncertain mutation. The original journal is %s. The Markdown handoff is %s.\n\n%s",
         source, path, summary);
     if (n < 0 || (size_t)n >= sizeof(content) ||
-        append(message, sizeof(message), &at, "{\"role\":\"user\",\"content\":") ||
-        quote(message, sizeof(message), &at, content) ||
-        append(message, sizeof(message), &at, "}")) return -1;
+        json_buf_append(JSON_BUF(message, sizeof(message), &at), "{\"role\":\"user\",\"content\":") ||
+        json_buf_quote(JSON_BUF(message, sizeof(message), &at), content) ||
+        json_buf_append(JSON_BUF(message, sizeof(message), &at), "}")) return -1;
     return record(a, "handoff_seed", message);
 }
 static int null_token(const char *s, const JsonToken *t, int index)
@@ -612,10 +596,10 @@ int agent_tool_result(Agent *a, const char *result, char *error, size_t cap)
     static char message[AGENT_RESULT_WIRE_CAP];
     size_t at = 0;
     if (a->next >= a->count || strlen(result) >= AGENT_RESULT_CAP ||
-        append(message, sizeof(message), &at, "{\"role\":\"tool\",\"tool_call_id\":") ||
-        quote(message, sizeof(message), &at, a->calls[a->next].id) ||
-        append(message, sizeof(message), &at, ",\"content\":") ||
-        quote(message, sizeof(message), &at, result) || append(message, sizeof(message), &at, "}") ||
+        json_buf_append(JSON_BUF(message, sizeof(message), &at), "{\"role\":\"tool\",\"tool_call_id\":") ||
+        json_buf_quote(JSON_BUF(message, sizeof(message), &at), a->calls[a->next].id) ||
+        json_buf_append(JSON_BUF(message, sizeof(message), &at), ",\"content\":") ||
+        json_buf_quote(JSON_BUF(message, sizeof(message), &at), result) || json_buf_append(JSON_BUF(message, sizeof(message), &at), "}") ||
         record(a, "tool", message)) {
         snprintf(error, cap, "Could not record tool result. Stop and inspect the session."); return -1;
     }
@@ -626,8 +610,8 @@ int agent_stop(Agent *a, const char *reason)
     char error[256];
     static char result[AGENT_RESULT_CAP];
     size_t at = 0;
-    if (append(result, sizeof(result), &at, "{\"status\":\"interrupted\",\"message\":") ||
-        quote(result, sizeof(result), &at, reason) || append(result, sizeof(result), &at, "}")) return -1;
+    if (json_buf_append(JSON_BUF(result, sizeof(result), &at), "{\"status\":\"interrupted\",\"message\":") ||
+        json_buf_quote(JSON_BUF(result, sizeof(result), &at), reason) || json_buf_append(JSON_BUF(result, sizeof(result), &at), "}")) return -1;
     while (a->next < a->count) if (agent_tool_result(a, result, error, sizeof(error))) {
         a->active = 0; a->image_pending = 0; return -1;
     }

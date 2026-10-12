@@ -5,6 +5,7 @@
 #include "run_application.h"
 #include "application_process.h"
 #include "json.h"
+#include "jsonargs.h"
 #include "config.h"
 #include "fsutil.h"
 #include <Processes.h>
@@ -29,12 +30,6 @@ static uint32_t started;
 static unsigned long sequence;
 static AgentJournal journal_fn;
 static void *journal_context;
-static OSErr catalog(FSSpec *s,CInfoPBRec *p)
-{
-    memset(p,0,sizeof(*p)); p->hFileInfo.ioNamePtr=s->name;
-    p->hFileInfo.ioVRefNum=s->vRefNum; p->hFileInfo.ioDirID=s->parID;
-    return PBGetCatInfoSync(p);
-}
 static int leaf_valid(const char *s,size_t max)
 {
     size_t i,n=strlen(s);
@@ -57,7 +52,7 @@ static int record_spec(const char *leaf,FSSpec *s)
 static int read_record(Authority *a)
 {
     FSSpec s; CInfoPBRec p; short ref; long n=sizeof(*a); OSErr e,c;
-    if(record_spec("launch.rec",&s) || catalog(&s,&p) || (p.hFileInfo.ioFlAttrib & 16) ||
+    if(record_spec("launch.rec",&s) || fs_catalog(&s,&p) || (p.hFileInfo.ioFlAttrib & 16) ||
         (p.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000) || p.hFileInfo.ioFlFndrInfo.fdType!='ShAR' ||
         p.hFileInfo.ioFlFndrInfo.fdCreator!='ShCk' || p.hFileInfo.ioFlRLgLen || p.hFileInfo.ioFlLgLen!=n || FSpOpenDF(&s,fsRdPerm,&ref))return -1;
     e=FSRead(ref,&n,a); c=FSClose(ref);
@@ -69,7 +64,7 @@ static int metadata(Authority *a)
 {
     FSSpec s; CInfoPBRec p; char path[192];
     snprintf(path,sizeof(path),QUEUE ":%s:build:native:%s",build_id,seal.output);
-    if(tools_resolve(path,&s) || catalog(&s,&p) || (p.hFileInfo.ioFlAttrib & 16) ||
+    if(tools_resolve(path,&s) || fs_catalog(&s,&p) || (p.hFileInfo.ioFlAttrib & 16) ||
         (p.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000) || p.hFileInfo.ioFlFndrInfo.fdType!='APPL' ||
         p.hFileInfo.ioFlLgLen<=0 || p.hFileInfo.ioFlLgLen>FORK_LIMIT ||
         p.hFileInfo.ioFlRLgLen<=0 || p.hFileInfo.ioFlRLgLen>FORK_LIMIT)return -1;
@@ -96,7 +91,7 @@ static int begin(int authorize,AgentJournal journal,void *ctx,uint32_t now)
     strcpy(observed.build,seal.build); strcpy(observed.output,seal.output);
     if(!journal || metadata(&observed))return -1;
     if(!authorize && !same_metadata(&observed,&seal))return -1;
-    observed.data_hash=observed.resource_hash=2166136261UL;
+    observed.data_hash=observed.resource_hash=fs_fnv1a(NULL,0);
     authorizing=authorize; fork_index=0; offset=0; started=now;
     journal_fn=journal; journal_context=ctx; active=1; tracking_done=0;
     if(!authorize)application_tracking_begin();
@@ -111,12 +106,11 @@ int application_authorize_begin(const char *id,const char *output,AgentJournal j
 }
 int run_application_begin(const AgentCall *call,char *out,size_t cap,AgentJournal journal,void *ctx,uint32_t now)
 {
-    JsonToken t[8]; char id[25],key[32];
+    JsonToken t[8]; char id[25];
     if(active) { snprintf(out,cap,"{\"status\":\"error\",\"code\":\"LAUNCH_BUSY\"}");return 1; }
     build_id[0]=run_id[0]=0;
-    if(json_parse(call->arguments,strlen(call->arguments),t,8)!=3 || t[0].type!=JSON_OBJECT ||
-        json_string(call->arguments,t,1,key,sizeof(key))<0 || strcmp(key,"build_id") ||
-        json_string(call->arguments,t,2,id,sizeof(id))<0 || !id_valid(id))return fail(out,cap,"RUN_ARGUMENTS",0);
+    if(json_parse(call->arguments,strlen(call->arguments),t,8)!=3 || json_args_check_keys(call->arguments,t,0,"|build_id|") ||
+        json_args_string(call->arguments,t,"build_id",id,sizeof(id))<0 || !id_valid(id))return fail(out,cap,"RUN_ARGUMENTS",0);
     strcpy(build_id,id);
     if(!journal)return fail(out,cap,"JOURNAL_REQUIRED",1);
     if(read_record(&seal) || begin(0,journal,ctx,now)<0)return fail(out,cap,"BUILD_NOT_AUTHORIZED_OR_ARTIFACT_CHANGED",0);
@@ -162,7 +156,7 @@ int run_application_step(char *out,size_t cap,uint32_t now,int stop)
         c=FSClose(ref);
         if(e || c || got!=n)return fail(out,cap,"ARTIFACT_FORK_READ",0);
         h=fork_index ? &observed.resource_hash : &observed.data_hash;
-        for(long i=0;i<n;i++)*h=(*h^page[i])*16777619UL;
+        *h=fs_fnv1a_more(*h,page,(size_t)n);
         offset+=n;
         if(offset==(long)(fork_index ? observed.resource_size : observed.data_size)) {fork_index++;offset=0;}
         return 2;
