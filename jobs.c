@@ -13,17 +13,6 @@ static void leaf(NativeJob *j, const char *name, FSSpec *s)
     memset(s, 0, sizeof(*s)); s->vRefNum=j->volume; s->parID=j->directory;
     s->name[0]=(unsigned char)strlen(name); memcpy(s->name+1,name,s->name[0]);
 }
-static OSErr info(const FSSpec *s, CInfoPBRec *p)
-{
-    memset(p,0,sizeof(*p)); p->hFileInfo.ioNamePtr=(unsigned char *)s->name;
-    p->hFileInfo.ioVRefNum=s->vRefNum; p->hFileInfo.ioDirID=s->parID;
-    return PBGetCatInfoSync(p);
-}
-static int alias(const CInfoPBRec *p)
-{
-    return p->hFileInfo.ioFlFndrInfo.fdType=='alis' ||
-        (p->hFileInfo.ioFlFndrInfo.fdFlags & 0x8000);
-}
 static int record(NativeJob *j, const char *event)
 {
     char json[256];
@@ -77,8 +66,8 @@ int jobs_begin(NativeJob *j,const FSSpec *queue,const char *id,
         total+=inputs[i].size; scripts+=!strcmp(inputs[i].name,"script");
     }
     if(total>JOB_TOTAL_MAX || scripts!=1) return -1;
-    e=info(queue,&p);
-    if(e || !(p.hFileInfo.ioFlAttrib & 16) || alias(&p)) { j->error=e ? e : paramErr; return -1; }
+    e=fs_catalog(queue,&p);
+    if(e || !(p.hFileInfo.ioFlAttrib & 16) || fs_is_alias(&p)) { j->error=e ? e : paramErr; return -1; }
     j->volume=queue->vRefNum; j->directory=p.dirInfo.ioDrDirID;
     strcpy(j->id,id); j->journal=journal; j->context=ctx;
     /* Recovery intent names the queue directory; reservation never reused. */
@@ -121,9 +110,9 @@ static void stage(NativeJob *j)
         if(j->offset==(long)in->size) {
             if(!j->verifying) {
                 e=FlushVol(NULL,j->volume);
-                if(!e) e=info(&s,&p);
+                if(!e) e=fs_catalog(&s,&p);
                 if(e || p.hFileInfo.ioFlLgLen!=(long)in->size || p.hFileInfo.ioFlRLgLen ||
-                    (p.hFileInfo.ioFlAttrib & 16) || alias(&p)) { fail(j,e ? e : ioErr); return; }
+                    (p.hFileInfo.ioFlAttrib & 16) || fs_is_alias(&p)) { fail(j,e ? e : ioErr); return; }
                 j->verifying=1; j->offset=0;
             } else { j->verifying=0; j->offset=0; j->input++; }
         }
@@ -182,10 +171,10 @@ int jobs_parse_result(NativeJob *j,const char *s,size_t size)
 static OSErr log_page(NativeJob *j,const char *name,long *offset,char *page,size_t *size)
 {
     FSSpec s; CInfoPBRec p; long n; OSErr e;
-    *size=0; leaf(j,name,&s); e=info(&s,&p);
+    *size=0; leaf(j,name,&s); e=fs_catalog(&s,&p);
     if(e==fnfErr) return noErr;
     if(e) return e;
-    if(alias(&p) || (p.hFileInfo.ioFlAttrib & 16) || p.hFileInfo.ioFlRLgLen ||
+    if(fs_is_alias(&p) || (p.hFileInfo.ioFlAttrib & 16) || p.hFileInfo.ioFlRLgLen ||
         p.hFileInfo.ioFlLgLen<*offset) return paramErr;
     n=p.hFileInfo.ioFlLgLen-*offset; if(n>JOB_PAGE) n=JOB_PAGE;
     if(!n) return noErr;
@@ -212,9 +201,9 @@ void jobs_step(NativeJob *j,uint32_t now,int stop)
     if(j->state==JOB_STAGING) { stage(j); return; }
     if((int32_t)(now-j->next_poll)<0) return;
     j->next_poll=now+60;
-    leaf(j,"result",&s); e=info(&s,&p);
+    leaf(j,"result",&s); e=fs_catalog(&s,&p);
     if(!e) {
-        if(alias(&p) || (p.hFileInfo.ioFlAttrib & 16) || p.hFileInfo.ioFlRLgLen ||
+        if(fs_is_alias(&p) || (p.hFileInfo.ioFlAttrib & 16) || p.hFileInfo.ioFlRLgLen ||
             p.hFileInfo.ioFlLgLen<1 || p.hFileInfo.ioFlLgLen>JOB_RECORD_MAX) { fail(j,paramErr); return; }
         e=transfer(j,"result",0,bytes,p.hFileInfo.ioFlLgLen,0);
         if(e || jobs_parse_result(j,bytes,(size_t)p.hFileInfo.ioFlLgLen)) { fail(j,e ? e : paramErr); return; }

@@ -3,6 +3,8 @@
  * go to the provider unchanged: only the PNG signature, header and trailer are
  * checked here, never decoded. The file is re-checked every step so a file
  * rewritten by a running application cannot be sent half old, half new. */
+#include "fsutil.h"
+#include "jsonargs.h"
 #include "view_image.h"
 #include "json.h"
 #include "mcp_guard.h"
@@ -37,10 +39,8 @@ const AgentImage *view_image_take(void)
 
 static int fail(char *out, size_t cap, const char *code, const char *message, int native)
 {
-    char quoted[512];
     if (native == MCP_GUARD_DENIED) { code = MCP_GUARD_CODE; message = MCP_GUARD_MESSAGE; }
-    if (json_quote(message, quoted, sizeof(quoted)) < 0) strcpy(quoted, "\"view_image failed\"");
-    snprintf(out, cap, "{\"status\":\"error\",\"code\":\"%s\",\"message\":%s,\"os_error\":%d}", code, quoted, native);
+    json_args_error(out, cap, code, message, native);
     return 0;
 }
 /* A failure after the buffer was started: the image is no longer usable. */
@@ -48,18 +48,6 @@ static int abandon(char *out, size_t cap, const char *code, const char *message,
 {
     active = 0; memset(&image, 0, sizeof(image));
     return fail(out, cap, code, message, native);
-}
-static OSErr catalog(const FSSpec *s, CInfoPBRec *pb)
-{
-    FSSpec copy = *s;
-    memset(pb, 0, sizeof(*pb)); pb->hFileInfo.ioNamePtr = copy.name;
-    pb->hFileInfo.ioVRefNum = copy.vRefNum; pb->hFileInfo.ioDirID = copy.parID;
-    return PBGetCatInfoSync(pb);
-}
-static int same_file(const CInfoPBRec *a, const CInfoPBRec *b)
-{
-    return a->hFileInfo.ioDirID == b->hFileInfo.ioDirID && a->hFileInfo.ioFlMdDat == b->hFileInfo.ioFlMdDat &&
-        a->hFileInfo.ioFlLgLen == b->hFileInfo.ioFlLgLen && a->hFileInfo.ioFlRLgLen == b->hFileInfo.ioFlRLgLen;
 }
 static unsigned long be32(const unsigned char *p)
 {
@@ -82,7 +70,7 @@ int view_image_begin(const AgentCall *call, char *out, size_t cap, AgentJournal 
 {
     static const unsigned char signature[8] = { 0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a };
     JsonToken t[8];
-    char key[16], path[AGENT_IMAGE_PATH_CAP];
+    char path[AGENT_IMAGE_PATH_CAP];
     unsigned char head[HEADER_BYTES];
     unsigned long width, height;
     OSErr err;
@@ -90,16 +78,15 @@ int view_image_begin(const AgentCall *call, char *out, size_t cap, AgentJournal 
     if (active || waiting)
         return fail(out, cap, "ONE_IMAGE_PER_ROUND", "One image can be attached per round. Call view_image again after the model's next reply.", 0);
     view_image_reset();
-    if (json_parse(call->arguments, strlen(call->arguments), t, 8) != 3 || t[0].type != JSON_OBJECT ||
-        json_string(call->arguments, t, 1, key, sizeof(key)) < 0 || strcmp(key, "path") ||
-        json_string(call->arguments, t, 2, path, sizeof(path)) <= 0)
+    if (json_parse(call->arguments, strlen(call->arguments), t, 8) != 3 || json_args_check_keys(call->arguments, t, 0, "|path|") ||
+        json_args_string(call->arguments, t, "path", path, sizeof(path)) <= 0)
         return fail(out, cap, "ARGUMENTS", "Expected exactly one field: path.", 0);
     if (vision == AGENT_VISION_NO)
         return fail(out, cap, "VISION_UNSUPPORTED", "The selected model does not accept images, so it cannot see this file. Say that you have not looked at it.", 0);
     if (vision != AGENT_VISION_YES)
         return fail(out, cap, "VISION_UNKNOWN", "Image support could not be confirmed for the selected model, so no image was sent. Say that you have not looked at it.", 0);
     err = tools_resolve(path, &spec);
-    if (!err) err = catalog(&spec, &seen);
+    if (!err) err = fs_catalog(&spec, &seen);
     if (err) return fail(out, cap, "FILE", "Cannot resolve the workspace file.", err);
     if ((seen.hFileInfo.ioFlAttrib & 16) || seen.hFileInfo.ioFlFndrInfo.fdType == 'alis' ||
         (seen.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000))
@@ -130,16 +117,16 @@ int view_image_step(char *out, size_t cap, uint32_t now, int stop)
     if (!active) return fail(out, cap, "NO_ACTIVE_VIEW", "No image is being read.", 0);
     if (stop) return abandon(out, cap, "STOPPED", "Stopped before the image was read; nothing was attached.", 0);
     if ((uint32_t)(now - started) >= DEADLINE_TICKS) return abandon(out, cap, "TIMEOUT", "Reading the image took too long; nothing was attached.", 0);
-    err = catalog(&spec, &current);
-    if (err || !same_file(&seen, &current)) return abandon(out, cap, "CHANGED", "The file changed while it was read; call view_image again.", err);
+    err = fs_catalog(&spec, &current);
+    if (err || !fs_same_file(&seen, &current)) return abandon(out, cap, "CHANGED", "The file changed while it was read; call view_image again.", err);
     want = (long)image.length - offset;
     if (want > STEP_BYTES) want = STEP_BYTES;
     err = read_at(offset, want, buffer + offset);
     if (err) return abandon(out, cap, "READ", "Cannot read the PNG.", err);
     offset += want;
     if (offset < (long)image.length) return 2;
-    err = catalog(&spec, &current);
-    if (err || !same_file(&seen, &current)) return abandon(out, cap, "CHANGED", "The file changed while it was read; call view_image again.", err);
+    err = fs_catalog(&spec, &current);
+    if (err || !fs_same_file(&seen, &current)) return abandon(out, cap, "CHANGED", "The file changed while it was read; call view_image again.", err);
     /* A PNG that is still being written has no IEND chunk yet. */
     if (memcmp(buffer + image.length - TRAILER_BYTES, "\0\0\0\0IEND\xAE\x42\x60\x82", TRAILER_BYTES))
         return abandon(out, cap, "NOT_PNG", "The PNG has no IEND trailer: it is truncated or still being written.", 0);

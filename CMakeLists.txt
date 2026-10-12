@@ -7,8 +7,11 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # Shared native tool sources; read-only inspection lives in inspect.c, and
 # retained MCP results (mcp_result.c) re-run credential redaction from
 # mcp_config.c over what they retain; mcp_config.c parses URLs with
-# vendor/http.c, so every target that links TOOLS_SRC gets it too.
-set(TOOLS_SRC tools.c fsutil.c inspect.c mcp_guard.c mcp_result.c mcp_config.c registry.c vendor/http.c)
+# vendor/http.c, so every target that links TOOLS_SRC gets it too. jsonargs.c
+# (bounded argument checks and JSON output buffers over json.c) is used by the
+# executors, build_project.c, run_application.c, view_image.c and agent.c, all
+# of which link TOOLS_SRC.
+set(TOOLS_SRC tools.c fsutil.c jsonargs.c inspect.c mcp_guard.c mcp_result.c mcp_config.c registry.c vendor/http.c)
 # Certainly is fetch-only; build.sh expects it next to this repo. Override
 # with -DCERTAINLY_DIR=<path> when it is cloned elsewhere.
 if(NOT CERTAINLY_DIR)
@@ -84,6 +87,7 @@ sherclawk_app(SherclawkNativeBuildErrorCheck ${NATIVE_BUILD_CHECK_SRC})
 target_compile_definitions(SherclawkNativeBuildErrorCheck PRIVATE NATIVE_BUILD_ERROR=1)
 sherclawk_app(SherclawkInspectCheck tools/inspect-check.c ${TOOLS_SRC} json.c text.c hello.r)
 sherclawk_app(SherclawkViewImageCheck tools/view-image-check.c ${TOOLS_SRC} view_image.c json.c text.c hello.r)
+sherclawk_app(SherclawkCatalogCheck tools/catalog-check.c ${TOOLS_SRC} json.c text.c hello.r)
 sherclawk_app(SherclawkTrashCheck tools/trash-check.c ${TOOLS_SRC} json.c text.c hello.r)
 sherclawk_app(SherclawkCopyCheck tools/copy-check.c ${TOOLS_SRC} json.c text.c hello.r)
 sherclawk_app(SherclawkMCPGuardCheck tools/mcp-guard-check.c ${TOOLS_SRC} json.c text.c hello.r)

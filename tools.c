@@ -1,6 +1,7 @@
 /* Native bounded tools. Mutations stage verified TEXT files and journal every
  * publication boundary. All catalog/text work is bounded; aliases, binary
  * files, resource forks and parent traversal are never followed as text. */
+#include "jsonargs.h"
 #include "tools.h"
 #include "inspect.h"
 #include "mcp_guard.h"
@@ -34,23 +35,8 @@ void tools_set_workspace(const char *path)
 
 static int fail(char *out, size_t cap, const char *code, const char *message, int native)
 {
-    char q[512];
     if (native == MCP_GUARD_DENIED) { code = MCP_GUARD_CODE; message = MCP_GUARD_MESSAGE; }
-    if (json_quote(message, q, sizeof(q)) < 0) strcpy(q, "\"Tool failed\"");
-    snprintf(out, cap, "{\"status\":\"error\",\"code\":\"%s\",\"message\":%s,\"os_error\":%d}", code, q, native);
-    return -1;
-}
-static int append(char *out, size_t cap, size_t *at, const char *s)
-{
-    size_t n = strlen(s);
-    if (*at >= cap || n >= cap - *at) return -1;
-    memcpy(out + *at, s, n + 1); *at += n; return 0;
-}
-static int quote(char *out, size_t cap, size_t *at, const char *s)
-{
-    int n = json_quote(s, out + *at, cap - *at);
-    if (n < 0) return -1;
-    *at += (size_t)n; return 0;
+    return json_args_error(out, cap, code, message, native);
 }
 /* The wire contract is relative paths only. This also rejects volume changes,
  * absolute paths, empty interior components and HFS parent syntax. */
@@ -79,42 +65,11 @@ static int spec_for(const char *path, int folder, FSSpec *spec)
     p[0] = (unsigned char)n; memcpy(p + 1, full, n);
     return FSMakeFSSpec(0, 0, p, spec);
 }
-static OSErr catalog(FSSpec *spec, CInfoPBRec *pb)
+/* This caller's cursors use -1 as the malformed unsigned sentinel. */
+static int int_arg(const char *s, const JsonToken *t, const char *name, int def, int low, int high)
 {
-    memset(pb, 0, sizeof(*pb)); pb->hFileInfo.ioNamePtr = spec->name;
-    pb->hFileInfo.ioVRefNum = spec->vRefNum; pb->hFileInfo.ioDirID = spec->parID;
-    return PBGetCatInfoSync(pb);
-}
-static int string_arg(const char *s, const JsonToken *tokens, const char *name, char *out, size_t cap)
-{
-    return json_string(s, tokens, json_member(s, tokens, 0, name), out, cap);
-}
-static int int_arg(const char *s, const JsonToken *tokens, const char *name, int def, int low, int high)
-{
-    char value[32];
     long n;
-    int i = json_member(s, tokens, 0, name), k, size;
-    if (i < 0) return def;
-    size = tokens[i].end - tokens[i].start;
-    if (tokens[i].type != JSON_PRIMITIVE || size < 1 || size >= (int)sizeof(value)) return -1;
-    for (k = 0; k < size; k++) if (s[tokens[i].start + k] < '0' || s[tokens[i].start + k] > '9') return -1;
-    memcpy(value, s + tokens[i].start, (size_t)size); value[size] = 0;
-    n = strtol(value, NULL, 10); return n >= low && n <= high ? (int)n : -1;
-}
-static int valid_keys(const char *s, const JsonToken *tokens, const char *allowed)
-{
-    char key[64], padded[68];
-    int i, j;
-    for (i = 1; i < tokens[0].next; i = tokens[i + 1].next) {
-        if (json_string(s, tokens, i, key, sizeof(key)) < 0) return -1;
-        snprintf(padded, sizeof(padded), "|%s|", key);
-        if (!strstr(allowed, padded)) return -1;
-        for (j = 1; j < i; j = tokens[j + 1].next) {
-            char previous[64];
-            if (json_string(s, tokens, j, previous, sizeof(previous)) < 0 || !strcmp(previous, key)) return -1;
-        }
-    }
-    return 0;
+    return json_args_int(s, t, name, def, low, high, &n) ? -1 : (int)n;
 }
 static void environment(char *out, size_t cap)
 {
@@ -124,21 +79,21 @@ static void environment(char *out, size_t cap)
     if (text_to_utf8(tools_workspace(), strlen(tools_workspace()), root, sizeof(root)) < 0 ||
         json_quote(root, q, sizeof(q)) < 0) { fail(out, cap, "CONFIG", "Invalid workspace encoding.", 0); return; }
     /* The installed-tool list is the registry itself, in table order. */
-    if (append(out, cap, &at, "{\"status\":\"ok\",\"os\":\"classic Mac OS\",\"system_version_hex\":\"") ||
+    if (json_buf_append(JSON_BUF(out, cap, &at), "{\"status\":\"ok\",\"os\":\"classic Mac OS\",\"system_version_hex\":\"") ||
         snprintf(tail, sizeof(tail), "%04lx", system) >= (int)sizeof(tail) ||
-        append(out, cap, &at, tail) ||
-        append(out, cap, &at, "\",\"architecture\":\"PowerPC\",\"workspace\":") ||
-        append(out, cap, &at, q) ||
-        append(out, cap, &at, ",\"paths\":\"relative colon-separated\","
+        json_buf_append(JSON_BUF(out, cap, &at), tail) ||
+        json_buf_append(JSON_BUF(out, cap, &at), "\",\"architecture\":\"PowerPC\",\"workspace\":") ||
+        json_buf_append(JSON_BUF(out, cap, &at), q) ||
+        json_buf_append(JSON_BUF(out, cap, &at), ",\"paths\":\"relative colon-separated\","
             "\"encoding\":\"MacRoman data fork to UTF-8\",\"read_only\":false,\"free_heap_bytes\":") ||
         snprintf(tail, sizeof(tail), "%ld", (long)FreeMem()) >= (int)sizeof(tail) ||
-        append(out, cap, &at, tail) ||
-        append(out, cap, &at, ",\"tools\":[")) { fail(out, cap, "LIMIT", "Environment report exceeds result capacity.", 0); return; }
+        json_buf_append(JSON_BUF(out, cap, &at), tail) ||
+        json_buf_append(JSON_BUF(out, cap, &at), ",\"tools\":[")) { fail(out, cap, "LIMIT", "Environment report exceeds result capacity.", 0); return; }
     for (i = 0; i < tools_count(); i++) {
         char name[80];
-        if (i && append(out, cap, &at, ",")) { fail(out, cap, "LIMIT", "Environment report exceeds result capacity.", 0); return; }
+        if (i && json_buf_append(JSON_BUF(out, cap, &at), ",")) { fail(out, cap, "LIMIT", "Environment report exceeds result capacity.", 0); return; }
         snprintf(name, sizeof(name), "\"%s\"", tools_at(i)->name);
-        if (append(out, cap, &at, name)) { fail(out, cap, "LIMIT", "Environment report exceeds result capacity.", 0); return; }
+        if (json_buf_append(JSON_BUF(out, cap, &at), name)) { fail(out, cap, "LIMIT", "Environment report exceeds result capacity.", 0); return; }
     }
     n = snprintf(tail, sizeof(tail),
         "],\"write_policy\":\"create_only_existing_parent\",\"folder_policy\":\"create_only_existing_parent\",\"write_max_bytes\":%d,"
@@ -147,7 +102,7 @@ static void environment(char *out, size_t cap)
         "\"edit_string_max_bytes\":%d,\"build_input_max_bytes\":%ld,\"descriptor_max_bytes\":%d,\"total_snapshot_max_bytes\":%ld,"
         "\"build_supported\":true,\"launch_supported\":true}",
         TOOLS_STRING_CAP, TOOLS_COPY_CAP, TOOLS_ACCEPTED_FILE_CAP, TOOLS_STRING_CAP, TOOLS_ACCEPTED_FILE_CAP, TOOLS_DESCRIPTOR_CAP, TOOLS_SNAPSHOT_CAP);
-    if (n < 0 || (size_t)n >= sizeof(tail) || append(out, cap, &at, tail))
+    if (n < 0 || (size_t)n >= sizeof(tail) || json_buf_append(JSON_BUF(out, cap, &at), tail))
         fail(out, cap, "LIMIT", "Environment report exceeds result capacity.", 0);
 }
 static void list(const char *s, const JsonToken *tokens, char *out, size_t cap)
@@ -162,16 +117,16 @@ static void list(const char *s, const JsonToken *tokens, char *out, size_t cap)
     int count = 0, next, done = 0;
     long dir;
     McpGuard guard;
-    if (valid_keys(s, tokens, "|root||cursor||limit|") || string_arg(s, tokens, "root", root, sizeof(root)) < 0 || cursor < 0 || limit < 0) {
+    if (json_args_check_keys(s, tokens, 0, "|root||cursor||limit|") || json_args_string(s, tokens, "root", root, sizeof(root)) < 0 || cursor < 0 || limit < 0) {
         fail(out, cap, "ARGUMENTS", "Expected root, optional cursor and limit; no other fields.", 0); return;
     }
     err = spec_for(root, 1, &spec);
-    if (!err) err = catalog(&spec, &pb);
+    if (!err) err = fs_catalog(&spec, &pb);
     if (err || !(pb.hFileInfo.ioFlAttrib & 16)) { fail(out, cap, "FOLDER", "Cannot resolve the workspace folder.", err); return; }
     dir = pb.dirInfo.ioDrDirID;
     if (mcp_guard_open(&guard)) { fail(out, cap, "FOLDER", "", MCP_GUARD_DENIED); return; }
     snprintf(prefix, sizeof(prefix), "%s%s", root, *root && root[strlen(root) - 1] != ':' ? ":" : "");
-    append(out, cap, &at, "{\"status\":\"ok\",\"files\":[");
+    json_buf_append(JSON_BUF(out, cap, &at), "{\"status\":\"ok\",\"files\":[");
     next = cursor;
     while (count < limit) {
         size_t pos = 0;
@@ -193,7 +148,7 @@ static void list(const char *s, const JsonToken *tokens, char *out, size_t cap)
             fail(out, cap, "ENCODING", "Filename conversion failed.", 0); return;
         }
         snprintf(child, sizeof(child), "%s%s%s", prefix, name, pb.hFileInfo.ioFlAttrib & 16 ? ":" : "");
-        if (append(entry, sizeof(entry), &pos, "{\"path\":") || quote(entry, sizeof(entry), &pos, child)) break;
+        if (json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), "{\"path\":") || json_buf_quote(JSON_BUF(entry, sizeof(entry), &pos), child)) break;
         if (pb.hFileInfo.ioFlAttrib & 16) {
             snprintf(kind, sizeof(kind), ",\"kind\":\"folder\",\"data_bytes\":0}");
         } else {
@@ -202,21 +157,21 @@ static void list(const char *s, const JsonToken *tokens, char *out, size_t cap)
             snprintf(kind, sizeof(kind), ",\"kind\":\"file\",\"data_bytes\":%ld,\"revision\":\"%s\"}",
                 (long)pb.hFileInfo.ioFlLgLen, revision);
         }
-        if (append(entry, sizeof(entry), &pos, kind)) break;
+        if (json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), kind)) break;
         if (at + pos + 150 >= cap) break;
-        if (count) append(out, cap, &at, ",");
-        append(out, cap, &at, entry); count++; next++;
+        if (count) json_buf_append(JSON_BUF(out, cap, &at), ",");
+        json_buf_append(JSON_BUF(out, cap, &at), entry); count++; next++;
     }
     snprintf(tail, sizeof(tail), "],\"truncated\":%s,\"next_cursor\":%d}", done ? "false" : "true", next);
-    if (append(out, cap, &at, tail)) fail(out, cap, "LIMIT", "Folder result is too large.", 0);
+    if (json_buf_append(JSON_BUF(out, cap, &at), tail)) fail(out, cap, "LIMIT", "Folder result is too large.", 0);
 }
-static int plain_file(const FSSpec *spec, const CInfoPBRec *pb)
+static int is_text_by_type_or_extension(const FSSpec *spec, const CInfoPBRec *pb)
 {
     char name[32];
     const char *dot;
     int i;
     if (pb->hFileInfo.ioFlAttrib & 16 || pb->hFileInfo.ioFlRLgLen) return 0;
-    if (pb->hFileInfo.ioFlFndrInfo.fdType == 'alis' || (pb->hFileInfo.ioFlFndrInfo.fdFlags & 0x8000)) return 0;
+    if (fs_is_alias(pb)) return 0;
     if (pb->hFileInfo.ioFlFndrInfo.fdType == 'TEXT') return 1;
     if (spec->name[0] > 31) return 0;
     for (i = 0; i < spec->name[0]; i++) name[i] = (char)tolower(spec->name[i + 1]);
@@ -225,20 +180,8 @@ static int plain_file(const FSSpec *spec, const CInfoPBRec *pb)
         !strcmp(dot, ".txt") || !strcmp(dot, ".md") || !strcmp(dot, ".sh") ||
         !strcmp(dot, ".out") || !strcmp(dot, ".log") || !strcmp(dot, ".conf"));
 }
-static unsigned long hash_bytes(const char *bytes, long size)
-{
-    unsigned long hash = 2166136261UL;
-    long i;
-    for (i = 0; i < size; i++) hash = ((hash ^ (unsigned char)bytes[i]) * 16777619UL) & 0xffffffffUL;
-    return hash;
-}
 /* Whole-file tokens include catalog identity. A bounded scan token must never
  * be accepted as a mutation guard, nor vary with the displayed page. */
-static void full_revision(const CInfoPBRec *pb, const char *bytes, long size, char *out, size_t cap)
-{
-    snprintf(out, cap, "full-%08lx-%08lx-%08lx-%08lx", (unsigned long)pb->hFileInfo.ioDirID,
-        (unsigned long)pb->hFileInfo.ioFlMdDat, (unsigned long)size, hash_bytes(bytes, size));
-}
 /* Catalog-only pin for destructive calls: a file that changed identity,
  * modification date or either fork size since it was listed is refused. Never
  * a content hash and never accepted as an edit revision. */
@@ -278,18 +221,6 @@ static int is_plain_dir(const CInfoPBRec *pb)
 {
     return (pb->hFileInfo.ioFlAttrib & 16) && !(pb->hFileInfo.ioFlFndrInfo.fdFlags & 0x8000);
 }
-static int same_file(const CInfoPBRec *a, const CInfoPBRec *b)
-{
-    return a->hFileInfo.ioDirID == b->hFileInfo.ioDirID &&
-        a->hFileInfo.ioFlMdDat == b->hFileInfo.ioFlMdDat &&
-        a->hFileInfo.ioFlLgLen == b->hFileInfo.ioFlLgLen &&
-        a->hFileInfo.ioFlRLgLen == b->hFileInfo.ioFlRLgLen &&
-        /* Catalog attributes include transient fork-open bits. */
-        (a->hFileInfo.ioFlAttrib & 0x11) == (b->hFileInfo.ioFlAttrib & 0x11) &&
-        a->hFileInfo.ioFlFndrInfo.fdType == b->hFileInfo.ioFlFndrInfo.fdType &&
-        a->hFileInfo.ioFlFndrInfo.fdCreator == b->hFileInfo.ioFlFndrInfo.fdCreator &&
-        a->hFileInfo.ioFlFndrInfo.fdFlags == b->hFileInfo.ioFlFndrInfo.fdFlags;
-}
 /* Read and edit share one retained source snapshot; only one may be active. */
 static char text_source[TOOLS_FILE_CAP + 1], text_edited[TOOLS_FILE_CAP + 1];
 static char text_scratch[TOOLS_WORK_CHUNK];
@@ -302,21 +233,11 @@ int tools_check_arguments(const ToolDef *def, const AgentCall *call, JsonToken *
        json_parse(call->arguments,strlen(call->arguments),tokens,128)<1 || tokens[0].type!=JSON_OBJECT) {
         fail(out,cap,"ARGUMENTS","Tool arguments must be a bounded JSON object.",0);return -1;
     }
-    if(def->mutates && string_arg(call->arguments,tokens,
+    if(def->mutates && json_args_string(call->arguments,tokens,
        def->mutation_argument ? def->mutation_argument : "path",path,sizeof(path))>=0 && evidence_path(path)) {
         fail(out,cap,"EXECUTION_EVIDENCE_READ_ONLY","Worker queue, snapshots and retained MCP results are read-only to source tools.",0);return -1;
     }
     return 0;
-}
-static unsigned long hash_more(unsigned long h,const char *bytes,long n)
-{
-    long i;for(i=0;i<n;i++)h=((h^(unsigned char)bytes[i])*16777619UL)&0xffffffffUL;
-    return h;
-}
-static void revision_hash(const CInfoPBRec *pb,long size,unsigned long h,char *out,size_t cap)
-{
-    snprintf(out,cap,"full-%08lx-%08lx-%08lx-%08lx",(unsigned long)pb->hFileInfo.ioDirID,
-        (unsigned long)pb->hFileInfo.ioFlMdDat,(unsigned long)size,h);
 }
 static struct {
     FSSpec spec; CInfoPBRec original;
@@ -345,14 +266,14 @@ static int read_text_begin_checked(const AgentCall *call,const JsonToken *tokens
     text_read.start=int_arg(call->arguments,tokens,"start_line",1,1,100000);
     text_read.maximum=int_arg(call->arguments,tokens,"max_lines",20,1,30);
     text_read.base=int_arg(call->arguments,tokens,"start_byte",0,0,2147483647);
-    if(valid_keys(call->arguments,tokens,"|path||start_byte||start_line||max_lines|") ||
-       string_arg(call->arguments,tokens,"path",path,sizeof(path))<0 || text_read.start<0 ||
+    if(json_args_check_keys(call->arguments, tokens, 0,"|path||start_byte||start_line||max_lines|") ||
+       json_args_string(call->arguments,tokens,"path",path,sizeof(path))<0 || text_read.start<0 ||
        text_read.maximum<0 || text_read.base<0 || (text_read.base && text_read.start!=1)) {
         fail(out,cap,"ARGUMENTS","Expected path, optional start_line or start_byte, and max_lines.",0);return 0;
     }
-    err=tools_resolve(path,&text_read.spec);if(!err)err=catalog(&text_read.spec,&text_read.original);
+    err=tools_resolve(path,&text_read.spec);if(!err)err=fs_catalog(&text_read.spec,&text_read.original);
     if(err)return read_finish(out,cap,"FILE",err,0);
-    if(!plain_file(&text_read.spec,&text_read.original))return read_finish(out,cap,"NOT_TEXT",0,0);
+    if(!is_text_by_type_or_extension(&text_read.spec,&text_read.original))return read_finish(out,cap,"NOT_TEXT",0,0);
     if(text_read.base>text_read.original.hFileInfo.ioFlLgLen)return read_finish(out,cap,"RANGE",0,0);
     text_read.whole=text_read.original.hFileInfo.ioFlLgLen<=TOOLS_ACCEPTED_FILE_CAP;
     text_read.editable=text_read.whole;
@@ -361,7 +282,7 @@ static int read_text_begin_checked(const AgentCall *call,const JsonToken *tokens
     err=FSpOpenDF(&text_read.spec,fsRdPerm,&text_read.ref);
     if(!err)err=SetFPos(text_read.ref,fsFromStart,text_read.whole ? 0 : text_read.base);
     if(err)return read_finish(out,cap,"READ",err,0);
-    text_read.started=now;text_read.hash=2166136261UL;text_read.line=1;text_active=1;return 2;
+    text_read.started=now;text_read.hash=fs_fnv1a(NULL,0);text_read.line=1;text_active=1;return 2;
 }
 static int read_page(char *out,size_t cap)
 {
@@ -402,7 +323,7 @@ static int read_page(char *out,size_t cap)
             text_read.end=end;text_read.emitted=emitted;work+=n;
         } else {
             size_t at=0;
-            if(append(out,cap,&at,header) || append(out,cap,&at,text_read.quoted) || append(out,cap,&at,tail))
+            if(json_buf_append(JSON_BUF(out, cap, &at), header) || json_buf_append(JSON_BUF(out, cap, &at), text_read.quoted) || json_buf_append(JSON_BUF(out, cap, &at), tail))
                 return read_finish(out,cap,"LIMIT",0,0);
             text_active=0;return 0;
         }
@@ -429,7 +350,7 @@ int read_text_step(char *out,size_t cap,uint32_t now,int stop)
                 if(!c || c==127 || (c<32 && c!=9 && c!=10 && c!=13))return read_finish(out,cap,"NOT_TEXT",0,0);
                 if(c==10)text_read.editable=0;
             }
-            text_read.hash=hash_more(text_read.hash,text_source+text_read.offset,n);
+            text_read.hash=fs_fnv1a_more(text_read.hash,text_source+text_read.offset,n);
         }
         text_read.offset+=n;
         if(text_read.offset<text_read.size)return 2;
@@ -439,10 +360,10 @@ int read_text_step(char *out,size_t cap,uint32_t now,int stop)
             if(err)return read_finish(out,cap,"READ",err,0);
             return 2;
         }
-        err=catalog(&text_read.spec,&after);
-        if(err || !same_file(&text_read.original,&after))return read_finish(out,cap,"CHANGED",err,0);
+        err=fs_catalog(&text_read.spec,&after);
+        if(err || !fs_same_file(&text_read.original,&after))return read_finish(out,cap,"CHANGED",err,0);
         if(read_finish(out,cap,NULL,0,0))return 1;
-        if(text_read.whole)revision_hash(&after,text_read.size,text_read.hash,text_read.revision,sizeof(text_read.revision));
+        if(text_read.whole)fs_revision_hash(&after,text_read.size,text_read.hash,text_read.revision,sizeof(text_read.revision));
         else snprintf(text_read.revision,sizeof(text_read.revision),"scan-%08lx-%08lx-%08lx",(unsigned long)after.hFileInfo.ioFlMdDat,(unsigned long)after.hFileInfo.ioFlLgLen,text_read.hash);
         text_read.begin=text_read.whole ? text_read.base : 0;
         text_read.phase=2;text_active=1;return 2;
@@ -480,8 +401,8 @@ int tools_read_instructions(const char *folder, char *out, size_t cap, unsigned 
     if (cap < AGENT_INSTRUCTIONS_CAP + 1) return TOOLS_INSTRUCTIONS_UNUSABLE;
     if (snprintf(path, sizeof(path), "%s%sAGENTS.md", folder, *folder ? ":" : "") >= (int)sizeof(path)) return TOOLS_INSTRUCTIONS_ABSENT;
     if (spec_for(path, 0, &spec)) return TOOLS_INSTRUCTIONS_ABSENT;
-    if (catalog(&spec, &pb)) return TOOLS_INSTRUCTIONS_ABSENT;
-    if (!plain_file(&spec, &pb)) return TOOLS_INSTRUCTIONS_UNUSABLE;
+    if (fs_catalog(&spec, &pb)) return TOOLS_INSTRUCTIONS_ABSENT;
+    if (!is_text_by_type_or_extension(&spec, &pb)) return TOOLS_INSTRUCTIONS_UNUSABLE;
     if (!pb.hFileInfo.ioFlLgLen) return TOOLS_INSTRUCTIONS_ABSENT;
     size = pb.hFileInfo.ioFlLgLen;
     if (size > AGENT_INSTRUCTIONS_CAP) { size = AGENT_INSTRUCTIONS_CAP; cut = 1; }
@@ -489,12 +410,12 @@ int tools_read_instructions(const char *folder, char *out, size_t cap, unsigned 
     if (FSpOpenDF(&spec, fsRdPerm, &ref)) return TOOLS_INSTRUCTIONS_UNUSABLE;
     err = FSRead(ref, &size, bytes); closed = FSClose(ref);
     if (err || closed || size != wanted) return TOOLS_INSTRUCTIONS_UNUSABLE;
-    sum = hash_bytes(bytes, size);
+    sum = fs_fnv1a(bytes, size);
     for (i = 0; i < (size_t)size; i++) {
         unsigned char c = (unsigned char)bytes[i];
         if (!c || c == 127 || (c < 32 && c != 9 && c != 10 && c != 13)) return TOOLS_INSTRUCTIONS_UNUSABLE;
     }
-    if (catalog(&spec, &after) || !same_file(&pb, &after)) return TOOLS_INSTRUCTIONS_UNUSABLE;
+    if (fs_catalog(&spec, &after) || !fs_same_file(&pb, &after)) return TOOLS_INSTRUCTIONS_UNUSABLE;
     n = text_to_utf8(bytes, (size_t)size, utf8, sizeof(utf8));
     if (n < 0) return TOOLS_INSTRUCTIONS_UNUSABLE;
     if (hash) *hash = sum;
@@ -538,7 +459,7 @@ OSErr tools_workspace_root(FSSpec *spec)
 {
     CInfoPBRec pb;
     OSErr err = spec_for("", 1, spec);
-    if (!err) err = catalog(spec, &pb);
+    if (!err) err = fs_catalog(spec, &pb);
     if (!err && (!(pb.hFileInfo.ioFlAttrib & 16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000))) err = paramErr;
     return err;
 }
@@ -554,7 +475,7 @@ OSErr tools_resolve(const char *path, FSSpec *spec)
     long dir;
     if (text_to_macroman_strict(path, local, sizeof(local)) < 0 || tools_validate_path(local, 0)) return paramErr;
     err = spec_for("", 1, &parent);
-    if (!err) err = catalog(&parent, &pb);
+    if (!err) err = fs_catalog(&parent, &pb);
     if (err) return err == fnfErr ? dirNFErr : err;
     if (!(pb.hFileInfo.ioFlAttrib & 16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000)) return paramErr;
     dir = pb.dirInfo.ioDrDirID;
@@ -563,7 +484,7 @@ OSErr tools_resolve(const char *path, FSSpec *spec)
         size_t n = (size_t)(colon - part);
         name[0] = (unsigned char)n; memcpy(name + 1, part, n);
         err = FSMakeFSSpec(parent.vRefNum, dir, name, spec);
-        if (!err) err = catalog(spec, &pb);
+        if (!err) err = fs_catalog(spec, &pb);
         if (err) return err == fnfErr ? dirNFErr : err;
         if (!(pb.hFileInfo.ioFlAttrib & 16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000)) return paramErr;
         dir = pb.dirInfo.ioDrDirID; part = colon + 1;
@@ -631,14 +552,14 @@ static void search_text(const char *s, const JsonToken *tokens, char *out, size_
               (n == 5 && !memcmp(s+tokens[member].start,"false",5)))) goto arguments;
         recursive = n == 4;
     }
-    if (valid_keys(s,tokens,"|root||query||recursive||limit||cursor|") || limit < 0 ||
-        string_arg(s,tokens,"root",root,sizeof(root)) < 0 ||
-        string_arg(s,tokens,"query",query,sizeof(query)) < 0 ||
+    if (json_args_check_keys(s, tokens, 0,"|root||query||recursive||limit||cursor|") || limit < 0 ||
+        json_args_string(s,tokens,"root",root,sizeof(root)) < 0 ||
+        json_args_string(s,tokens,"query",query,sizeof(query)) < 0 ||
         text_to_macroman_strict(root,local,sizeof(local)) < 0 || tools_validate_path(local,1) ||
         text_to_macroman_strict(query,needle,sizeof(needle)) <= 0) goto arguments;
     qlen = strlen(needle);
     { size_t i; for(i=0;i<qlen;i++) if((unsigned char)needle[i]<32 || needle[i]==127) goto arguments; }
-    if (json_member(s,tokens,0,"cursor") >= 0 && string_arg(s,tokens,"cursor",cursor,sizeof(cursor))<0) goto arguments;
+    if (json_member(s,tokens,0,"cursor") >= 0 && json_args_string(s,tokens,"cursor",cursor,sizeof(cursor))<0) goto arguments;
     if (*cursor) {
         char *p, *end;
         long values[14]; int n=0;
@@ -667,7 +588,7 @@ static void search_text(const char *s, const JsonToken *tokens, char *out, size_
     if(*root && root[strlen(root)-1]==':') root[strlen(root)-1]=0;
     if(*local) err=tools_resolve(root,&spec);
     else err=spec_for("",1,&spec);
-    if(!err)err=catalog(&spec,&pb);
+    if(!err)err=fs_catalog(&spec,&pb);
     if(err || !(pb.hFileInfo.ioFlAttrib&16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags&0x8000)) {
         fail(out,cap,"FOLDER","Cannot resolve a non-alias workspace folder.",err);return;
     }
@@ -686,7 +607,7 @@ static void search_text(const char *s, const JsonToken *tokens, char *out, size_
         paths[d+1][strlen(paths[d])+name[0]]=':';paths[d+1][strlen(paths[d])+name[0]+1]=0;
         dirs[d+1]=pb.dirInfo.ioDrDirID;
     }}
-    append(out,cap,&at,"{\"status\":\"ok\",\"matches\":[");
+    json_buf_append(JSON_BUF(out, cap, &at), "{\"status\":\"ok\",\"matches\":[");
     while(steps<64 && budget>128 && count<limit) {
         Str255 name;
         FSSpec file;
@@ -717,7 +638,7 @@ static void search_text(const char *s, const JsonToken *tokens, char *out, size_
             }
             indices[depth]++;continue;
         }
-        if(!plain_file(&file,&pb)) goto skip;
+        if(!is_text_by_type_or_extension(&file,&pb)) goto skip;
         if(offset>pb.hFileInfo.ioFlLgLen){fail(out,cap,"CURSOR","File shortened since search page.",0);return;}
         process=budget-(long)qlen+1;if(process>4096)process=4096;
         wanted=pb.hFileInfo.ioFlLgLen-offset;if(wanted>process+(long)qlen-1)wanted=process+(long)qlen-1;
@@ -727,7 +648,7 @@ static void search_text(const char *s, const JsonToken *tokens, char *out, size_
         err=SetFPos(ref,fsFromStart,offset);if(!err && size)err=FSRead(ref,&size,bytes);
         {OSErr closed=FSClose(ref);if(!err)err=closed;}
         if(err || size!=wanted){fail(out,cap,"READ","Search read failed or was short.",err);return;}
-        {CInfoPBRec after;err=catalog(&file,&after);if(err || !same_file(&pb,&after)){fail(out,cap,"CHANGED","File changed during search; restart search.",err);return;}}
+        {CInfoPBRec after;err=fs_catalog(&file,&after);if(err || !fs_same_file(&pb,&after)){fail(out,cap,"CHANGED","File changed during search; restart search.",err);return;}}
         budget-=(int)size;
         for(i=0;i<size;i++){unsigned char c=(unsigned char)bytes[i];if(!c || c==127 || (c<32 && c!=9 && c!=10 && c!=13))binary=1;}
         if(binary) goto skip;
@@ -738,12 +659,12 @@ static void search_text(const char *s, const JsonToken *tokens, char *out, size_
                 while(end<size && end-i<32 && bytes[end]!=13 && bytes[end]!=10)end++;
                 memcpy(local,paths[depth],plen);memcpy(local+plen,name+1,name[0]);local[plen+name[0]]=0;
                 if(text_to_utf8(local,strlen(local),path,sizeof(path))<0 || text_to_utf8(bytes+i,(size_t)(end-i),utf8,sizeof(utf8))<0)goto arguments;
-                if(append(entry,sizeof(entry),&pos,"{\"path\":") || quote(entry,sizeof(entry),&pos,path)) {fail(out,cap,"LIMIT","Match path exceeds result capacity.",0);return;}
+                if(json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), "{\"path\":") || json_buf_quote(JSON_BUF(entry, sizeof(entry), &pos), path)) {fail(out,cap,"LIMIT","Match path exceeds result capacity.",0);return;}
                 snprintf(meta,sizeof(meta),",\"line\":%ld,\"byte\":%ld,\"excerpt\":",line,offset+i);
-                if(append(entry,sizeof(entry),&pos,meta) || quote(entry,sizeof(entry),&pos,utf8) || append(entry,sizeof(entry),&pos,"}")) {fail(out,cap,"LIMIT","Match exceeds result capacity.",0);return;}
+                if(json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), meta) || json_buf_quote(JSON_BUF(entry, sizeof(entry), &pos), utf8) || json_buf_append(JSON_BUF(entry, sizeof(entry), &pos), "}")) {fail(out,cap,"LIMIT","Match exceeds result capacity.",0);return;}
                 if(at+pos+280>=cap) {if(!count){fail(out,cap,"LIMIT","Match exceeds result capacity.",0);return;}break;}
-                if(count)append(out,cap,&at,",");
-                append(out,cap,&at,entry);count++;
+                if(count)json_buf_append(JSON_BUF(out, cap, &at), ",");
+                json_buf_append(JSON_BUF(out, cap, &at), entry);count++;
             }
             if(bytes[i]==13 || (bytes[i]==10 && !prevcr)) {
                 if(line>=2147483647L){fail(out,cap,"LIMIT","Line count exceeds search capacity.",0);return;}
@@ -768,7 +689,7 @@ skip:
     }
     snprintf(tail,sizeof(tail),"],\"truncated\":%s,\"next_cursor\":%s%s%s,\"skipped\":%d,\"scanned_bytes\":%d}",
         done ? "false" : "true",done ? "" : "\"",done ? "null" : cursor,done ? "" : "\"",skipped,8192-budget);
-    if(append(out,cap,&at,tail))fail(out,cap,"LIMIT","Search result exceeds capacity.",0);
+    if(json_buf_append(JSON_BUF(out, cap, &at), tail))fail(out,cap,"LIMIT","Search result exceeds capacity.",0);
     return;
 arguments:
     fail(out,cap,"ARGUMENTS","Expected root, nonempty single-line MacRoman query (128 bytes), optional recursive, limit (1-8), and returned cursor.",0);
@@ -809,10 +730,10 @@ static int write_text(const AgentCall *call, const JsonToken *tokens, char *out,
     OSErr err;
     int length, attempt;
     size_t i, prefix;
-    unsigned long hash = 2166136261UL;
-    if (valid_keys(call->arguments, tokens, "|path||text|") ||
-        string_arg(call->arguments, tokens, "path", path, sizeof(path)) < 0 ||
-        string_arg(call->arguments, tokens, "text", utf8, sizeof(utf8)) < 0) {
+    unsigned long hash;
+    if (json_args_check_keys(call->arguments, tokens, 0, "|path||text|") ||
+        json_args_string(call->arguments, tokens, "path", path, sizeof(path)) < 0 ||
+        json_args_string(call->arguments, tokens, "text", utf8, sizeof(utf8)) < 0) {
         fail(out, cap, "ARGUMENTS", "Expected only path and text strings.", 0); return 0;
     }
     length = text_to_macroman_strict(utf8, bytes, sizeof(bytes));
@@ -820,8 +741,8 @@ static int write_text(const AgentCall *call, const JsonToken *tokens, char *out,
     for (i = 0; i < (size_t)length; i++) {
         unsigned char c = (unsigned char)bytes[i];
         if ((c < 32 && c != 9 && c != 13) || c == 127) { fail(out, cap, "NOT_TEXT", "Binary control bytes are refused.", 0); return 0; }
-        hash = ((hash ^ c) * 16777619UL) & 0xffffffffUL;
     }
+    hash = fs_fnv1a(bytes, (size_t)length);
     err = tools_resolve(path, &target);
     if (!err) { fail(out, cap, "EXISTS", "Destination exists; write_text never overwrites.", 0); return 0; }
     if (err != fnfErr) { fail(out, cap, "PATH", "Use a relative workspace file path with existing non-alias parent folders.", err); return 0; }
@@ -832,7 +753,7 @@ static int write_text(const AgentCall *call, const JsonToken *tokens, char *out,
         extern unsigned long TickCount(void);
         snprintf(tempname, sizeof(tempname), "Sherclawk tmp %08lx %02x", (unsigned long)TickCount() & 0xffffffffUL, attempt);
         stage = target; stage.name[0] = (unsigned char)strlen(tempname); memcpy(stage.name + 1, tempname, stage.name[0]);
-        err = catalog(&stage, &pb);
+        err = fs_catalog(&stage, &pb);
         if (!err) continue;
         if (err != fnfErr) { fail(out, cap, "STAGE", "Cannot inspect temporary destination.", err); return 0; }
         snprintf(temporary, sizeof(temporary), "%.*s%s", (int)prefix, path, tempname);
@@ -850,7 +771,7 @@ static int write_text(const AgentCall *call, const JsonToken *tokens, char *out,
     }
     if (attempt == 100) { fail(out, cap, "STAGE", "Temporary name collisions; no destination created.", 0); return 0; }
     if (err) goto failed;
-    full_revision(&pb, bytes, length, revision, sizeof(revision));
+    fs_revision(&pb, bytes, length, revision, sizeof(revision));
     mutation_result(record, sizeof(record), "staged", "CREATE_ONLY", path, temporary, length, revision, 0);
     if (journal_mutation(journal, context, "mutation_staged", call_id, record)) {
         mutation_result(out, cap, "error", "JOURNAL_STAGE_RETAINED", path, temporary, length, revision, 0); return 1;
@@ -862,8 +783,8 @@ static int write_text(const AgentCall *call, const JsonToken *tokens, char *out,
     }
     if (err) goto uncertain;
     err = FlushVol(NULL, target.vRefNum); if (err) goto uncertain;
-    err = catalog(&target, &pb); if (err) goto uncertain;
-    full_revision(&pb, bytes, length, revision, sizeof(revision));
+    err = fs_catalog(&target, &pb); if (err) goto uncertain;
+    fs_revision(&pb, bytes, length, revision, sizeof(revision));
     mutation_result(out, cap, "ok", "CREATED", path, "", length, revision, 0);
     if (journal_mutation(journal, context, "mutation_committed", call_id, out)) {
         mutation_result(out, cap, "uncertain", "JOURNAL_AFTER_PUBLISH", path, temporary, length, revision, 0); return 1;
@@ -939,29 +860,29 @@ static int edit_text_begin_checked(const AgentCall *call,const JsonToken *tokens
     static char utf8[AGENT_ARGUMENT_CAP];OSErr err;int i;
     if(text_active) { fail(out,cap,"TEXT_BUSY","A text operation is already active.",0);return 1; }
     memset(&text_edit,0,sizeof(text_edit));text_edit.ref=text_edit.aux=-1;
-    if(valid_keys(call->arguments,tokens,"|path||expected_revision||old_text||new_text|") ||
-       string_arg(call->arguments,tokens,"path",text_edit.path,sizeof(text_edit.path))<0 ||
-       string_arg(call->arguments,tokens,"expected_revision",text_edit.expected,sizeof(text_edit.expected))<0 ||
-       strncmp(text_edit.expected,"full-",5) || string_arg(call->arguments,tokens,"old_text",utf8,sizeof(utf8))<0)
+    if(json_args_check_keys(call->arguments, tokens, 0,"|path||expected_revision||old_text||new_text|") ||
+       json_args_string(call->arguments,tokens,"path",text_edit.path,sizeof(text_edit.path))<0 ||
+       json_args_string(call->arguments,tokens,"expected_revision",text_edit.expected,sizeof(text_edit.expected))<0 ||
+       strncmp(text_edit.expected,"full-",5) || json_args_string(call->arguments,tokens,"old_text",utf8,sizeof(utf8))<0)
         return edit_finish(out,cap,"ARGUMENTS",0,0);
     text_edit.old_len=text_to_macroman_strict(utf8,text_edit.old,sizeof(text_edit.old));
-    if(string_arg(call->arguments,tokens,"new_text",utf8,sizeof(utf8))<0)return edit_finish(out,cap,"ARGUMENTS",0,0);
+    if(json_args_string(call->arguments,tokens,"new_text",utf8,sizeof(utf8))<0)return edit_finish(out,cap,"ARGUMENTS",0,0);
     text_edit.new_len=text_to_macroman_strict(utf8,text_edit.replacement,sizeof(text_edit.replacement));
     if(text_edit.old_len<1 || text_edit.new_len<0)return edit_finish(out,cap,"ENCODING_LIMIT",0,0);
     for(i=0;i<text_edit.old_len+text_edit.new_len;i++) {
         unsigned char c=(unsigned char)(i<text_edit.old_len ? text_edit.old[i] : text_edit.replacement[i-text_edit.old_len]);
         if(c==127 || (c<32 && c!=9 && c!=13))return edit_finish(out,cap,"NOT_TEXT",0,0);
     }
-    err=tools_resolve(text_edit.path,&text_edit.target);if(!err)err=catalog(&text_edit.target,&text_edit.original);
+    err=tools_resolve(text_edit.path,&text_edit.target);if(!err)err=fs_catalog(&text_edit.target,&text_edit.original);
     if(err)return edit_finish(out,cap,"PATH",err,0);
-    if(!plain_file(&text_edit.target,&text_edit.original))return edit_finish(out,cap,"NOT_TEXT",0,0);
+    if(!is_text_by_type_or_extension(&text_edit.target,&text_edit.original))return edit_finish(out,cap,"NOT_TEXT",0,0);
     text_edit.size=text_edit.original.hFileInfo.ioFlLgLen;
     if(text_edit.size<0 || text_edit.size>TOOLS_ACCEPTED_FILE_CAP)return edit_finish(out,cap,"LIMIT",0,0);
     if(!journal || json_quote(call->id,text_edit.call_id,sizeof(text_edit.call_id))<0)return edit_finish(out,cap,"JOURNAL",0,1);
     err=FSpOpenDF(&text_edit.target,fsRdWrPerm,&text_edit.ref);
     if(err)return edit_finish(out,cap,"BUSY",err,0);
     text_edit.journal=journal;text_edit.context=context;text_edit.started=now;
-    text_edit.source_hash=text_edit.edited_hash=2166136261UL;text_edit.prefix_at=1;
+    text_edit.source_hash=text_edit.edited_hash=fs_fnv1a(NULL,0);text_edit.prefix_at=1;
     text_active=2;return 2;
 }
 /* A verification phase compares exact retained bytes, never just hashes. */
@@ -991,12 +912,12 @@ int edit_text_step(char *out,size_t cap,uint32_t now,int stop)
             unsigned char ch=(unsigned char)text_source[text_edit.offset+i];
             if(ch==127 || (ch<32 && ch!=9 && ch!=13))return edit_finish(out,cap,ch==10 ? "LINE_ENDINGS" : "NOT_TEXT",0,0);
         }
-        text_edit.source_hash=hash_more(text_edit.source_hash,text_source+text_edit.offset,n);
+        text_edit.source_hash=fs_fnv1a_more(text_edit.source_hash,text_source+text_edit.offset,n);
         text_edit.offset+=n;if(text_edit.offset==text_edit.size)text_edit.phase=E_REWIND;
         break;
     case E_REWIND:
-        err=catalog(&text_edit.target,&pb);
-        if(!err && !same_file(&text_edit.original,&pb))err=ioErr;
+        err=fs_catalog(&text_edit.target,&pb);
+        if(!err && !fs_same_file(&text_edit.original,&pb))err=ioErr;
         if(!err)err=SetFPos(text_edit.ref,fsFromStart,0);
         if(err)return edit_finish(out,cap,"CHANGED",err,0);
         text_edit.offset=0;text_edit.phase=E_INITIAL_VERIFY;break;
@@ -1004,9 +925,9 @@ int edit_text_step(char *out,size_t cap,uint32_t now,int stop)
         err=edit_compare(text_edit.ref,text_source,text_edit.size);
         if(err)return edit_finish(out,cap,"CHANGED",err,0);
         if(text_edit.offset<text_edit.size)break;
-        err=catalog(&text_edit.target,&pb);
-        if(err || !same_file(&text_edit.original,&pb))return edit_finish(out,cap,"CHANGED",err,0);
-        revision_hash(&pb,text_edit.size,text_edit.source_hash,text_edit.previous,sizeof(text_edit.previous));
+        err=fs_catalog(&text_edit.target,&pb);
+        if(err || !fs_same_file(&text_edit.original,&pb))return edit_finish(out,cap,"CHANGED",err,0);
+        fs_revision_hash(&pb,text_edit.size,text_edit.source_hash,text_edit.previous,sizeof(text_edit.previous));
         if(strcmp(text_edit.previous,text_edit.expected))return edit_finish(out,cap,"REVISION_MISMATCH",0,0);
         text_edit.phase=E_PREFIX;break;
     case E_PREFIX:
@@ -1051,7 +972,7 @@ int edit_text_step(char *out,size_t cap,uint32_t now,int stop)
                 text_source[at-text_edit.new_len+text_edit.old_len];
         }
         if(!text_edit.changed && memcmp(text_edited+text_edit.offset,text_source+text_edit.offset,(size_t)n))text_edit.changed=1;
-        text_edit.edited_hash=hash_more(text_edit.edited_hash,text_edited+text_edit.offset,n);
+        text_edit.edited_hash=fs_fnv1a_more(text_edit.edited_hash,text_edited+text_edit.offset,n);
         text_edit.offset+=n;if(text_edit.offset==text_edit.length) {
             if(!text_edit.changed)return edit_finish(out,cap,"NO_CHANGE",0,0);
             text_edit.phase=E_NAME;
@@ -1066,9 +987,9 @@ int edit_text_step(char *out,size_t cap,uint32_t now,int stop)
         text_edit.stage=text_edit.backup=text_edit.target;
         text_edit.stage.name[0]=(unsigned char)strlen(tmp);memcpy(text_edit.stage.name+1,tmp,text_edit.stage.name[0]);
         text_edit.backup.name[0]=(unsigned char)strlen(bak);memcpy(text_edit.backup.name+1,bak,text_edit.backup.name[0]);
-        err=catalog(&text_edit.stage,&pb);if(!err)break;
+        err=fs_catalog(&text_edit.stage,&pb);if(!err)break;
         if(err!=fnfErr)return edit_finish(out,cap,"STAGE",err,0);
-        err=catalog(&text_edit.backup,&pb);if(!err)break;
+        err=fs_catalog(&text_edit.backup,&pb);if(!err)break;
         if(err!=fnfErr)return edit_finish(out,cap,"STAGE",err,0);
         snprintf(text_edit.temporary,sizeof(text_edit.temporary),"%.*s%s",(int)prefix,text_edit.path,tmp);
         snprintf(text_edit.backup_path,sizeof(text_edit.backup_path),"%.*s%s",(int)prefix,text_edit.path,bak);
@@ -1096,8 +1017,8 @@ int edit_text_step(char *out,size_t cap,uint32_t now,int stop)
         }
         break;
     case E_STAGE_OPEN:
-        err=catalog(&text_edit.stage,&text_edit.staged);
-        if(!err && (text_edit.staged.hFileInfo.ioFlLgLen!=text_edit.length || !plain_file(&text_edit.stage,&text_edit.staged) ||
+        err=fs_catalog(&text_edit.stage,&text_edit.staged);
+        if(!err && (text_edit.staged.hFileInfo.ioFlLgLen!=text_edit.length || !is_text_by_type_or_extension(&text_edit.stage,&text_edit.staged) ||
             text_edit.staged.hFileInfo.ioFlFndrInfo.fdType!='TEXT' || text_edit.staged.hFileInfo.ioFlFndrInfo.fdCreator!='ttxt'))err=ioErr;
         if(!err)err=FSpOpenDF(&text_edit.stage,fsRdPerm,&text_edit.aux);
         if(err)return edit_finish(out,cap,"STAGE_FAILED_INSPECT_TEMP",err,0);
@@ -1109,20 +1030,20 @@ int edit_text_step(char *out,size_t cap,uint32_t now,int stop)
         if(text_edit.offset<text_edit.length)break;
         c=FSClose(text_edit.aux);text_edit.aux=-1;
         if(c)return edit_finish(out,cap,"CLOSE_INSPECT_PATHS",c,1);
-        err=catalog(text_edit.phase==E_STAGE_VERIFY ? &text_edit.stage : &text_edit.target,&pb);
+        err=fs_catalog(text_edit.phase==E_STAGE_VERIFY ? &text_edit.stage : &text_edit.target,&pb);
         { CInfoPBRec normalized=pb;normalized.hFileInfo.ioFlMdDat=text_edit.staged.hFileInfo.ioFlMdDat;
-          if(!err && !same_file(&text_edit.staged,&normalized))err=ioErr; }
+          if(!err && !fs_same_file(&text_edit.staged,&normalized))err=ioErr; }
         if(err)return edit_finish(out,cap,"CHANGED_INSPECT_PATHS",err,0);
-        revision_hash(&pb,text_edit.length,text_edit.edited_hash,text_edit.revision,sizeof(text_edit.revision));
+        fs_revision_hash(&pb,text_edit.length,text_edit.edited_hash,text_edit.revision,sizeof(text_edit.revision));
         text_edit.phase=text_edit.phase==E_STAGE_VERIFY ? E_STAGED : E_COMMIT;break;
     case E_STAGED:
         if(edit_record("mutation_staged","staged"))return edit_finish(out,cap,"JOURNAL_STAGE_RETAINED",0,1);
         text_edit.phase=E_ORIGINAL_OPEN;break;
     case E_ORIGINAL_OPEN:
     case E_BACKUP_OPEN:
-        err=catalog(text_edit.phase==E_ORIGINAL_OPEN ? &text_edit.target : &text_edit.backup,&pb);
+        err=fs_catalog(text_edit.phase==E_ORIGINAL_OPEN ? &text_edit.target : &text_edit.backup,&pb);
         if(text_edit.phase==E_BACKUP_OPEN)pb.hFileInfo.ioFlMdDat=text_edit.original.hFileInfo.ioFlMdDat;
-        if(!err && !same_file(&text_edit.original,&pb))err=ioErr;
+        if(!err && !fs_same_file(&text_edit.original,&pb))err=ioErr;
         if(!err)err=SetFPos(text_edit.ref,fsFromStart,0);
         if(err)return edit_finish(out,cap,"CHANGED_STAGE_RETAINED",err,0);
         text_edit.offset=0;text_edit.phase=text_edit.phase==E_ORIGINAL_OPEN ? E_ORIGINAL_VERIFY : E_BACKUP_VERIFY;break;
@@ -1131,9 +1052,9 @@ int edit_text_step(char *out,size_t cap,uint32_t now,int stop)
         err=edit_compare(text_edit.ref,text_source,text_edit.size);
         if(err)return edit_finish(out,cap,"CHANGED_STAGE_RETAINED",err,0);
         if(text_edit.offset<text_edit.size)break;
-        err=catalog(text_edit.phase==E_ORIGINAL_VERIFY ? &text_edit.target : &text_edit.backup,&pb);
+        err=fs_catalog(text_edit.phase==E_ORIGINAL_VERIFY ? &text_edit.target : &text_edit.backup,&pb);
         if(text_edit.phase==E_BACKUP_VERIFY)pb.hFileInfo.ioFlMdDat=text_edit.original.hFileInfo.ioFlMdDat;
-        if(!err && !same_file(&text_edit.original,&pb))err=ioErr;
+        if(!err && !fs_same_file(&text_edit.original,&pb))err=ioErr;
         if(err)return edit_finish(out,cap,"CHANGED_STAGE_RETAINED",err,0);
         text_edit.phase=text_edit.phase==E_ORIGINAL_VERIFY ? E_BACKUP_RENAME : E_BACKED_UP;break;
     case E_BACKUP_RENAME:
@@ -1151,9 +1072,9 @@ int edit_text_step(char *out,size_t cap,uint32_t now,int stop)
         if(err)return edit_finish(out,cap,"PUBLISH_INSPECT_PATHS",err,1);
         text_edit.phase=E_PUBLISHED_OPEN;break;
     case E_PUBLISHED_OPEN:
-        err=catalog(&text_edit.target,&pb);
+        err=fs_catalog(&text_edit.target,&pb);
         pb.hFileInfo.ioFlMdDat=text_edit.staged.hFileInfo.ioFlMdDat;
-        if(!err && !same_file(&text_edit.staged,&pb))err=ioErr;
+        if(!err && !fs_same_file(&text_edit.staged,&pb))err=ioErr;
         if(!err)err=FSpOpenDF(&text_edit.target,fsRdPerm,&text_edit.aux);
         if(err)return edit_finish(out,cap,"PUBLISH_INSPECT_PATHS",err,1);
         text_edit.offset=0;text_edit.phase=E_PUBLISHED_VERIFY;break;
@@ -1183,9 +1104,9 @@ static int create_verified_folder(FSSpec *target, int accept_existing, long *dir
     OSErr err = FSpDirCreate(target, smSystemScript, &made);
     *os_err = err;
     if (err == dupFNErr && !accept_existing) return FOLDER_EXISTS;
-    if (err && err != dupFNErr) return catalog(target, &pb) ? FOLDER_FAILED : FOLDER_UNCERTAIN;
+    if (err && err != dupFNErr) return fs_catalog(target, &pb) ? FOLDER_FAILED : FOLDER_UNCERTAIN;
     err = FlushVol(NULL, target->vRefNum);
-    if (!err) err = catalog(target, &pb);
+    if (!err) err = fs_catalog(target, &pb);
     if (!err && !is_plain_dir(&pb)) err = ioErr;
     *os_err = err;
     if (err) return FOLDER_UNVERIFIED;
@@ -1200,8 +1121,8 @@ static int create_folder(const AgentCall *call, const JsonToken *tokens, char *o
     FSSpec target;
     OSErr err;
     long dir = 0;
-    if (valid_keys(call->arguments, tokens, "|path|") ||
-        string_arg(call->arguments, tokens, "path", path, sizeof(path)) < 0) {
+    if (json_args_check_keys(call->arguments, tokens, 0, "|path|") ||
+        json_args_string(call->arguments, tokens, "path", path, sizeof(path)) < 0) {
         fail(out, cap, "ARGUMENTS", "Expected only a path string.", 0); return 0;
     }
     err = tools_resolve(path, &target);
@@ -1297,7 +1218,7 @@ static int trash_validate(TrashItem *item, char *out, size_t cap)
     }
     err = tools_resolve(item->path, &item->source);
     if (err) { trash_refuse(out, cap, "FILE", "Cannot resolve the workspace path.", item->path, err); return 0; }
-    err = catalog(&item->source, &pb);
+    err = fs_catalog(&item->source, &pb);
     if (err) { trash_refuse(out, cap, "FILE", "Cannot inspect the source file.", item->path, err); return 0; }
     if (pb.hFileInfo.ioFlAttrib & 16) {
         trash_refuse(out, cap, "NOT_FILE", "Only files can be trashed; folders are never moved.", item->path, 0); return 0;
@@ -1347,7 +1268,7 @@ static int trash_fallback(short *vref, long *dir, AgentJournal journal, void *co
     int status;
     err = tools_resolve(TRASH_FOLDER_NAME, &trash);
     if (err && err != fnfErr) { fail(out, cap, "TRASH", "Cannot resolve the workspace trash folder.", err); return -1; }
-    err = catalog(&trash, &pb);
+    err = fs_catalog(&trash, &pb);
     if (!err) {
         if (!is_plain_dir(&pb)) {
             fail(out, cap, "TRASH", "The workspace trash name is not a folder.", 0); return -1;
@@ -1394,7 +1315,7 @@ static void trash_folder_text(long dir, const char *fallback_leaf, char *out, si
     CInfoPBRec pb;
     char found[768];
     int budget = 512, complete = 1;
-    if (!tools_workspace_root(&workspace) && !catalog(&workspace, &pb) &&
+    if (!tools_workspace_root(&workspace) && !fs_catalog(&workspace, &pb) &&
         tools_find_dir(&workspace, pb.dirInfo.ioDrDirID, "", dir, found, sizeof(found), 0, &budget, &complete) &&
         text_to_utf8(found, strlen(found), out, cap) >= 0) return;
     if (fallback_leaf && text_to_utf8(fallback_leaf, strlen(fallback_leaf), out, cap) >= 0) return;
@@ -1409,19 +1330,19 @@ static int trash_format(char *out, size_t cap, const char *status, const char *c
     char head[80], tail[64];
     int i;
     snprintf(head, sizeof(head), "{\"status\":\"%s\",\"code\":\"%s\",\"moved\":%d,\"trash\":", status, code, moved);
-    if (append(out, cap, &at, head) || quote(out, cap, &at, folder)) return -1;
+    if (json_buf_append(JSON_BUF(out, cap, &at), head) || json_buf_quote(JSON_BUF(out, cap, &at), folder)) return -1;
     if (failed) {
-        if (append(out, cap, &at, ",\"failed\":") || quote(out, cap, &at, failed)) return -1;
+        if (json_buf_append(JSON_BUF(out, cap, &at), ",\"failed\":") || json_buf_quote(JSON_BUF(out, cap, &at), failed)) return -1;
     }
-    if (append(out, cap, &at, ",\"files\":[")) return -1;
+    if (json_buf_append(JSON_BUF(out, cap, &at), ",\"files\":[")) return -1;
     for (i = 0; i < moved; i++) {
-        if (i && append(out, cap, &at, ",")) return -1;
-        if (append(out, cap, &at, "{\"path\":") || quote(out, cap, &at, items[i].path) ||
-            append(out, cap, &at, ",\"moved_as\":") || quote(out, cap, &at, items[i].moved_as) ||
-            append(out, cap, &at, "}")) return -1;
+        if (i && json_buf_append(JSON_BUF(out, cap, &at), ",")) return -1;
+        if (json_buf_append(JSON_BUF(out, cap, &at), "{\"path\":") || json_buf_quote(JSON_BUF(out, cap, &at), items[i].path) ||
+            json_buf_append(JSON_BUF(out, cap, &at), ",\"moved_as\":") || json_buf_quote(JSON_BUF(out, cap, &at), items[i].moved_as) ||
+            json_buf_append(JSON_BUF(out, cap, &at), "}")) return -1;
     }
     snprintf(tail, sizeof(tail), "],\"os_error\":%d}", native);
-    return append(out, cap, &at, tail) ? -1 : 0;
+    return json_buf_append(JSON_BUF(out, cap, &at), tail) ? -1 : 0;
 }
 /* Publish the report. When it cannot be formatted after files already moved,
  * still say how many moved rather than a bare LIMIT. Nonzero: stop the run. */
@@ -1472,7 +1393,7 @@ static int trash_commit_one(TrashItem *item, short trash_vref, long trash_dir, c
     static const unsigned char no_name[1] = { 0 };
     OSErr err;
     int rn;
-    err = catalog(&item->source, &pb);
+    err = fs_catalog(&item->source, &pb);
     if (err) return trash_stopped(o, "error", "FILE", err, 0, 0);
     if (!revision_matches(&pb, item->revision) || pb.hFileInfo.ioDirID != item->identity)
         return trash_stopped(o, "error", "REVISION_MISMATCH", 0, 0, 0);
@@ -1502,13 +1423,13 @@ static int trash_commit_one(TrashItem *item, short trash_vref, long trash_dir, c
        reply may have been lost, so verify the destination below instead of
        claiming failure. */
     err = FSpCatMove(&item->source, &trash_spec);
-    if (err && !catalog(&item->source, &gone) && gone.hFileInfo.ioDirID == item->identity)
+    if (err && !fs_catalog(&item->source, &gone) && gone.hFileInfo.ioDirID == item->identity)
         return trash_stopped(o, "error", err == dupFNErr ? "EXISTS" : "MOVE_FAILED", err, 0, 0);
     err = FlushVol(NULL, target.vRefNum);
-    if (!err) err = catalog(&target, &pb);
+    if (!err) err = fs_catalog(&target, &pb);
     if (!err && (pb.hFileInfo.ioFlLgLen != item->data_size || pb.hFileInfo.ioFlRLgLen != item->resource_size ||
         pb.hFileInfo.ioFlFndrInfo.fdType != item->file_type || pb.hFileInfo.ioFlFndrInfo.fdCreator != item->creator)) err = ioErr;
-    if (!err && !catalog(&item->source, &gone)) err = ioErr;
+    if (!err && !fs_catalog(&item->source, &gone)) err = ioErr;
     if (err) return trash_stopped(o, "uncertain", "MOVE_UNCERTAIN_INSPECT_PATHS", err, 1, 1);
     snprintf(trash_work.record, sizeof(trash_work.record),
         "{\"status\":\"ok\",\"code\":\"TRASHED\",\"kind\":\"move_to_trash\","
@@ -1521,19 +1442,12 @@ static int trash_commit_one(TrashItem *item, short trash_vref, long trash_dir, c
 /* One {path, revision} object into *item. 1 parsed, 0 malformed. */
 static int trash_parse_item(const char *arguments, const JsonToken *tokens, int object, TrashItem *item)
 {
-    int k, keys = 0, path_token = -1, revision_token = -1;
     memset(item, 0, sizeof(*item));
-    for (k = object + 1; k < tokens[object].next; k = tokens[k + 1].next) {
-        char key[32];
-        if (json_string(arguments, tokens, k, key, sizeof(key)) < 0) return 0;
-        keys++;
-        if (!strcmp(key, "path") && path_token < 0) path_token = k + 1;
-        else if (!strcmp(key, "revision") && revision_token < 0) revision_token = k + 1;
-        else return 0;
-    }
-    return keys == 2 && path_token >= 0 && revision_token >= 0 &&
-        json_string(arguments, tokens, path_token, item->path, sizeof(item->path)) >= 0 &&
-        json_string(arguments, tokens, revision_token, item->revision, sizeof(item->revision)) >= 0 &&
+    if (json_args_check_keys(arguments, tokens, object, "|path||revision|")) return 0;
+    return json_string(arguments, tokens, json_member(arguments, tokens, object, "path"),
+                       item->path, sizeof(item->path)) >= 0 &&
+        json_string(arguments, tokens, json_member(arguments, tokens, object, "revision"),
+                    item->revision, sizeof(item->revision)) >= 0 &&
         !strncmp(item->revision, "cat-", 4);
 }
 /* The files array into items. Count on success; 0 refused with out set. */
@@ -1541,7 +1455,7 @@ static int trash_parse(const AgentCall *call, const JsonToken *tokens, TrashItem
                        char *out, size_t cap)
 {
     int count = 0, i, files_token;
-    if (valid_keys(call->arguments, tokens, "|files|")) {
+    if (json_args_check_keys(call->arguments, tokens, 0, "|files|")) {
         fail(out, cap, "ARGUMENTS", "Expected only a files array of {path, revision} objects.", 0); return 0;
     }
     files_token = json_member(call->arguments, tokens, 0, "files");
@@ -1628,13 +1542,13 @@ static int copy_result(char *out, size_t cap, const char *status, const char *co
     size_t at = 0;
     char head[96], tail[112];
     snprintf(head, sizeof(head), "{\"status\":\"%s\",\"code\":\"%s\",\"kind\":\"copy_file\",\"path\":", status, code);
-    if (append(out, cap, &at, head) || quote(out, cap, &at, copy_work.path) ||
-        append(out, cap, &at, ",\"destination\":") || quote(out, cap, &at, copy_work.destination) ||
-        append(out, cap, &at, ",\"temporary_path\":") || quote(out, cap, &at, copy_work.temporary))
+    if (json_buf_append(JSON_BUF(out, cap, &at), head) || json_buf_quote(JSON_BUF(out, cap, &at), copy_work.path) ||
+        json_buf_append(JSON_BUF(out, cap, &at), ",\"destination\":") || json_buf_quote(JSON_BUF(out, cap, &at), copy_work.destination) ||
+        json_buf_append(JSON_BUF(out, cap, &at), ",\"temporary_path\":") || json_buf_quote(JSON_BUF(out, cap, &at), copy_work.temporary))
         return -1;
     snprintf(tail, sizeof(tail), ",\"data_bytes\":%ld,\"resource_bytes\":%ld,\"revision\":\"%s\",\"os_error\":%d}",
         copy_work.data_size, copy_work.resource_size, copy_work.revision, native);
-    return append(out, cap, &at, tail) ? -1 : 0;
+    return json_buf_append(JSON_BUF(out, cap, &at), tail) ? -1 : 0;
 }
 /* Close any open forks and report a failure before the publication rename:
  * the staged file is retained for inspection, the destination was never
@@ -1665,10 +1579,10 @@ static int copy_file_begin_checked(const AgentCall *call, const JsonToken *token
     if (cap < AGENT_RESULT_CAP) { if (cap) out[0] = 0; return 1; }
     cap = AGENT_RESULT_CAP;
     if (copy_work.active) { fail(out, cap, "COPY_BUSY", "A copy is already active.", 0); return 1; }
-    if (valid_keys(call->arguments, tokens, "|path||revision||destination|") ||
-        string_arg(call->arguments, tokens, "path", copy_work.path, sizeof(copy_work.path)) < 0 ||
-        string_arg(call->arguments, tokens, "revision", copy_work.revision, sizeof(copy_work.revision)) < 0 ||
-        string_arg(call->arguments, tokens, "destination", copy_work.destination, sizeof(copy_work.destination)) < 0) {
+    if (json_args_check_keys(call->arguments, tokens, 0, "|path||revision||destination|") ||
+        json_args_string(call->arguments, tokens, "path", copy_work.path, sizeof(copy_work.path)) < 0 ||
+        json_args_string(call->arguments, tokens, "revision", copy_work.revision, sizeof(copy_work.revision)) < 0 ||
+        json_args_string(call->arguments, tokens, "destination", copy_work.destination, sizeof(copy_work.destination)) < 0) {
         fail(out, cap, "ARGUMENTS", "Expected only path, revision and destination strings.", 0); return 0;
     }
     if (strncmp(copy_work.revision, "cat-", 4)) {
@@ -1676,7 +1590,7 @@ static int copy_file_begin_checked(const AgentCall *call, const JsonToken *token
     }
     err = tools_resolve(copy_work.path, &copy_work.source);
     if (err) { fail(out, cap, "FILE", "Cannot resolve the source path.", err); return 0; }
-    err = catalog(&copy_work.source, &copy_work.original);
+    err = fs_catalog(&copy_work.source, &copy_work.original);
     if (err) { fail(out, cap, "FILE", "Cannot inspect the source file.", err); return 0; }
     if (copy_work.original.hFileInfo.ioFlAttrib & 16) {
         fail(out, cap, "NOT_FILE", "Only files can be copied; folders are never copied.", 0); return 0;
@@ -1715,7 +1629,7 @@ static int copy_file_begin_checked(const AgentCall *call, const JsonToken *token
         copy_work.stage = copy_work.target;
         copy_work.stage.name[0] = (unsigned char)strlen(tempname);
         memcpy(copy_work.stage.name + 1, tempname, copy_work.stage.name[0]);
-        err = catalog(&copy_work.stage, &pb);
+        err = fs_catalog(&copy_work.stage, &pb);
         if (!err) continue;
         if (err != fnfErr) { fail(out, cap, "STAGE", "Cannot inspect temporary destination.", err); return 0; }
         snprintf(copy_work.temporary, sizeof(copy_work.temporary), "%.*s%s", (int)prefix, copy_work.destination, tempname);
@@ -1733,7 +1647,7 @@ static int copy_file_begin_checked(const AgentCall *call, const JsonToken *token
     if (attempt == 100) { fail(out, cap, "STAGE", "Temporary name collisions; no destination created.", 0); return 0; }
     if (err) return copy_failed(out, cap, "STAGE_FAILED_INSPECT_TEMP", err, 0);
     copy_work.journal = journal; copy_work.context = context;
-    copy_work.data_hash = copy_work.resource_hash = 2166136261UL;
+    copy_work.data_hash = copy_work.resource_hash = fs_fnv1a(NULL,0);
     copy_work.phase = COPY_DATA; copy_work.offset = 0;
     copy_work.read_ref = copy_work.write_ref = -1;
     copy_work.started = now; copy_work.active = 1;
@@ -1778,7 +1692,7 @@ int copy_file_step(char *out, size_t cap, uint32_t now, int stop)
                                               : FSpOpenRF(&copy_work.stage, fsRdPerm, &copy_work.read_ref);
             if (!err) err = SetFPos(copy_work.read_ref, fsFromStart, 0);
             if (err) return copy_failed(out, cap, "OPEN", err, 0);
-            copy_work.verify_hash = 2166136261UL;
+            copy_work.verify_hash = fs_fnv1a(NULL,0);
             copy_work.offset = 0;
             copy_work.phase += 1;
             return 2;
@@ -1786,7 +1700,7 @@ int copy_file_step(char *out, size_t cap, uint32_t now, int stop)
         count = n;
         err = FSRead(copy_work.read_ref, &count, copy_work.scratch);
         if (err || count != n) return copy_failed(out, cap, "READ", err ? err : ioErr, 0);
-        *hash = hash_more(*hash, copy_work.scratch, n);
+        *hash = fs_fnv1a_more(*hash, copy_work.scratch, n);
         err = FSWrite(copy_work.write_ref, &count, copy_work.scratch);
         if (err || count != n) return copy_failed(out, cap, "WRITE", err ? err : ioErr, 0);
         copy_work.offset += n;
@@ -1808,13 +1722,13 @@ int copy_file_step(char *out, size_t cap, uint32_t now, int stop)
         count = n;
         err = FSRead(copy_work.read_ref, &count, copy_work.scratch);
         if (err || count != n) return copy_failed(out, cap, "READ", err ? err : ioErr, 0);
-        copy_work.verify_hash = hash_more(copy_work.verify_hash, copy_work.scratch, n);
+        copy_work.verify_hash = fs_fnv1a_more(copy_work.verify_hash, copy_work.scratch, n);
         copy_work.offset += n;
         return 2;
     }
     if (copy_work.phase == COPY_META) {
         /* The pinned source must be unchanged since the copy began. */
-        err = catalog(&copy_work.source, &pb);
+        err = fs_catalog(&copy_work.source, &pb);
         if (err) return copy_failed(out, cap, "FILE", err, 0);
         if (!revision_matches(&pb, copy_work.revision) ||
             pb.hFileInfo.ioFlLgLen != copy_work.data_size || pb.hFileInfo.ioFlRLgLen != copy_work.resource_size)
@@ -1826,7 +1740,7 @@ int copy_file_step(char *out, size_t cap, uint32_t now, int stop)
         if (err) return copy_failed(out, cap, "INFO", err, 0);
         err = FlushVol(NULL, copy_work.stage.vRefNum);
         if (err) return copy_failed(out, cap, "FLUSH", err, 0);
-        err = catalog(&copy_work.stage, &pb);
+        err = fs_catalog(&copy_work.stage, &pb);
         if (!err && (pb.hFileInfo.ioFlLgLen != copy_work.data_size ||
             pb.hFileInfo.ioFlRLgLen != copy_work.resource_size ||
             pb.hFileInfo.ioFlFndrInfo.fdType != copy_work.original.hFileInfo.ioFlFndrInfo.fdType ||
@@ -1849,7 +1763,7 @@ int copy_file_step(char *out, size_t cap, uint32_t now, int stop)
     if (err) goto uncertain;
     err = FlushVol(NULL, copy_work.target.vRefNum);
     if (err) goto uncertain;
-    err = catalog(&copy_work.target, &pb);
+    err = fs_catalog(&copy_work.target, &pb);
     if (err) goto uncertain;
     if (pb.hFileInfo.ioFlLgLen != copy_work.data_size || pb.hFileInfo.ioFlRLgLen != copy_work.resource_size ||
         pb.hFileInfo.ioFlFndrInfo.fdType != copy_work.original.hFileInfo.ioFlFndrInfo.fdType ||
@@ -1885,9 +1799,9 @@ static int project_result(char *out, size_t cap, const char *status, const char 
     snprintf(head, sizeof(head), "{\"status\":\"%s\",\"code\":\"%s\",\"path\":", status, code);
     snprintf(tail, sizeof(tail), ",\"template\":\"ppc-toolbox-v1\",\"files\":[\"main.c\",\"app.r\",\"project.json\"],"
         "\"build_supported\":true,\"launch_supported\":true,\"os_error\":%d}", native);
-    return append(out, cap, &at, head) || quote(out, cap, &at, path) ||
-        append(out, cap, &at, ",\"temporary_path\":") || quote(out, cap, &at, temporary) ||
-        append(out, cap, &at, tail) ? -1 : 0;
+    return json_buf_append(JSON_BUF(out, cap, &at), head) || json_buf_quote(JSON_BUF(out, cap, &at), path) ||
+        json_buf_append(JSON_BUF(out, cap, &at), ",\"temporary_path\":") || json_buf_quote(JSON_BUF(out, cap, &at), temporary) ||
+        json_buf_append(JSON_BUF(out, cap, &at), tail) ? -1 : 0;
 }
 /* The template files are published by the one shared verified write and
  * re-proved the same way after the folder rename (issue #41). */
@@ -1910,8 +1824,8 @@ static int create_project(const AgentCall *call, const JsonToken *tokens, char *
     int attempt, i;
     size_t prefix;
     const char *status = "error", *code = "PROJECT_STAGE_RETAINED";
-    if (valid_keys(call->arguments, tokens, "|path|") ||
-        string_arg(call->arguments, tokens, "path", path, sizeof(path)) < 0) {
+    if (json_args_check_keys(call->arguments, tokens, 0, "|path|") ||
+        json_args_string(call->arguments, tokens, "path", path, sizeof(path)) < 0) {
         fail(out, cap, "ARGUMENTS", "Expected only a path string for a new ppc-toolbox-v1 project.", 0); return 0;
     }
     err = tools_resolve(path, &target);
@@ -1934,7 +1848,7 @@ static int create_project(const AgentCall *call, const JsonToken *tokens, char *
         extern unsigned long TickCount(void);
         snprintf(tempname, sizeof(tempname), "Sherclawk project %08lx %02x", (unsigned long)TickCount() & 0xffffffffUL, attempt);
         stage = target; stage.name[0] = (unsigned char)strlen(tempname); memcpy(stage.name + 1, tempname, stage.name[0]);
-        err = catalog(&stage, &pb);
+        err = fs_catalog(&stage, &pb);
         if (!err) continue;
         if (err != fnfErr) { fail(out, cap, "STAGE", "Cannot inspect project staging name.", err); return 0; }
         snprintf(temporary, sizeof(temporary), "%.*s%s", (int)prefix, path, tempname);
@@ -1947,7 +1861,7 @@ static int create_project(const AgentCall *call, const JsonToken *tokens, char *
     if (attempt == 100) { fail(out, cap, "STAGE", "Project staging names exhausted.", 0); return 0; }
     if (err) goto retained;
     err = FlushVol(NULL, stage.vRefNum);
-    if (!err) err = catalog(&stage, &pb);
+    if (!err) err = fs_catalog(&stage, &pb);
     if (!err && (!(pb.hFileInfo.ioFlAttrib & 16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000) || pb.dirInfo.ioDrDirID != dir)) err = ioErr;
     if (err) goto retained;
     for (i = 0; i < (int)(sizeof(project_inputs)/sizeof(project_inputs[0])); i++) {
@@ -1962,7 +1876,7 @@ static int create_project(const AgentCall *call, const JsonToken *tokens, char *
     status = "uncertain"; code = "PROJECT_PUBLISH_UNCERTAIN";
     if (err) goto retained;
     err = FlushVol(NULL, target.vRefNum);
-    if (!err) err = catalog(&target, &pb);
+    if (!err) err = fs_catalog(&target, &pb);
     if (!err && (!(pb.hFileInfo.ioFlAttrib & 16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000) || pb.dirInfo.ioDrDirID != dir)) err = ioErr;
     if (err) goto retained;
     for (i = 0; i < (int)(sizeof(project_inputs)/sizeof(project_inputs[0])); i++) {

@@ -7,6 +7,7 @@
 #include "fsutil.h"
 #include <Script.h>
 #include <string.h>
+#include <stdio.h>
 
 /* Read-back scratch, static because the application stack is small. The
  * largest one-shot body today is write_text's string cap; a longer body is
@@ -15,7 +16,7 @@ static char fs_readback[4096];
 
 /* A catalog lookup by directory ID never writes through ioNamePtr; the const
  * spec view is the published contract. */
-static OSErr fs_catalog(const FSSpec *file, CInfoPBRec *pb)
+OSErr fs_catalog(const FSSpec *file, CInfoPBRec *pb)
 {
     memset(pb, 0, sizeof(*pb));
     pb->hFileInfo.ioNamePtr = (unsigned char *)file->name;
@@ -23,6 +24,36 @@ static OSErr fs_catalog(const FSSpec *file, CInfoPBRec *pb)
     pb->hFileInfo.ioDirID = file->parID;
     return PBGetCatInfoSync(pb);
 }
+
+int fs_is_alias(const CInfoPBRec *p)
+{ return p->hFileInfo.ioFlFndrInfo.fdType == 'alis' || (p->hFileInfo.ioFlFndrInfo.fdFlags & 0x8000); }
+int fs_same_file(const CInfoPBRec *a, const CInfoPBRec *b)
+{
+    return a->hFileInfo.ioDirID == b->hFileInfo.ioDirID &&
+        a->hFileInfo.ioFlMdDat == b->hFileInfo.ioFlMdDat &&
+        a->hFileInfo.ioFlLgLen == b->hFileInfo.ioFlLgLen &&
+        a->hFileInfo.ioFlRLgLen == b->hFileInfo.ioFlRLgLen &&
+        (a->hFileInfo.ioFlAttrib & 0x11) == (b->hFileInfo.ioFlAttrib & 0x11) &&
+        a->hFileInfo.ioFlFndrInfo.fdType == b->hFileInfo.ioFlFndrInfo.fdType &&
+        a->hFileInfo.ioFlFndrInfo.fdCreator == b->hFileInfo.ioFlFndrInfo.fdCreator &&
+        a->hFileInfo.ioFlFndrInfo.fdFlags == b->hFileInfo.ioFlFndrInfo.fdFlags;
+}
+uint32_t fs_fnv1a_more(uint32_t hash, const void *bytes, size_t size)
+{
+    const unsigned char *p = bytes;
+    size_t i;
+    for (i = 0; i < size; i++) hash = (hash ^ p[i]) * 16777619UL;
+    return hash;
+}
+uint32_t fs_fnv1a(const void *bytes, size_t size)
+{ return fs_fnv1a_more(2166136261UL, bytes, size); }
+void fs_revision_hash(const CInfoPBRec *pb, long size, uint32_t hash, char *out, size_t cap)
+{
+    snprintf(out, cap, "full-%08lx-%08lx-%08lx-%08lx", (unsigned long)pb->hFileInfo.ioDirID,
+        (unsigned long)pb->hFileInfo.ioFlMdDat, (unsigned long)size, (unsigned long)hash);
+}
+void fs_revision(const CInfoPBRec *pb, const void *bytes, long size, char *out, size_t cap)
+{ fs_revision_hash(pb, size, fs_fnv1a(bytes, (size_t)size), out, cap); }
 
 /* The catalog must show exactly what was written: a plain, non-alias file of
  * length data-fork bytes, no resource fork, with the identity it was created

@@ -1217,7 +1217,17 @@ static void view_checks(void)
     assert(view_begin("{\"path\":\"shot.png\"}")==2 && view_image_step(result,sizeof(result),101,0)==2);
     files[i].mddat++;
     assert(view_image_step(result,sizeof(result),102,0)==0 && strstr(result,"CHANGED") && !view_image_take() && !view_image_held());
-    files[i].mddat--; files[i].bytes[19999]^=1;
+    files[i].mddat--;
+    for(int change=0;change<3;change++) {
+        assert(view_begin("{\"path\":\"shot.png\"}")==2);
+        assert(view_image_step(result,sizeof(result),101,0)==2);
+        if(change==0)files[i].locked=1;
+        else if(change==1)files[i].info.fdFlags=0x4000;
+        else files[i].info.fdCreator='Oops';
+        assert(view_image_step(result,sizeof(result),102,0)==0 && strstr(result,"CHANGED") && !view_image_take() && !view_image_held());
+        files[i].locked=0;files[i].info.fdFlags=0;files[i].info.fdCreator=0;
+    }
+    files[i].bytes[19999]^=1;
     assert(view_begin("{\"path\":\"shot.png\"}")==2 && view_image_step(result,sizeof(result),101,0)==2);
     assert(view_image_step(result,sizeof(result),102,0)==0 && strstr(result,"NOT_PNG") && strstr(result,"IEND") && !view_image_take());
     puts("PASS view_image: vision gating, argument and file checks, bounded stepped reads, Stop, deadline, change detection and single hand-off");
@@ -2134,6 +2144,36 @@ static void queue_guard_checks(void)
     assert(strstr(result, "ARGUMENTS"));
     puts("PASS configured queue guard: registry inheritance, both dispatch paths, case and component boundaries");
 }
+#ifdef TEST_BUILD_REVISIONS
+/* Called by the native build fixture on its actual build_snapshot journal.
+ * Read independently through the public tool, including whole-file scanning,
+ * so the manifest cannot silently drift from the edit guard's revision. */
+static void manifest_matches_read_text(const char *manifest)
+{
+    JsonToken tokens[128];
+    AgentCall saved_call = call;
+    char saved_result[sizeof(result)], path[512], expected[80], actual[80];
+    int inputs, i, checked = 0;
+    memcpy(saved_result, result, sizeof(result));
+    assert(json_parse(manifest, strlen(manifest), tokens, 128) > 0);
+    inputs = json_member(manifest, tokens, 0, "inputs");
+    assert(inputs >= 0 && tokens[inputs].type == JSON_ARRAY);
+    for (i = inputs + 1; i < tokens[inputs].next; i = tokens[i].next) {
+        assert(json_string(manifest, tokens, json_member(manifest, tokens, i, "path"), path, sizeof(path)) > 0);
+        assert(json_string(manifest, tokens, json_member(manifest, tokens, i, "revision"), expected, sizeof(expected)) > 0);
+        strcpy(call.name, "read_text");
+        snprintf(call.arguments, sizeof(call.arguments), "{\"path\":\"%s\"}", path);
+        tools_execute(&call, result, sizeof(result));
+        field("revision", actual, sizeof(actual));
+        assert(!strcmp(expected, actual));
+        checked++;
+    }
+    assert(checked == 2); /* descriptor and source */
+    call = saved_call;
+    memcpy(result, saved_result, sizeof(result));
+}
+#endif
+
 int main(void)
 {
     queue_guard_checks();

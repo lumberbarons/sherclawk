@@ -4,6 +4,8 @@
  * The fixed queue creates itself before first publication; the queue stays
  * read-only to model tools. Stop/deadline never cancel or replay published
  * compiler jobs. */
+#include "jsonargs.h"
+#include "fsutil.h"
 #include "build_project.h"
 #include "run_application.h"
 #include "json.h"
@@ -38,29 +40,11 @@ static uint32_t start_ticks;
 static AgentJournal journal_fn;
 static void *journal_context;
 static unsigned long sequence;
-static OSErr info(FSSpec *s,CInfoPBRec *p)
-{
-    memset(p,0,sizeof(*p)); p->hFileInfo.ioNamePtr=s->name;
-    p->hFileInfo.ioVRefNum=s->vRefNum; p->hFileInfo.ioDirID=s->parID;
-    return PBGetCatInfoSync(p);
-}
-static int plain(const CInfoPBRec *p)
+static int is_build_text(const CInfoPBRec *p)
 {
     return !(p->hFileInfo.ioFlAttrib & 16) && !p->hFileInfo.ioFlRLgLen &&
-        p->hFileInfo.ioFlFndrInfo.fdType=='TEXT' && !(p->hFileInfo.ioFlFndrInfo.fdFlags & 0x8000) &&
+        p->hFileInfo.ioFlFndrInfo.fdType=='TEXT' && !fs_is_alias(p) &&
         p->hFileInfo.ioFlLgLen>=0;
-}
-static int same(const CInfoPBRec *a,const CInfoPBRec *b)
-{
-    return a->hFileInfo.ioDirID==b->hFileInfo.ioDirID && a->hFileInfo.ioFlMdDat==b->hFileInfo.ioFlMdDat &&
-        a->hFileInfo.ioFlLgLen==b->hFileInfo.ioFlLgLen && plain(b) &&
-        a->hFileInfo.ioFlFndrInfo.fdCreator==b->hFileInfo.ioFlFndrInfo.fdCreator;
-}
-static uint32_t hash(const char *p,size_t n)
-{
-    uint32_t h=2166136261UL; size_t i;
-    for(i=0;i<n;i++) h=(h^(unsigned char)p[i])*16777619UL;
-    return h;
 }
 static int add(char *out,size_t cap,size_t *at,const char *fmt,...)
 {
@@ -69,19 +53,6 @@ static int add(char *out,size_t cap,size_t *at,const char *fmt,...)
     va_start(args,fmt); n=vsnprintf(out+*at,cap-*at,fmt,args); va_end(args);
     if(n<0 || (size_t)n>=cap-*at)return -1;
     *at+=(size_t)n; return 0;
-}
-static int keys(const char *s,const JsonToken *t,int object,const char *allowed)
-{
-    int i,j; char key[64],prev[64],match[68];
-    if(object<0 || t[object].type!=JSON_OBJECT)return -1;
-    for(i=object+1;i<t[object].next;i=t[i+1].next) {
-        if(json_string(s,t,i,key,sizeof(key))<0)return -1;
-        snprintf(match,sizeof(match),"|%s|",key); if(!strstr(allowed,match))return -1;
-        for(j=object+1;j<i;j=t[j+1].next) {
-            if(json_string(s,t,j,prev,sizeof(prev))<0 || !strcmp(prev,key))return -1;
-        }
-    }
-    return 0;
 }
 /* Lowercase names avoid HFS case collisions. Colon paths have no empty,
  * dot, parent, absolute, MPW metacharacter or shell metacharacter components. */
@@ -123,10 +94,10 @@ static int parse(const char *s,Descriptor *d)
 {
     JsonToken t[128]; int a,i,k; char value[64];
     memset(d,0,sizeof(*d)); strcpy(d->creator,"ShCk"); d->stdclib=1;
-    if(json_parse(s,strlen(s),t,128)<1 || keys(s,t,0,"|protocol||toolchain||sources||resources||headers||include_paths||output||settings||template|"))return -1;
+    if(json_parse(s,strlen(s),t,128)<1 || json_args_check_keys(s,t,0,"|protocol||toolchain||sources||resources||headers||include_paths||output||settings||template|"))return -1;
     a=json_member(s,t,0,"protocol"); if(a<0 || t[a].type!=JSON_PRIMITIVE || t[a].end-t[a].start!=1 || s[t[a].start]!='2')return -1;
-    if(json_string(s,t,json_member(s,t,0,"toolchain"),value,sizeof(value))<0 || strcmp(value,ADAPTER))return -1;
-    if(json_string(s,t,json_member(s,t,0,"output"),d->output,32)<0 || !name_valid(d->output,0) || !strcmp(d->output,"success.txt"))return -1;
+    if(json_args_string(s,t,"toolchain",value,sizeof(value))<0 || strcmp(value,ADAPTER))return -1;
+    if(json_args_string(s,t,"output",d->output,32)<0 || !name_valid(d->output,0) || !strcmp(d->output,"success.txt"))return -1;
     d->sources=array(s,t,"sources",d,1,".c"); if(d->sources<1)return -1;
     d->resources=array(s,t,"resources",d,0,".r"); if(d->resources<0 || array(s,t,"headers",d,0,".h")<0)return -1;
     a=json_member(s,t,0,"include_paths");
@@ -143,7 +114,7 @@ static int parse(const char *s,Descriptor *d)
     a=json_member(s,t,0,"settings");
     if(a>=0) {
         int b;
-        if(keys(s,t,a,"|warnings||libraries||creator|"))return -1;
+        if(json_args_check_keys(s,t,a,"|warnings||libraries||creator|"))return -1;
         b=json_member(s,t,a,"warnings");
         if(b>=0 && (json_string(s,t,b,value,sizeof(value))<0 || strcmp(value,"off")))return -1;
         b=json_member(s,t,a,"creator");
@@ -252,19 +223,19 @@ static int resolve_input(int i)
 {
     char path[768];
     snprintf(path,sizeof(path),"%s:%s",project,i ? descriptor.paths[i-1] : "project.json");
-    return tools_resolve(path,&specs[i]) || info(&specs[i],&infos[i]) || !plain(&infos[i]) ? -1 : 0;
+    return tools_resolve(path,&specs[i]) || fs_catalog(&specs[i],&infos[i]) || !is_build_text(&infos[i]) ? -1 : 0;
 }
 int build_project_begin(const AgentCall *call,char *out,size_t cap,AgentJournal journal,void *ctx,uint32_t now)
 {
     JsonToken t[16]; FSSpec folder; CInfoPBRec p;
     if(active) { snprintf(out,cap,"{\"status\":\"error\",\"code\":\"BUILD_BUSY\"}"); return 1; }
     id[0]=0;
-    if(json_parse(call->arguments,strlen(call->arguments),t,16)<1 || keys(call->arguments,t,0,"|path|") ||
-        json_string(call->arguments,t,json_member(call->arguments,t,0,"path"),project,sizeof(project))<0)return error(out,cap,"PROJECT_PATH",0);
+    if(json_parse(call->arguments,strlen(call->arguments),t,16)<1 || json_args_check_keys(call->arguments,t,0,"|path|") ||
+        json_args_string(call->arguments,t,"path",project,sizeof(project))<0)return error(out,cap,"PROJECT_PATH",0);
     /* list_files returns folder paths with a trailing colon. Accept that same
      * spelling, but leave validation of all other components to tools_resolve. */
     { size_t n=strlen(project); if(n && project[n-1]==':')project[n-1]=0; }
-    if(tools_resolve(project,&folder) || info(&folder,&p) || !(p.hFileInfo.ioFlAttrib & 16) ||
+    if(tools_resolve(project,&folder) || fs_catalog(&folder,&p) || !(p.hFileInfo.ioFlAttrib & 16) ||
         (p.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000))return error(out,cap,"PROJECT_PATH",0);
     if(!journal)return error(out,cap,"JOURNAL_REQUIRED",1);
     memset(&job,0,sizeof(job)); job.state=JOB_ABANDONED;
@@ -272,7 +243,7 @@ int build_project_begin(const AgentCall *call,char *out,size_t cap,AgentJournal 
     if(resolve_input(0))return error(out,cap,"DESCRIPTOR_TEXT_OR_SIZE",0);
     sizes[0]=infos[0].hFileInfo.ioFlLgLen;
     if(sizes[0]>TOOLS_DESCRIPTOR_CAP)return error_message(out,cap,"SNAPSHOT_SIZE_LIMIT", TOOLS_SNAPSHOT_LIMIT_MESSAGE, 0);
-    source_offsets[0]=0;arena_used=(size_t)sizes[0]+1;hashes[0]=2166136261UL;
+    source_offsets[0]=0;arena_used=(size_t)sizes[0]+1;hashes[0]=fs_fnv1a(NULL,0);
     native_attempted=native_claimed=not_started=0; diagnostic_size=0; diagnostic[0]=0; phase=0; file_index=0; offset=0; second_pass=0; active=1;
     return 2;
 }
@@ -283,7 +254,7 @@ static int read_step(int i)
     if(n>JOB_PAGE)n=JOB_PAGE;
     snprintf(path,sizeof(path),"%s:%s",project,i ? descriptor.paths[i-1] : "project.json");
     if(tools_resolve(path,&current) || current.vRefNum!=specs[i].vRefNum || current.parID!=specs[i].parID ||
-        info(&current,&p) || !same(&infos[i],&p))return -1;
+        fs_catalog(&current,&p) || !fs_same_file(&infos[i],&p))return -1;
     e=FSpOpenDF(&current,fsRdPerm,&ref); if(e)return -1;
     e=SetFPos(ref,fsFromStart,offset); got=n;
     if(!e)e=FSRead(ref,&got,page);
@@ -295,8 +266,8 @@ static int read_step(int i)
         for(k=0;k<n;k++) {
             unsigned char c=(unsigned char)page[k];
             if(c==127 || (c<32 && c!='\r' && c!='\t'))return -1;
-            hashes[i]=(hashes[i]^c)*16777619UL;
         }
+        hashes[i]=fs_fnv1a_more(hashes[i],page,(size_t)n);
         memcpy(input_bytes(i)+offset,page,(size_t)n);
     }
     offset+=n; input_bytes(i)[sizes[i]]=0;
@@ -319,11 +290,11 @@ static int finish(char *out,size_t cap,uint32_t now)
         FSSpec s; CInfoPBRec p; char expected[80],observed[80]; short ref; long n; OSErr e,c;
         snprintf(artifact,sizeof(artifact),QUEUE ":%s:build:native:success.txt",id);
         snprintf(expected,sizeof(expected),"artifact=%s\n",descriptor.output);
-        if(tools_resolve(artifact,&s) || info(&s,&p) || !plain(&p) || p.hFileInfo.ioFlLgLen!=(long)strlen(expected) || FSpOpenDF(&s,fsRdPerm,&ref))return error(out,cap,"ARTIFACT_RECORD_INVALID",1);
+        if(tools_resolve(artifact,&s) || fs_catalog(&s,&p) || !is_build_text(&p) || p.hFileInfo.ioFlLgLen!=(long)strlen(expected) || FSpOpenDF(&s,fsRdPerm,&ref))return error(out,cap,"ARTIFACT_RECORD_INVALID",1);
         n=(long)strlen(expected); e=FSRead(ref,&n,observed); c=FSClose(ref);
         if(e || c || n!=(long)strlen(expected) || memcmp(observed,expected,(size_t)n))return error(out,cap,"ARTIFACT_RECORD_INVALID",1);
         snprintf(artifact,sizeof(artifact),QUEUE ":%s:build:native:%s",id,descriptor.output);
-        if(tools_resolve(artifact,&s) || info(&s,&p) || (p.hFileInfo.ioFlAttrib & 16) ||
+        if(tools_resolve(artifact,&s) || fs_catalog(&s,&p) || (p.hFileInfo.ioFlAttrib & 16) ||
             (p.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000) || p.hFileInfo.ioFlFndrInfo.fdType!='APPL' || p.hFileInfo.ioFlLgLen<=0 || p.hFileInfo.ioFlRLgLen<=0)return error(out,cap,"ARTIFACT_INVALID",1);
     }
     json_quote(artifact,q,sizeof(q));
@@ -358,7 +329,7 @@ static int ensure_queue(void)
     CInfoPBRec pb;
     long dir,created;
     OSErr e;
-    if(tools_workspace_root(&parent) || info(&parent,&pb) || !(pb.hFileInfo.ioFlAttrib & 16) ||
+    if(tools_workspace_root(&parent) || fs_catalog(&parent,&pb) || !(pb.hFileInfo.ioFlAttrib & 16) ||
         (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000) || strlen(QUEUE)>=sizeof(rest))return -1;
     dir=pb.dirInfo.ioDrDirID;
     strcpy(rest,QUEUE); part=rest;
@@ -371,13 +342,13 @@ static int ensure_queue(void)
         memcpy(folder,part,n); folder[n]=0;
         name[0]=(unsigned char)n; memcpy(name+1,part,n);
         e=FSMakeFSSpec(parent.vRefNum,dir,name,&spec);
-        if(!e)e=info(&spec,&pb);
+        if(!e)e=fs_catalog(&spec,&pb);
         if(e==fnfErr) {
             if(queue_record("queue_intent",folder))return -1;
             e=FSpDirCreate(&spec,smSystemScript,&created);
             if(e==dupFNErr)e=noErr;
             if(!e)e=FlushVol(NULL,spec.vRefNum);
-            if(!e)e=info(&spec,&pb);
+            if(!e)e=fs_catalog(&spec,&pb);
             made=1;
         }
         if(e || !(pb.hFileInfo.ioFlAttrib & 16) || (pb.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000))return -1;
@@ -402,7 +373,7 @@ int build_project_step(char *out,size_t cap,uint32_t now,int stop)
                 if(resolve_input(i))return error(out,cap,"INPUT_MISSING_TEXT_OR_SIZE",0);
                 sizes[i]=infos[i].hFileInfo.ioFlLgLen;
                 if(sizes[i]>FILE_BYTES || (size_t)sizes[i]+1>sizeof(arena)-arena_used)return error_message(out,cap,"SNAPSHOT_SIZE_LIMIT", TOOLS_SNAPSHOT_LIMIT_MESSAGE, 0);
-                source_offsets[i]=arena_used;arena_used+=(size_t)sizes[i]+1;hashes[i]=2166136261UL;
+                source_offsets[i]=arena_used;arena_used+=(size_t)sizes[i]+1;hashes[i]=fs_fnv1a(NULL,0);
             }
             phase=1; file_index=1; return 2;
         }
@@ -410,11 +381,13 @@ int build_project_step(char *out,size_t cap,uint32_t now,int stop)
         {
             FSSpec queue; JobInput inputs[JOB_INPUT_MAX]; size_t at=0; int i;
             snprintf(id,sizeof(id),"build-%08lx-%04lx",(unsigned long)now,(++sequence)&0xffffUL);
-            if(add(manifest,sizeof(manifest),&at,"{\"build_id\":\"%s\",\"adapter\":\"" ADAPTER "\",\"recipe_hash\":\"%08lx\",\"inputs\":[",id,(unsigned long)hash(recipe,strlen(recipe))))return error(out,cap,"MANIFEST_LIMIT",0);
+            if(add(manifest,sizeof(manifest),&at,"{\"build_id\":\"%s\",\"adapter\":\"" ADAPTER "\",\"recipe_hash\":\"%08lx\",\"inputs\":[",id,(unsigned long)fs_fnv1a(recipe,strlen(recipe))))return error(out,cap,"MANIFEST_LIMIT",0);
             for(i=0;i<=descriptor.count;i++) {
-                char q[1024],path[768];
+                char q[1024],path[768],revision[80];
+                /* Keep hashing cooperative: reuse the hash accumulated during reads. */
+                fs_revision_hash(&infos[i],sizes[i],hashes[i],revision,sizeof(revision));
                 snprintf(path,sizeof(path),"%s:%s",project,i ? descriptor.paths[i-1] : "project.json");
-                if(json_quote(path,q,sizeof(q))<0 || add(manifest,sizeof(manifest),&at,"%s{\"path\":%s,\"snapshot_file\":\"%s\",\"revision\":\"full-%08lx-%08lx-%08lx-%08lx\"}",i ? "," : "",q,i ? descriptor.staged[i-1] : "project.json",(unsigned long)infos[i].hFileInfo.ioDirID,(unsigned long)infos[i].hFileInfo.ioFlMdDat,(unsigned long)sizes[i],(unsigned long)hashes[i]))return error(out,cap,"MANIFEST_LIMIT",0);
+                if(json_quote(path,q,sizeof(q))<0 || add(manifest,sizeof(manifest),&at,"%s{\"path\":%s,\"snapshot_file\":\"%s\",\"revision\":\"%s\"}",i ? "," : "",q,i ? descriptor.staged[i-1] : "project.json",revision))return error(out,cap,"MANIFEST_LIMIT",0);
                 inputs[i].name=i ? descriptor.staged[i-1] : "project.json"; inputs[i].bytes=input_bytes(i); inputs[i].size=(size_t)sizes[i];
             }
             if(add(manifest,sizeof(manifest),&at,"]}"))return error(out,cap,"MANIFEST_LIMIT",0);
@@ -466,20 +439,14 @@ int build_project_step(char *out,size_t cap,uint32_t now,int stop)
 }
 void build_project_log(const AgentCall *call,char *out,size_t cap)
 {
-    JsonToken t[24]; char build[25],stream[16],number[32],path[256],bytes[257],utf8[1025],quoted[1300];
-    FSSpec s; CInfoPBRec p; long offset_value=0,n; short ref; OSErr e,c; int a,k;
-    if(json_parse(call->arguments,strlen(call->arguments),t,24)<1 || keys(call->arguments,t,0,"|build_id||stream||start_byte|") ||
-        json_string(call->arguments,t,json_member(call->arguments,t,0,"build_id"),build,sizeof(build))<0 || strncmp(build,"build-",6) || !name_valid(build,0) ||
-        json_string(call->arguments,t,json_member(call->arguments,t,0,"stream"),stream,sizeof(stream))<0 || (strcmp(stream,"stdout") && strcmp(stream,"stderr")))goto invalid;
-    a=json_member(call->arguments,t,0,"start_byte");
-    if(a>=0) {
-        int len=t[a].end-t[a].start;
-        if(t[a].type!=JSON_PRIMITIVE || len<1 || len>=31)goto invalid;
-        memcpy(number,call->arguments+t[a].start,(size_t)len); number[len]=0;
-        for(k=0;k<len;k++) { if(number[k]<'0' || number[k]>'9' || offset_value>(2147483647L-(number[k]-'0'))/10)goto invalid; offset_value=offset_value*10+number[k]-'0'; }
-    }
+    JsonToken t[24]; char build[25],stream[16],path[256],bytes[257],utf8[1025],quoted[1300];
+    FSSpec s; CInfoPBRec p; long offset_value=0,n; short ref; OSErr e,c; int k;
+    if(json_parse(call->arguments,strlen(call->arguments),t,24)<1 || json_args_check_keys(call->arguments,t,0,"|build_id||stream||start_byte|") ||
+        json_args_string(call->arguments,t,"build_id",build,sizeof(build))<0 || strncmp(build,"build-",6) || !name_valid(build,0) ||
+        json_args_string(call->arguments,t,"stream",stream,sizeof(stream))<0 || (strcmp(stream,"stdout") && strcmp(stream,"stderr")))goto invalid;
+    if(json_args_int(call->arguments,t,"start_byte",0,0,2147483647L,&offset_value))goto invalid;
     snprintf(path,sizeof(path),QUEUE ":%s:%s",build,stream);
-    if(tools_resolve(path,&s) || info(&s,&p) || (p.hFileInfo.ioFlAttrib & 16) || p.hFileInfo.ioFlRLgLen ||
+    if(tools_resolve(path,&s) || fs_catalog(&s,&p) || (p.hFileInfo.ioFlAttrib & 16) || p.hFileInfo.ioFlRLgLen ||
         (p.hFileInfo.ioFlFndrInfo.fdFlags & 0x8000) || p.hFileInfo.ioFlFndrInfo.fdType=='alis' || offset_value>p.hFileInfo.ioFlLgLen)goto invalid;
     n=p.hFileInfo.ioFlLgLen-offset_value; if(n>128)n=128;
     if(FSpOpenDF(&s,fsRdPerm,&ref))goto invalid;
