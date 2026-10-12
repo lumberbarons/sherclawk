@@ -27,9 +27,9 @@ static void arguments(void)
     for(size_t i=0;i<sizeof(invalid)/sizeof(*invalid);i++) {
         parse(invalid[i]);n=123;assert(json_args_int(invalid[i],tokens,"n",0,0,9,&n)<0 && n==123);
     }
-    char number[64];snprintf(number,sizeof(number),"{\"n\":%ld}",LONG_MIN);parse(number);
+    char number[64];snprintf(number,sizeof(number),"{\"n\":%ld}",(long)LONG_MIN);parse(number);
     assert(!json_args_int(number,tokens,"n",0,LONG_MIN,LONG_MAX,&n) && n==LONG_MIN);
-    snprintf(number,sizeof(number),"{\"n\":%ld}",LONG_MAX);parse(number);
+    snprintf(number,sizeof(number),"{\"n\":%ld}",(long)LONG_MAX);parse(number);
     assert(!json_args_int(number,tokens,"n",0,LONG_MIN,LONG_MAX,&n) && n==LONG_MAX);
 }
 static void buffers(void)
