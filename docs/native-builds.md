@@ -122,7 +122,10 @@ uncertain build is never replayed.
 
 `build_project` reads/compares closed input pages before reserving a fresh build
 ID. Its snapshot retains the descriptor, generated trusted recipe and manifest
-with the same whole-file revisions returned by `read_text` and a recipe hash.
+with whole-file `full-` revisions and a recipe hash. These match `read_text`
+only for files it reads whole (up to its accepted-file cap, see
+[limits](limits.md)); a larger build input is read in full by the snapshot, but
+`read_text` reports it with a `scan-` revision that never equals the snapshot's.
 A source pin covers file identity, modification date, both fork sizes, the
 lock/directory bits and Finder type, creator and flags; changing any of these
 during a snapshot read refuses the build before reservation. Transient

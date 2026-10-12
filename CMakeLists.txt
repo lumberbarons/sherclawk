@@ -7,8 +7,11 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # Shared native tool sources; read-only inspection lives in inspect.c, and
 # retained MCP results (mcp_result.c) re-run credential redaction from
 # mcp_config.c over what they retain; mcp_config.c parses URLs with
-# vendor/http.c, so every target that links TOOLS_SRC gets it too.
-set(TOOLS_SRC tools.c fsutil.c inspect.c mcp_guard.c mcp_result.c mcp_config.c registry.c vendor/http.c)
+# vendor/http.c, so every target that links TOOLS_SRC gets it too. jsonargs.c
+# (bounded argument checks and JSON output buffers over json.c) is used by the
+# executors, build_project.c, run_application.c, view_image.c and agent.c, all
+# of which link TOOLS_SRC.
+set(TOOLS_SRC tools.c fsutil.c jsonargs.c inspect.c mcp_guard.c mcp_result.c mcp_config.c registry.c vendor/http.c)
 # Certainly is fetch-only; build.sh expects it next to this repo. Override
 # with -DCERTAINLY_DIR=<path> when it is cloned elsewhere.
 if(NOT CERTAINLY_DIR)
@@ -21,7 +24,7 @@ add_subdirectory("${CERTAINLY_DIR}" certainly-src)
 # place; source sets used by several targets are variables below, so a new
 # module cannot reach only some of the targets (the drift behind #148).
 macro(sherclawk_app name)
-    add_application(${name} ${ARGN} jsonargs.c)
+    add_application(${name} ${ARGN})
     target_include_directories(${name} PRIVATE . vendor)
     target_link_libraries(${name} certainly FontManager)
     target_compile_options(${name} PRIVATE -Wall -Wextra -ffunction-sections)

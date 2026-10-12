@@ -28,7 +28,7 @@ while IFS= read -r file; do BEARSSL_SOURCES+=("$file"); done < <(find "$STAGE/be
     "${SAN_FLAGS[@]}" "${LOCAL_FLAGS[@]}" \
     -I"$HERE" -I"$HERE/vendor" -I"$HERE/vendor/host-tls/shim" \
     -I"$STAGE/include" -I"$STAGE/src" -I"$STAGE/bearssl/inc" -I"$STAGE/bearssl/src" \
-    "$HERE/tools/probe.c" "$HERE/agent.c" "$HERE/chat.c" "$HERE/json.c" "$HERE/text.c" \
+    "$HERE/tools/probe.c" "$HERE/agent.c" "$HERE/chat.c" "$HERE/json.c" "$HERE/jsonargs.c" "$HERE/registry.c" "$HERE/text.c" \
     "$HERE/network.c" "$HERE/vendor/http.c" \
     "$HERE/vendor/host-tls/host_transport.c" "$HERE/vendor/host-tls/host_shim.c" \
     "$STAGE/src/certainly.c" "$STAGE/src/tls13_handshake.c" \
