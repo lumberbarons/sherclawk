@@ -26,9 +26,10 @@ running Sherclawk a coherent account of its own incidents.
 
 ## Decision Drivers
 
-- A failed inference request prevents the model from investigating through
-  tools. Evidence collection and report export must work without inference,
-  an API key, MCP or a host executor.
+- When inference is unavailable, the model cannot investigate through tool
+  calls. Evidence collection and local report export must still work without
+  inference, an API key, MCP or a host executor, so the evidence is available
+  for model-assisted investigation when inference is working again.
 - Relaunch is a normal response to a classic Mac OS fault. Startup must preserve
   the previous launch's diagnostic evidence within a bounded retention policy.
 - OS 9 uses cooperative scheduling and has no memory protection. Diagnostic
@@ -69,6 +70,13 @@ without calling the model. The snapshot and event reader are read-only tools;
 report export is an explicit application-owned file publication. Collection
 continues independently of chat history and New Chat, and evidence remains
 available after relaunch subject to explicit storage bounds.
+
+Sherclawk uses inference and calls the diagnostic tools to investigate itself:
+the model reads current state and retained events, follows continuations,
+correlates observations and explains likely causes and remaining uncertainty.
+The requirement to work without inference applies to evidence collection and
+local report export, not to this model-assisted investigation. Retained evidence
+also lets a later working model session investigate an earlier failed run.
 
 The state snapshot and retained timeline are the first priorities. Together
 they let Sherclawk distinguish a timeout, malformed response, journal failure,
