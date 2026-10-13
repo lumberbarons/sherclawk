@@ -280,7 +280,7 @@ int main(void)
 #endif
     strcat(folder,"s");
     snprintf(args,sizeof(args),"{\"path\":\"%s\"}",folder); invoke("create_project",args);
-    replace("project.json","\"sources\":[\"main.c\"]","\"sources\":[\"main.c\",\"extra.c\"]");
+    replace("project.json","\"sources\":[\"main.c\",","\"sources\":[\"main.c\",\"extra.c\",");
     replace("project.json","\"output\":\"template\"","\"output\":\"starter\"");
     write_file("extra.c","#error deliberate starter compiler error\nint added_source(void) { return 7; }\n");
     if(build(window,0))goto done;
