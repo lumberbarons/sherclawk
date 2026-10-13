@@ -15,6 +15,7 @@
 #include <Folders.h>
 #include <Script.h>
 #include <Memory.h>
+#include <LowMem.h>
 #include <Gestalt.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -71,6 +72,18 @@ static int int_arg(const char *s, const JsonToken *t, const char *name, int def,
     long n;
     return json_args_int(s, t, name, def, low, high, &n) ? -1 : (int)n;
 }
+/* The application zone grows toward the application limit only when an
+ * allocation needs it, and FreeMem counts only the part already grown, so the
+ * ungrown gap is added to report the headroom the heap can reach. Growing the
+ * zone up front with MaxApplZone gave the same figure but crashed the
+ * Preferences dialog in OS 9 (see docs/limits.md). */
+static long free_heap_bytes(void)
+{
+    long free = (long)FreeMem();
+    Ptr end = LMGetHeapEnd(), limit = GetApplLimit();
+    if (limit > end) free += (long)(limit - end);
+    return free;
+}
 static void environment(char *out, size_t cap)
 {
     char root[768], q[1024], tail[512];
@@ -86,7 +99,7 @@ static void environment(char *out, size_t cap)
         json_buf_append(JSON_BUF(out, cap, &at), q) ||
         json_buf_append(JSON_BUF(out, cap, &at), ",\"paths\":\"relative colon-separated\","
             "\"encoding\":\"MacRoman data fork to UTF-8\",\"read_only\":false,\"free_heap_bytes\":") ||
-        snprintf(tail, sizeof(tail), "%ld", (long)FreeMem()) >= (int)sizeof(tail) ||
+        snprintf(tail, sizeof(tail), "%ld", free_heap_bytes()) >= (int)sizeof(tail) ||
         json_buf_append(JSON_BUF(out, cap, &at), tail) ||
         json_buf_append(JSON_BUF(out, cap, &at), ",\"tools\":[")) { fail(out, cap, "LIMIT", "Environment report exceeds result capacity.", 0); return; }
     for (i = 0; i < tools_count(); i++) {

@@ -132,6 +132,15 @@ static int length_of(int array)
     for (at = array + 1; at < wire[array].next; at = wire[at].next) n++;
     return n;
 }
+/* Members of an object token: its children alternate key and value. */
+static int members_of(int object)
+{
+    int at, n = 0;
+    assert(wire[object].type == JSON_OBJECT);
+    for (at = object + 1; at < wire[object].next; at = wire[at].next) n++;
+    assert((n & 1) == 0);
+    return n / 2;
+}
 static int is_text(int at, const char *want)
 {
     return json_string(req, wire, at, decoded, sizeof(decoded)) >= 0 && !strcmp(decoded, want);
@@ -189,7 +198,7 @@ static void check_tool_schemas(int tools, const char *const *extra, int extra_co
  * and the full tool schema list. Returns `length` so asserts can wrap a build. */
 static int pin(int length)
 {
-    int messages, i, n;
+    int messages, i, n, reasoning;
     if (length <= 0) return length;
     messages = parse_request(length, "model");
     assert(is_primitive(member(0, "parallel_tool_calls"), "false") && wire[member(0, "max_tokens")].type == JSON_PRIMITIVE);
@@ -204,6 +213,12 @@ static int pin(int length)
         if (is_text(role, "tool")) assert(json_string(req, wire, member(at, "tool_call_id"), decoded, sizeof(decoded)) > 0);
     }
     check_tool_schemas(member(0, "tools"), NULL, 0);
+    /* The reasoning member, when present, is exactly one effort string. */
+    reasoning = json_member(req, wire, 0, "reasoning");
+    if (reasoning >= 0) {
+        assert(members_of(reasoning) == 1);
+        assert(json_string(req, wire, member(reasoning, "effort"), decoded, sizeof(decoded)) > 0 && *decoded);
+    }
     return length;
 }
 /* pin() with frozen remote function schemas after the native rows: each
@@ -242,7 +257,7 @@ static void remote_row(char *out, size_t cap, const char *name)
 /* A handoff request carries the history, no tools, and asks for the summary last. */
 static int pin_handoff(int length)
 {
-    int messages, n;
+    int messages, n, reasoning;
     if (length <= 0) return length;
     messages = parse_request(length, "model");
     n = length_of(messages);
@@ -251,6 +266,12 @@ static int pin_handoff(int length)
     assert(json_string(req, wire, member(element(messages, 0), "content"), decoded, sizeof(decoded)) > 0 &&
            strstr(decoded, "Summarize this conversation"));
     assert(is_text(member(message(messages, n - 1, "user"), "content"), "Write the handoff summary now."));
+    /* The reasoning member, when present, is exactly one effort string. */
+    reasoning = json_member(req, wire, 0, "reasoning");
+    if (reasoning >= 0) {
+        assert(members_of(reasoning) == 1);
+        assert(json_string(req, wire, member(reasoning, "effort"), decoded, sizeof(decoded)) > 0 && *decoded);
+    }
     return length;
 }
 static void named_call(const char *finish, const char *name, const char *arguments)
@@ -271,7 +292,7 @@ static void remote_schemas(void)
     assert(agent_set_mcp_schemas(NULL) == 0);
     assert(agent_mcp_tool_count() == 0 && !agent_mcp_tool_frozen("mcp_tavily_tavily_search"));
     begin();
-    assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0);
+    assert(pin(agent_request(&a, "model", "", req, sizeof(req))) > 0);
 
     /* Refusals leave the previous advertisement untouched. */
     remote_row(row, sizeof(row), "read_text"); /* collides with a native tool */
@@ -317,11 +338,11 @@ static void remote_schemas(void)
         assert(agent_set_mcp_schemas(full) == 0);
         assert(agent_mcp_tool_count() == 2);
         begin();
-        assert(pin_remote(agent_request(&a, "model", req, sizeof(req)), full_names, 2) > 0);
+        assert(pin_remote(agent_request(&a, "model", "", req, sizeof(req)), full_names, 2) > 0);
         assert(agent_set_mcp_schemas(NULL) == 0);
     }
     begin();
-    assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0);
+    assert(pin(agent_request(&a, "model", "", req, sizeof(req))) > 0);
 
     /* Admission: the merged array carries the native rows plus each remote
      * row exactly once, in freeze order, and the request text shows them. */
@@ -332,7 +353,7 @@ static void remote_schemas(void)
     assert(agent_mcp_tool_frozen("mcp_tavily_tavily_extract"));
     assert(!agent_mcp_tool_frozen("get_environment") && !agent_mcp_tool_frozen(""));
     names[0] = "mcp_tavily_tavily_search"; names[1] = "mcp_tavily_tavily_extract";
-    assert(pin_remote(agent_request(&a, "model", req, sizeof(req)), names, 2) > 0);
+    assert(pin_remote(agent_request(&a, "model", "", req, sizeof(req)), names, 2) > 0);
     assert(strstr(req, "Search the web.") && strstr(req, "Extract one page."));
 
     /* The model answers with a remote call by mapped name; the arguments are
@@ -342,7 +363,7 @@ static void remote_schemas(void)
     assert(a.count == 1 && !strcmp(a.calls[0].name, "mcp_tavily_tavily_search"));
     assert(!strcmp(a.calls[0].arguments, "{\"query\":\"mac os 9\"}"));
     assert(!agent_tool_result(&a, "{\"status\":\"ok\",\"result_id\":\"mcp-00000001-0001\"}", error, sizeof(error)));
-    assert(pin_remote(agent_request(&a, "model", req, sizeof(req)), names, 2) > 0);
+    assert(pin_remote(agent_request(&a, "model", "", req, sizeof(req)), names, 2) > 0);
     assert(!agent_response(&a, final, strlen(final), 200, error, sizeof(error)));
     assert(!a.active);
 
@@ -354,7 +375,7 @@ static void remote_schemas(void)
     assert(!agent_stop(&a, "stopped"));
     assert(agent_mcp_tool_count() == 2);
     begin();
-    assert(pin_remote(agent_request(&a, "model", req, sizeof(req)), names, 2) > 0);
+    assert(pin_remote(agent_request(&a, "model", "", req, sizeof(req)), names, 2) > 0);
 
     /* A remote name at the 63-byte mapped limit is admitted; 64 bytes is not. */
     {
@@ -367,7 +388,7 @@ static void remote_schemas(void)
         assert(agent_mcp_tool_count() == 1 && agent_mcp_tool_frozen(name));
         long_name[0] = name;
         begin();
-        assert(pin_remote(agent_request(&a, "model", req, sizeof(req)), long_name, 1) > 0);
+        assert(pin_remote(agent_request(&a, "model", "", req, sizeof(req)), long_name, 1) > 0);
         memset(name, 'm', 64); name[64] = 0;
         remote_row(long_row, sizeof(long_row), name);
         assert(agent_set_mcp_schemas(long_row) == -1);
@@ -377,7 +398,7 @@ static void remote_schemas(void)
     /* Clearing restores the native-only advertisement. */
     assert(agent_mcp_tool_count() == 0 && !agent_mcp_tool_frozen("mcp_tavily_tavily_search"));
     begin();
-    assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0);
+    assert(pin(agent_request(&a, "model", "", req, sizeof(req))) > 0);
 }
 static const char *usage1 =
     "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Counted.\"}}],"
@@ -469,7 +490,7 @@ static void truncation(void)
     assert(a.truncated && a.limited && a.active && !a.count && !a.next);
     assert(a.rounds == 1 && !a.tool_count && records == 2 && a.messages == 2);
     assert(a.used > used && !strstr(a.history, "get_environment") && strstr(a.history, "cut off"));
-    assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0 && strstr(req, "output token limit"));
+    assert(pin(agent_request(&a, "model", "", req, sizeof(req))) > 0 && strstr(req, "output token limit"));
     /* The retry is an ordinary round and clears the flag. */
     call("tool_calls");
     assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
@@ -533,7 +554,7 @@ static void rejections(void)
     assert(a.discarded && strstr(a.discarded, "arguments") && !a.truncated && !a.limited);
     assert(a.active && !a.count && !a.next && a.rounds == 1 && !a.tool_count && records == 2);
     assert(a.used > used && !strstr(a.history, "c1") && strstr(a.history, "split"));
-    assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0 && strstr(req, "4096"));
+    assert(pin(agent_request(&a, "model", "", req, sizeof(req))) > 0 && strstr(req, "4096"));
     /* The retry is an ordinary round and clears the flag. */
     call("tool_calls");
     assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
@@ -668,7 +689,7 @@ static void images(void)
     assert(!strstr(a.history, "image_url") && !strstr(a.history, "base64"));
     assert(a.image_length == a.used - before - 1);
     /* The request after the attach splices the real image in place of the note. */
-    parsed = pin(agent_request_image(&a, "model", &image, req, sizeof(req)));
+    parsed = pin(agent_request_image(&a, "model", "", &image, req, sizeof(req)));
     assert(parsed > 0);
     assert(base64_encode(png_bytes, 100, encoded, sizeof(encoded)) == BASE64_LENGTH(100));
     snprintf(expected, sizeof(expected), "\"url\":\"data:image/png;base64,%.8s", encoded);
@@ -692,20 +713,20 @@ static void images(void)
     /* Only one image per request and it is the last message. */
     assert(!strstr(picture + 10, "\"type\":\"image_url\"") && strstr(picture, "\"}}]}],\"tools\":"));
     /* Without the pixels at hand the note is sent as plain text. */
-    assert(pin(agent_request_image(&a, "model", NULL, req, sizeof(req))) > 0 && !strstr(req, "image_url"));
-    assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0 && !strstr(req, "image_url") && strstr(req, "frame1.png"));
+    assert(pin(agent_request_image(&a, "model", "", NULL, req, sizeof(req))) > 0 && !strstr(req, "image_url"));
+    assert(pin(agent_request(&a, "model", "", req, sizeof(req))) > 0 && !strstr(req, "image_url") && strstr(req, "frame1.png"));
     /* A request too small for the encoded image fails rather than truncating. */
-    parsed = pin(agent_request(&a, "model", req, sizeof(req)));
-    assert(parsed > 0 && agent_request_image(&a, "model", &image, req, (size_t)parsed + 10) == -1);
+    parsed = pin(agent_request(&a, "model", "", req, sizeof(req)));
+    assert(parsed > 0 && agent_request_image(&a, "model", "", &image, req, (size_t)parsed + 10) == -1);
     /* Once the model has answered, later requests keep the note only. */
     assert(!agent_response(&a, "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"A green.\"}}]}",
                            strlen("{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"A green.\"}}]}"),
                            200, error, sizeof(error)));
     assert(!a.image_pending);
-    assert(pin_handoff(agent_handoff_request(&a, "model", req, sizeof(req))) > 0);
+    assert(pin_handoff(agent_handoff_request(&a, "model", "", req, sizeof(req))) > 0);
     assert(!strstr(req, "image_url") && !strstr(req, "base64") && strstr(req, "frame1.png"));
     assert(!agent_begin(&a, "And now?", error, sizeof(error)));
-    assert(pin(agent_request_image(&a, "model", &image, req, sizeof(req))) > 0 && !strstr(req, "image_url") && strstr(req, "frame1.png"));
+    assert(pin(agent_request_image(&a, "model", "", &image, req, sizeof(req))) > 0 && !strstr(req, "image_url") && strstr(req, "frame1.png"));
     /* Stop and a fresh user turn both drop a pending image. */
     begin(); named_call("tool_calls", "view_image", "{\"path\":\"x\"}");
     assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
@@ -878,11 +899,11 @@ static void instructions(void)
     int i;
     begin();
     agent_set_instructions(NULL);
-    baseline = pin(agent_request(&a, "model", req, sizeof(req)));
+    baseline = pin(agent_request(&a, "model", "", req, sizeof(req)));
     assert(baseline > 0 && !strstr(req, "Prefer tabs") && !strstr(req, "Workspace instructions"));
     /* Set text lands inside the one system message, JSON-escaped, before any history. */
     assert(agent_set_instructions(rules) == 0);
-    with = pin(agent_request(&a, "model", req, sizeof(req)));
+    with = pin(agent_request(&a, "model", "", req, sizeof(req)));
     assert(with > baseline);
     system = strstr(req, "\"role\":\"system\""); first = strstr(req, "Inspect my files");
     assert(system && first && strstr(req, "Workspace instructions") && strstr(req, "Prefer tabs over spaces.\\u000aKeep functions short."));
@@ -890,20 +911,20 @@ static void instructions(void)
     { int systems = 0; const char *p = req; while ((p = strstr(p, "\"role\":\"system\""))) { systems++; p++; } assert(systems == 1); }
     /* Never in history or the journal, so a handoff summary request does not carry it. */
     assert(!strstr(a.history, "Prefer tabs"));
-    assert(agent_request(&a, "model", req, with - 1) == -1);
+    assert(agent_request(&a, "model", "", req, with - 1) == -1);
     /* It survives New Chat (agent_reset) and handoff; the app reloads it per chat. */
     begin();
-    assert(pin(agent_request(&a, "model", req, sizeof(req))) == with);
+    assert(pin(agent_request(&a, "model", "", req, sizeof(req))) == with);
     assert(!agent_stop(&a, "done") && !a.active);
-    assert(pin_handoff(agent_handoff_request(&a, "model", req, sizeof(req))) > 0 && !strstr(req, "Prefer tabs"));
+    assert(pin_handoff(agent_handoff_request(&a, "model", "", req, sizeof(req))) > 0 && !strstr(req, "Prefer tabs"));
     /* Empty and NULL clear; an over-long text is refused and leaves the old one. */
     memset(text, 'x', AGENT_INSTRUCTIONS_CAP); text[AGENT_INSTRUCTIONS_CAP] = 0;
     assert(agent_set_instructions(text) == 0);
     text[AGENT_INSTRUCTIONS_CAP] = 'x'; text[AGENT_INSTRUCTIONS_CAP + 1] = 0;
     assert(agent_set_instructions(text) == -1);
-    begin(); assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0 && strstr(req, "xxxxxxxx") && !strstr(req, "Prefer tabs"));
+    begin(); assert(pin(agent_request(&a, "model", "", req, sizeof(req))) > 0 && strstr(req, "xxxxxxxx") && !strstr(req, "Prefer tabs"));
     assert(agent_set_instructions("") == 0);
-    assert(pin(agent_request(&a, "model", req, sizeof(req))) == baseline);
+    assert(pin(agent_request(&a, "model", "", req, sizeof(req))) == baseline);
     /* The policy says what the file may not do. */
     assert(strstr(req, "cannot override these rules") && strstr(req, "AGENTS.md"));
     /* ...and tells the model to keep an existing file current without inventing one. */
@@ -919,7 +940,7 @@ static void instructions(void)
     assert(agent_project_note(&a, "Putt", "Use Dialog Manager.\nNo globals.") == 0 && records == 1);
     assert(!strcmp(last_event, "project_instructions") && agent_project_seen(&a, "Putt") == 1);
     assert(agent_project_note(&a, "Putt", "Other text.") == 0 && records == 1 && !strstr(a.history, "Other text."));
-    assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0);
+    assert(pin(agent_request(&a, "model", "", req, sizeof(req))) > 0);
     tool = strstr(req, "\"tool_call_id\":\"c1\""); note = strstr(req, "Putt:AGENTS.md");
     assert(tool && note && tool < note && strstr(req, "Use Dialog Manager.\\u000aNo globals."));
     assert(strstr(req, "{\"role\":\"user\",\"content\":\"Project instructions from Putt:AGENTS.md"));
@@ -961,7 +982,7 @@ static void wire_shape(void)
     expect_event("assistant");
     assert(!agent_tool_result(&a, "{\"status\":\"ok\",\"text\":\"caf\xc3\xa9\"}", error, sizeof(error)));
     expect_event("tool");
-    messages = parse_request(agent_request(&a, "vendor/other-model", req, sizeof(req)), "vendor/other-model");
+    messages = parse_request(agent_request(&a, "vendor/other-model", "", req, sizeof(req)), "vendor/other-model");
     check_tool_schemas(member(0, "tools"), NULL, 0);
     assert(length_of(messages) == 4);
     assert(json_string(req, wire, member(message(messages, 0, "system"), "content"), decoded, sizeof(decoded)) > 0 && *decoded);
@@ -981,7 +1002,7 @@ static void wire_shape(void)
     assert(!agent_response(&a, final, strlen(final), 200, error, sizeof(error)));
     expect_event("assistant");
     assert(!agent_begin(&a, "What did you find?", error, sizeof(error)));
-    messages = parse_request(agent_request(&a, "model", req, sizeof(req)), "model");
+    messages = parse_request(agent_request(&a, "model", "", req, sizeof(req)), "model");
     assert(length_of(messages) == 6);
     message(messages, 0, "system"); message(messages, 1, "user"); message(messages, 2, "assistant");
     message(messages, 3, "tool"); message(messages, 4, "assistant"); message(messages, 5, "user");
@@ -989,10 +1010,38 @@ static void wire_shape(void)
     assert(is_text(member(element(messages, 5), "content"), "What did you find?"));
     /* A handoff request replays that history without tools, then asks for the summary. */
     assert(!agent_stop(&a, "done"));
-    messages = parse_request(agent_handoff_request(&a, "vendor/other-model", req, sizeof(req)), "vendor/other-model");
+    messages = parse_request(agent_handoff_request(&a, "vendor/other-model", "", req, sizeof(req)), "vendor/other-model");
     assert(length_of(messages) == 7 && json_member(req, wire, 0, "tools") < 0);
     message(messages, 0, "system"); message(messages, 3, "tool");
     assert(is_text(member(message(messages, 6, "user"), "content"), "Write the handoff summary now."));
+}
+/* The effort rides on both builders as a top-level reasoning object whose only
+ * member is the effort string; an empty or NULL effort omits the member, which
+ * is the exact body the builders sent before the field existed. */
+static void reasoning_effort(void)
+{
+    const char *final = "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Done.\"}}]}";
+    int reasoning;
+    begin();
+    (void)pin(agent_request(&a, "model", "high", req, sizeof(req)));
+    reasoning = member(0, "reasoning");
+    assert(members_of(reasoning) == 1 && is_text(member(reasoning, "effort"), "high"));
+    (void)pin(agent_request(&a, "model", "", req, sizeof(req)));
+    assert(json_member(req, wire, 0, "reasoning") < 0);
+    (void)pin(agent_request(&a, "model", NULL, req, sizeof(req)));
+    /* The handoff request carries the same member. */
+    begin(); call("tool_calls");
+    assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
+    expect_event("assistant");
+    assert(!agent_tool_result(&a, "{\"status\":\"ok\",\"text\":\"ok\"}", error, sizeof(error)));
+    expect_event("tool");
+    assert(!agent_response(&a, final, strlen(final), 200, error, sizeof(error)));
+    expect_event("assistant");
+    (void)pin_handoff(agent_handoff_request(&a, "model", "minimal", req, sizeof(req)));
+    reasoning = member(0, "reasoning");
+    assert(members_of(reasoning) == 1 && is_text(member(reasoning, "effort"), "minimal"));    (void)pin_handoff(agent_handoff_request(&a, "model", "", req, sizeof(req)));
+    assert(json_member(req, wire, 0, "reasoning") < 0);
+    (void)pin_handoff(agent_handoff_request(&a, "model", NULL, req, sizeof(req)));
 }
 /* The composer takes CHAT_PROMPT_CAP - 1 MacRoman bytes, each up to three bytes of UTF-8. */
 static void longest_prompt(void)
@@ -1004,7 +1053,7 @@ static void longest_prompt(void)
     records = 0; agent_reset(&a, journal, NULL);
     assert(strlen(prompt) == (CHAT_PROMPT_CAP - 1) * 3);
     assert(!agent_begin(&a, prompt, error, sizeof(error)));
-    assert(a.used > strlen(prompt) && pin(agent_request(&a, "model", req, sizeof(req))) > 0);
+    assert(a.used > strlen(prompt) && pin(agent_request(&a, "model", "", req, sizeof(req))) > 0);
     assert(strstr(req, prompt));
 }
 int main(void)
@@ -1013,17 +1062,18 @@ int main(void)
     size_t used, i;
     instructions();
     wire_shape();
+    reasoning_effort();
     longest_prompt();
     begin();
-    assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0);
+    assert(pin(agent_request(&a, "model", "", req, sizeof(req))) > 0);
     assert(strstr(req, "\"tools\"") && strstr(req, "\"role\":\"system\"") && strstr(req, "write_text") && strstr(req, "create_project") && strstr(req, "create_folder") && strstr(req, "edit_text") && strstr(req, "search_text") && strstr(req,"build_project") && strstr(req,"read_build_log") && strstr(req,"view_image") && strstr(req,"at most 131072 bytes;") && !strstr(req,"131072L"));
     call("tool_calls");
     assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)));
     assert(a.count == 1 && !a.next && a.active && records == 2);
     assert(!strcmp(a.calls[0].id, "c1") && !strcmp(a.calls[0].arguments, "{}"));
-    assert(pin(agent_request(&a, "model", req, sizeof(req))) == -1);
+    assert(pin(agent_request(&a, "model", "", req, sizeof(req))) == -1);
     assert(!agent_tool_result(&a, "{\"status\":\"ok\",\"text\":\"caf\xc3\xa9\"}", error, sizeof(error)));
-    assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0);
+    assert(pin(agent_request(&a, "model", "", req, sizeof(req))) > 0);
     assert(strstr(req, "\"tool_call_id\":\"c1\"") && strstr(req, "caf\xc3\xa9"));
     assert(!agent_response(&a, final, strlen(final), 200, error, sizeof(error)));
     assert(!a.active && a.messages == 4 && records == 4);
@@ -1099,7 +1149,7 @@ int main(void)
     memset(req, 'x', sizeof(a.history) - a.used - 128);
     req[sizeof(a.history) - a.used - 128] = 0;
     assert(!agent_begin(&a, req, error, sizeof(error)));
-    assert(pin(agent_request(&a, "model", req, sizeof(req))) > AGENT_HISTORY_CAP);
+    assert(pin(agent_request(&a, "model", "", req, sizeof(req))) > AGENT_HISTORY_CAP);
     assert(strstr(req, "\"tools\"") && strstr(req, "read_build_log"));
     call("tool_calls"); used = a.used;
     assert(agent_response(&a, response, strlen(response), 200, error, sizeof(error)) == -1);
@@ -1108,7 +1158,7 @@ int main(void)
      * only between runs, and failed candidate persistence cannot clear it. */
     assert(!agent_stop(&a, "history full"));
     saved = a;
-    assert(pin_handoff(agent_handoff_request(&a, "model", req, sizeof(req))) > AGENT_HISTORY_CAP);
+    assert(pin_handoff(agent_handoff_request(&a, "model", "", req, sizeof(req))) > AGENT_HISTORY_CAP);
     assert(!strstr(req, "\"tools\":") && strstr(req, "Write the handoff summary now"));
     {
         JsonToken request_tokens[4096];
@@ -1139,8 +1189,8 @@ int main(void)
     expect_event("handoff_seed");
     assert(candidate.messages == 1 && !candidate.active && strstr(candidate.history, "old.jsonl") && strstr(candidate.history, "handoff.md"));
     assert(!agent_begin(&candidate, "Continue", error, sizeof(error)));
-    assert(pin_handoff(agent_handoff_request(&candidate, "model", req, sizeof(req))) == -1);
-    assert(pin(agent_request(&candidate, "model", req, sizeof(req))) > 0 && strstr(req, "Build a prototype"));
+    assert(pin_handoff(agent_handoff_request(&candidate, "model", "", req, sizeof(req))) == -1);
+    assert(pin(agent_request(&candidate, "model", "", req, sizeof(req))) > 0 && strstr(req, "Build a prototype"));
     begin(); call("tool_calls");
     a.used = sizeof(a.history) - 10;
     assert(agent_response(&a, response, strlen(response), 200, error, sizeof(error)) == -1);
@@ -1159,7 +1209,7 @@ int main(void)
     }
     /* The wire request carries the named cap, so docs and code share one value. */
     begin();
-    assert(pin(agent_request(&a, "model", req, sizeof(req))) > 0 && strstr(req, "\"max_tokens\":6000,"));
+    assert(pin(agent_request(&a, "model", "", req, sizeof(req))) > 0 && strstr(req, "\"max_tokens\":6000,"));
     completion_errors();
     completion_text();
     remote_schemas();

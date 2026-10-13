@@ -265,7 +265,7 @@ static void model_calls(const char *name, const char *arguments)
 static void begin_run(const char *prompt)
 {
     assert(agent_begin(&agent, prompt, error, sizeof(error)) == 0);
-    assert(agent_request(&agent, "model", req, sizeof(req)) > 0);
+    assert(agent_request(&agent, "model", "", req, sizeof(req)) > 0);
 }
 /* Dispatch the model's call and step it to its end: returns the phases seen
  * on the way (bit 0 calling, bit 1 retaining). */
@@ -355,7 +355,7 @@ int main(void)
     assert(mcp_run_owns("mcp_tavily_tavily_search") && mcp_run_owns("mcp_tavily_tavily_extract"));
     assert(!mcp_run_owns("get_environment") && !mcp_run_owns("mcp_tavily_other"));
     names[0] = "mcp_tavily_tavily_search"; names[1] = "mcp_tavily_tavily_extract";
-    assert(agent_request(&agent, "model", req, sizeof(req)) > 0);
+    assert(agent_request(&agent, "model", "", req, sizeof(req)) > 0);
     request_pins(names, 2);
 
     /* ---- A model-selected remote call, dispatched sequentially. ---- */
@@ -411,7 +411,7 @@ int main(void)
     assert(!agent_tool_result(&agent, result, error, sizeof(error)));
     assert(mcp_run_file_count() == 2 && mcp_run_file_count_suffix(".new") == 0);
     /* The next request still carries the frozen remote schemas. */
-    assert(agent_request(&agent, "model", req, sizeof(req)) > 0);
+    assert(agent_request(&agent, "model", "", req, sizeof(req)) > 0);
     request_pins(names, 2);
 
     /* ---- Stop during a call: no further calls, drained contexts, and the
@@ -498,7 +498,7 @@ int main(void)
     assert(creates == closes);
     /* No remote schemas are frozen; the request is native-only. */
     assert(agent_mcp_tool_count() == 0 && !mcp_run_owns("mcp_tavily_tavily_search"));
-    assert(agent_request(&agent, "model", req, sizeof(req)) > 0);
+    assert(agent_request(&agent, "model", "", req, sizeof(req)) > 0);
     request_pins(NULL, 0);
     assert(!agent_stop(&agent, "discovery failed"));
 
@@ -538,7 +538,7 @@ int main(void)
     assert(strstr(last_body, "Continuing with native tools only."));
     assert(creates == 0 && closes == 0 && lists == 0 && calls == 0);
     assert(!mcp_run_draining() && agent_mcp_tool_count() == 0);
-    assert(agent_request(&agent, "model", req, sizeof(req)) > 0);
+    assert(agent_request(&agent, "model", "", req, sizeof(req)) > 0);
     request_pins(NULL, 0);
     assert(!agent_stop(&agent, "no memory for discovery"));
 
@@ -564,7 +564,7 @@ int main(void)
     assert(opens == 0 && creates == 0 && calls == 0 && lists == 0);
     assert(mcp_run_phase() == MCP_RUN_IDLE && !mcp_run_draining() && journal_calls == n);
     assert(agent_mcp_tool_count() == 0);
-    assert(agent_request(&agent, "model", req, sizeof(req)) > 0);
+    assert(agent_request(&agent, "model", "", req, sizeof(req)) > 0);
     request_pins(NULL, 0);
 
     puts("PASS MCP run controller: load, discovery, freeze, sequential dispatch, retention, paging, Stop, drain, fallback, TLS allocation failure");

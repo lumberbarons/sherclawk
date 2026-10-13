@@ -63,9 +63,14 @@ with a temporary startup probe (not shipped; see
   The "0.4 to 1.2 KB during a TLS exchange" recorded earlier was that slack,
   not a shortage: the heap would have grown to fit.
 
-`main` now calls `MaxApplZone` before anything else, so the zone is fully grown
-at launch and `FreeMem` (`get_environment`'s `free_heap_bytes`) reports real
-headroom:
+`get_environment` therefore reports `free_heap_bytes` as `FreeMem` plus the
+ungrown gap between the end of the zone and the application limit, which is the
+real headroom. The app must not call `MaxApplZone` to get that figure:
+growing the zone at launch made `DialogSelect` fault with an error of type 2 on the Preferences
+dialog's first activate event in OS 9.2.2 (the MCP Servers dialog was
+unaffected); reserving a megabyte of stack below the limit did not help, so the
+cause is the grown zone itself, not the stack. The figures below were measured
+with the zone grown and equal `FreeMem` plus the gap:
 
 | Partition | Free after setup | Free with a model TLS context open |
 |---|---|---|

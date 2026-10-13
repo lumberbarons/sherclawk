@@ -62,6 +62,18 @@ int prefs_limit_value(const char *s)
     return n >= PREFS_LIMIT_MIN && n <= PREFS_LIMIT_MAX ? (int)n : -1;
 }
 
+int prefs_effort_ok(const char *s)
+{
+    static const char *const names[] = {
+        "max", "xhigh", "high", "medium", "low", "minimal", "none"
+    };
+    size_t i;
+    if (!s[0]) return 1; /* empty stores no effort at all */
+    for (i = 0; i < sizeof(names) / sizeof(*names); i++)
+        if (!strcmp(s, names[i])) return 1;
+    return 0;
+}
+
 static int key_is(const char *key, size_t len, const char *name)
 {
     return strlen(name) == len && !memcmp(key, name, len);
@@ -109,6 +121,8 @@ int prefs_parse(const char *text, size_t len, Prefs *p)
         } else if (key_is(key, key_len, "show_tool_debug")) {
             if (!strcmp(value_buf, "0")) { p->show_tool_debug = 0; accepted++; }
             else if (!strcmp(value_buf, "1")) { p->show_tool_debug = 1; accepted++; }
+        } else if (key_is(key, key_len, "effort")) {
+            if (prefs_effort_ok(value_buf)) { strcpy(p->effort, value_buf); accepted++; }
         }
         /* Unknown keys are ignored. */
     }
@@ -127,9 +141,9 @@ int prefs_format(const Prefs *p, char *out, size_t cap)
 {
     int n;
     if (has_break(p->model, CHAT_MODEL_CAP) || has_break(p->api_key, PREFS_KEY_CAP) ||
-        has_break(p->workspace, PREFS_WORKSPACE_CAP)) return -1;
+        has_break(p->workspace, PREFS_WORKSPACE_CAP) || has_break(p->effort, AGENT_EFFORT_CAP)) return -1;
     n = snprintf(out, cap, "model=%s\rapi_key=%s\rworkspace=%s\rmax_rounds=%d\rmax_tools=%d\r"
-        "show_tool_debug=%d\r", p->model, p->api_key, p->workspace,
-        p->max_rounds, p->max_tools, p->show_tool_debug);
+        "show_tool_debug=%d\reffort=%s\r", p->model, p->api_key, p->workspace,
+        p->max_rounds, p->max_tools, p->show_tool_debug, p->effort);
     return n >= 0 && (size_t)n < cap ? n : -1;
 }

@@ -186,7 +186,7 @@ static int run_agent(void)
         "Then call list_fonts with limit 24, and call measure_text with the first font id from that list, text \"Sherclawk\" and size 12, and state its width. "
         "You must use all six tools.", error, sizeof(error))) return 1;
     while (agent.active && rounds++ < 8) {
-        length = agent_request(&agent, SHERCLAWK_MODEL, body, sizeof(body));
+        length = agent_request(&agent, SHERCLAWK_MODEL, "", body, sizeof(body));
         if (length < 0) return 1;
         length = http_build_post_with_headers("openrouter.ai", "/api/v1/chat/completions", SHERCLAWK_API_KEY,
             attribution, body, (size_t)length, net.request, sizeof(net.request));

@@ -189,7 +189,10 @@ exactly matches the model supplies `context_length`, and its optional
 it at most once per model per launch, with a 30-second deadline and the same
 64 KiB response bound. Any HTTP error, timeout, oversized body, a page with no
 exact row, or a response beyond the 4096-token JSON parser cap silently omits
-the percentage and proceeds with the send; there is no retry. Preferences are
+the percentage and proceeds with the send; there is no retry. The lookup is
+display metadata only: the reasoning effort a request carries is the value
+saved in Preferences at confirmation time, so no send-time request is ever
+needed to validate it. Preferences are
 unavailable during a run, including the context lookup. Stop during the
 lookup leaves no session record and keeps the prompt; the stopped exchange
 continues to a terminal network state before it is closed, so a send in the
