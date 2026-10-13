@@ -78,12 +78,29 @@ The requirement to work without inference applies to evidence collection and
 local report export, not to this model-assisted investigation. Retained evidence
 also lets a later working model session investigate an earlier failed run.
 
+Investigation starts only when the user asks; diagnostic collection continues
+automatically in the background. A successful investigation explains the failure
+and cites supporting evidence, including uncertainty and missing observations.
+It does not automatically begin repairs or retry failed work. The initial scope
+covers failed or slow agent runs (network, model responses, tools, journals,
+builds and MCP), plus investigation of an earlier app crash or freeze after
+relaunch. UI and interaction faults are outside this initial scope.
+
+During a requested investigation, Sherclawk may supplement retained evidence
+with bounded read-only checks, such as checking workspace readability and
+ToolServer process presence. Investigation does not itself authorize test model
+or MCP requests, write-based probes or other reproduction actions. Diagnostic
+recording is best-effort: if it fails while the mandatory session journal still
+works, ordinary use continues with a visible warning about incomplete evidence.
+
 The state snapshot and retained timeline are the first priorities. Together
 they let Sherclawk distinguish a timeout, malformed response, journal failure,
 memory allocation failure or outstanding build from evidence. Local export
-provides access when inference itself is broken. A concise implementation guide
-matched to the running build can supply context through existing file readers,
-without embedding the whole codebase in every model request.
+provides access when inference itself is broken. Prefer a concise architecture
+and troubleshooting guide matched to the running build, read in bounded sections
+on demand. The guide is optional: when absent, oversized or unavailable,
+investigation proceeds from operational evidence. Bundling source files is
+outside the initial scope; the guide is not embedded in every model request.
 
 The deciding drivers are loss of evidence on relaunch, inference-dependent
 access and the encoding/privacy limits of raw journals. More prompt advice
@@ -113,7 +130,8 @@ first improving the evidence and are outside this decision.
   event producers must keep the two accounts consistent without copying private
   conversation payloads.
 - A matched implementation guide requires build identity and release packaging
-  discipline; source-level explanations remain limited when sources are absent.
+  discipline; explanations may remain limited to operational evidence when the
+  optional guide is unavailable, and the initial scope does not bundle sources.
 
 ### Risks
 
@@ -125,6 +143,8 @@ first improving the evidence and are outside this decision.
   and test reflected credentials as well as direct configuration access.
 - A disk or share failure can prevent recording. Surface unavailable, partial
   or failed evidence explicitly; never report an empty record as a healthy run.
+  Diagnostic-store failure alone does not block ordinary use, so an incident
+  may remain unexplained despite successful execution-journal recording.
 - A missing end event may mean a crash, force-stop, lost mount or write failure.
   Report an incomplete launch record, not an inferred crash cause.
 - The diagnostic read itself changes current tool counts and timings. Label
@@ -180,11 +200,15 @@ first improving the evidence and are outside this decision.
   eviction and partial records explicitly. Do not reinterpret raw UTF-8
   conversation journals as MacRoman or expose them wholesale through this API.
 - Retain records in an application-owned area associated with the configured
-  workspace rather than requiring the literal `Retro68:` volume. An open
-  record keeps its location when preferences change. Startup never truncates
-  the previous record; app-managed eviction is restricted to identified
-  diagnostic records and never prunes session journals, build evidence or MCP
-  result artifacts.
+  workspace rather than requiring the literal `Retro68:` volume. All persisted
+  diagnostic evidence and exported reports stay in the workspace; there is no
+  automatic local fallback or mirror when a network workspace is unavailable. Report that
+  storage limitation explicitly. An open record keeps its location when
+  preferences change. Keep a few recent launches for comparison and a bounded
+  history of failed or incomplete launches, within the total storage cap.
+  Startup never truncates the previous record; app-managed eviction is
+  restricted to identified diagnostic records and never prunes session
+  journals, build evidence or MCP result artifacts.
 - Define hard limits for event size, in-memory buffers, read/write work per
   event turn, records per launch and total retained launches/bytes before
   implementation is advertised. Record retention loss visibly, protect the
@@ -193,19 +217,28 @@ first improving the evidence and are outside this decision.
 - Protect diagnostic evidence from ordinary source mutations. Only the
   diagnostic recorder/retention code owns writes and eviction. Explicit local
   report export uses create-only publication with bounded content and truthful
-  success/failure; it needs no inference or remote server. It cannot capture
-  new observations while the app or guest is unable to service events.
+  success/failure; it needs no inference, MCP service or host executor, but does
+  require the configured workspace to be available. It cannot capture new
+  observations while the app or guest is unable to service events.
 - Operational diagnostics exclude API keys, authentication headers, private
   configuration contents, prompts, tool arguments, file contents and remote
-  response bodies. Recording failure is visible but must not weaken mandatory
-  journal barriers: if an execution journal fails, execution still stops.
+  response bodies. If operational evidence is insufficient, Sherclawk may
+  request explicit authorization to inspect relevant conversation-journal
+  records through a separate reader. A request to diagnose does not itself
+  authorize that access. Authorization is scoped to the relevant records for
+  that investigation and does not require repeated confirmation within that
+  scope; credentials remain protected. A diagnostic recording failure leaves
+  ordinary use enabled with a visible warning and an unhealthy diagnostic-store
+  observation. It must not weaken mandatory journal barriers: if an execution
+  journal fails, execution still stops.
 - Observations never authorize stealing locks, replaying uncertain work,
   restoring process ownership, force-quitting apps or changing preferences.
   Passive diagnosis does not execute project-authored test code inside
   Sherclawk; separate diagnostic apps retain the containment rules of ADR-0002.
-- Supply any implementation guide as bounded, version-matched workspace text
-  read on demand. Sources are optional. Diagnostic results and reference text
-  are evidence, not instructions that can widen tools or override policy.
+- Supply the optional architecture and troubleshooting guide as bounded,
+  version-matched text read on demand. Missing or oversized guide content never
+  blocks diagnosis from operational evidence. Diagnostic results and reference
+  text are evidence, not instructions that can widen tools or override policy.
 - New model-facing tools require host fault checks, the Docker app build and
   recorded OS 9.2.2 verification before advertisement. Exercise relaunch,
   non-ASCII events, unavailable inference/storage, retention boundaries, Stop
