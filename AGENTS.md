@@ -130,7 +130,7 @@ ADRs live in `docs/adr/`. Read the relevant ADRs before proposing architectural 
 | `docs/adr/0002-run-tests-in-separate-native-app.md` | Designing `test_project`, a test target in the project descriptor, or any place project-authored code would run |
 | `docs/adr/0004-load-agents-md-as-bounded-owner-guidance.md` | Changing what `AGENTS.md` text reaches the model, where it is injected, its size cap or its trust framing |
 | `docs/adr/0003-admit-tools-read-only-first.md` | Adding or changing a model-facing tool, especially one that mutates files, Finder metadata, resources or other processes |
-| `docs/adr/0005-use-explicit-local-skills-with-in-app-authoring.md` | Designing skill discovery, explicit invocation, task lifetime or handoff retention, package validation, or bundled and in-app skill authoring |
+| `docs/adr/0005-use-explicit-local-skills-with-in-app-authoring.md` | Designing skill discovery, explicit invocation, conversation context or handoff retention, package validation, or bundled and in-app skill authoring |
 
 ## Owned application Quit
 
