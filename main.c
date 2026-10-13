@@ -2664,10 +2664,9 @@ static void DrainAbandonedExchange(void)
 int main(void)
 {
     EventRecord event;
-    /* Grow the heap to the application limit now. Unexpanded, it grows only
-     * on demand, so FreeMem (get_environment's free_heap_bytes) reports the
-     * few KB of slack instead of the partition's real headroom. */
-    MaxApplZone();
+    /* No MaxApplZone here: growing the zone to the application limit up front
+     * made DialogSelect fault in the Preferences dialog in OS 9.2.2. The
+     * headroom get_environment reports adds the ungrown gap instead. */
     InitGraf(&qd.thePort); InitFonts(); InitWindows(); InitMenus();
     TEInit(); InitDialogs(NULL); InitCursor(); MacTLS_Init();
     PrefsLoad();

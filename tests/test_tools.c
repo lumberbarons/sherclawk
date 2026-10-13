@@ -12,6 +12,8 @@
 #define PROJECT_FILES ((int)(sizeof(project_inputs)/sizeof(project_inputs[0])))
 #define PROJECT_CREATES (1+PROJECT_FILES)
 #include <Files.h>
+#include <Memory.h>
+#include <LowMem.h>
 #include <Folders.h>
 #include <Resources.h>
 #include <Aliases.h>
@@ -441,6 +443,10 @@ FMFontFamily FMGetFontFamilyFromName(const unsigned char *name)
     return -1;
 }
 long FreeMem(void) { return 100000; }
+/* A zone with 4096 bytes still ungrown below the application limit. */
+static char heap_arena[8192];
+Ptr LMGetHeapEnd(void) { return heap_arena + 1024; }
+Ptr GetApplLimit(void) { return heap_arena + 1024 + 4096; }
 short Gestalt(long selector, long *v) { (void)selector;*v=0x922;return 0; }
 unsigned long TickCount(void) { return 42; }
 static int journal(void *ctx, const char *event, const char *json)
@@ -2041,6 +2047,8 @@ static void registry_checks(void)
     strcpy(call.name, "get_environment"); strcpy(call.arguments, "{}");
     tools_execute(&call, env, sizeof(env));
     assert(strstr(env, "\"status\":\"ok\""));
+    /* Headroom counts the heap not yet grown toward the application limit. */
+    assert(strstr(env, "\"free_heap_bytes\":104096,"));
     for (i = 0; i < tools_count(); i++) {
         char quoted[80];
         const char *p = env;
