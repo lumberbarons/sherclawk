@@ -35,7 +35,7 @@ typing filters that list locally, **Find** searches the whole public catalog
 for the typed text, and clicking a row confirms the model and lists its Effort
 choices: a `Default (X)` entry with the row's default effort first, then the
 supported efforts in order (`none` hidden on models where reasoning is
-mandatory; only efforts the preferences file accepts are listed). Reopening Preferences on the saved model preselects its saved effort instead of the default. The choice is saved — `Default (X)` stores X — and sent as the
+mandatory; only efforts the preferences file accepts are listed). Reopening Preferences on the saved model preselects its saved effort instead of the default; when the saved model is not among the popular models, its own row is fetched after the list loads (once per launch) and shown first, selected, so its effort can be changed without a search. Until then, or if that fetch fails, the Effort popup is dimmed and shows the saved effort. The choice is saved — `Default (X)` stores X — and sent as the
 `reasoning.effort` of every model and handoff request; a model without effort
 choices leaves the popup disabled and saves none. OK saves only
 a model that resolved to a catalog row — a changed, unconfirmed ID is checked
@@ -106,9 +106,9 @@ Send has a native default-button outline while it is available.
 ### Reading status
 
 A recessed two-row information strip below the message box groups status and
-the read-only model name above history, context and cost. Once the model's
-details are known, its default reasoning effort follows the name in
-parentheses, such as `(medium)`. Choose the model in
+the read-only model name above history, context and cost. The saved reasoning
+effort follows the name in parentheses, such as `(medium)`; without one, the
+model's default effort appears once its details are known. Choose the model in
 **Edit > Preferences**; both sends and handoffs use that saved preference.
 Long labels are shortened to fit their columns; click the status row while
 idle to read the full status message. The status lamp is green while idle and amber during

@@ -27,12 +27,16 @@ static void formatting(void)
     FormatPauseReason(3, 7, 4, 8, AGENT_HISTORY_CAP / 2, out, sizeof(out));
     assert(!strcmp(out, "Run paused after 3 model rounds and 7 tools (configured limits: 4 rounds, 8 tools). History is 50% full. Send Continue to resume."));
     FormatPauseReason(0, 0, 1, 1, 0, tiny, sizeof(tiny)); assert(!strcmp(tiny, "R"));
-    FormatModelLabel("openai/gpt-5", "", out, sizeof(out)); assert(!strcmp(out, "Model: openai/gpt-5"));
-    FormatModelLabel("openai/gpt-5", NULL, out, sizeof(out)); assert(!strcmp(out, "Model: openai/gpt-5"));
-    FormatModelLabel("openai/gpt-5", "medium", out, sizeof(out)); assert(!strcmp(out, "Model: openai/gpt-5 (medium)"));
-    FormatModelLabel("", "medium", out, sizeof(out)); assert(!strcmp(out, "Model:  (medium)"));
-    FormatModelLabel("openai/gpt-5", "medium", events, sizeof(events)); assert(!strcmp(events, "Model: "));
-    FormatModelLabel("openai/gpt-5", "medium", tiny, sizeof(tiny)); assert(!strcmp(tiny, "M"));
+    FormatModelLabel("openai/gpt-5", "", "", out, sizeof(out)); assert(!strcmp(out, "Model: openai/gpt-5"));
+    FormatModelLabel("openai/gpt-5", NULL, NULL, out, sizeof(out)); assert(!strcmp(out, "Model: openai/gpt-5"));
+    FormatModelLabel("openai/gpt-5", "", "medium", out, sizeof(out)); assert(!strcmp(out, "Model: openai/gpt-5 (medium)"));
+    FormatModelLabel("openai/gpt-5", NULL, "medium", out, sizeof(out)); assert(!strcmp(out, "Model: openai/gpt-5 (medium)"));
+    /* The saved effort wins over the model's default, and needs no model info. */
+    FormatModelLabel("openai/gpt-5", "high", "medium", out, sizeof(out)); assert(!strcmp(out, "Model: openai/gpt-5 (high)"));
+    FormatModelLabel("openai/gpt-5", "high", "", out, sizeof(out)); assert(!strcmp(out, "Model: openai/gpt-5 (high)"));
+    FormatModelLabel("", "", "medium", out, sizeof(out)); assert(!strcmp(out, "Model:  (medium)"));
+    FormatModelLabel("openai/gpt-5", "", "medium", events, sizeof(events)); assert(!strcmp(events, "Model: "));
+    FormatModelLabel("openai/gpt-5", "", "medium", tiny, sizeof(tiny)); assert(!strcmp(tiny, "M"));
 }
 
 static void validation(void)
