@@ -703,3 +703,24 @@ reported `free_heap_bytes` 4,266,608 to the model. Both runs completed their two
 model rounds normally. The shipped build (16 MiB preferred) was republished
 afterwards. A failed TLS context allocation was not induced in the guest; host
 tests inject it for the model request and for MCP discovery and calls.
+
+## Preferences crash from MaxApplZone, October 12, 2026
+
+Edit ▸ Preferences… died in OS 9.2.2 with "an error of type 2" inside
+`DialogSelect`, on the dialog's first activate event, in every build from
+`68ad400` (#199) on. Bisecting on the guest: `a03b99c`, `db0a6c4`, `468efb9` and
+`73a3d3b` opened the dialog; `68ad400` crashed; the same tree without its
+`MaxApplZone()` call at the top of `main` opened it. The crash did not depend on
+the catalog fetch or the Effort menu, the MCP Servers dialog opened normally
+with the zone grown, and reserving 1 MB below the application limit with
+`SetApplLimit` (`StackSpace` read 1,085,952) did not prevent it, so the stack
+was not the cause. #199 had verified `MaxApplZone` after window setup and only
+ran model rounds.
+
+`MaxApplZone` was removed. `get_environment` now reports `FreeMem` plus the gap
+between `LMGetHeapEnd` and `GetApplLimit`. Published to the AFP share and
+launched by keyboard over QMP: Preferences opened with the popular models
+listed and Cancel closed it, and a prompt that called `get_environment` returned
+`free_heap_bytes` 10,534,960 at the 16 MiB preferred size, in line with the
+10,440,608 to 10,558,400 measured with the zone grown. The guest had to be
+force-stopped and restarted after repeated faults wedged it.
