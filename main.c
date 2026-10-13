@@ -1747,7 +1747,7 @@ static void DrawTextPane(const Rect *r, TEHandle te)
 static void DrawChrome(void)
 {
     Str255 p;
-    char line[CHAT_MODEL_CAP + 16], count[24];
+    char line[CHAT_MODEL_CAP + AGENT_EFFORT_CAP + 16], count[24];
     Rect art = { 0, 0, 52, 52 }, destination = { 2, 10, 54, 62 };
     Rect status = gStatusRect;
     Rect lamp = { 363, 18, 371, 26 };
@@ -1784,7 +1784,10 @@ static void DrawChrome(void)
     ForeColor(blackColor); FrameOval(&lamp);
     status.left += 14;
     DrawFittedLabel(&status, gStatusText, truncEnd);
-    snprintf(line, sizeof(line), "Model: %s", gPrefs.model);
+    /* The default effort is the one in effect until a chosen effort is sent;
+     * it only describes the configured model while the info row belongs to it. */
+    FormatModelLabel(gPrefs.model, !strcmp(gModelInfoModel, gPrefs.model) ? gModelInfo.default_effort : "",
+                     line, sizeof(line));
     DrawFittedLabel(&gModelRect, line, truncMiddle);
     {
         Rect divider = { 377, 18, 378, 582 };
@@ -2515,6 +2518,7 @@ static void FinishContextLookup(int completed)
     AgentModelInfo info;
     if (completed && gNet.status == 200 && !agent_model_info(gNet.body, gNet.body_len, gRunModel, &info))
         gModelInfo = info;
+    if (gWindow) InvalRect(&gModelRect);
     if (gNet.ctx || gOTOpen) CloseChatContext();
     {
         if (strcmp(gPrefs.model, gRunModel)) {
