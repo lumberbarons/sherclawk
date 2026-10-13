@@ -106,7 +106,9 @@ Send has a native default-button outline while it is available.
 ### Reading status
 
 A recessed two-row information strip below the message box groups status and
-the read-only model name above history, context and cost. Choose the model in
+the read-only model name above history, context and cost. Once the model's
+details are known, its default reasoning effort follows the name in
+parentheses, such as `(medium)`. Choose the model in
 **Edit > Preferences**; both sends and handoffs use that saved preference.
 Long labels are shortened to fit their columns; click the status row while
 idle to read the full status message. The status lamp is green while idle and amber during

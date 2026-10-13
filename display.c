@@ -16,6 +16,12 @@ void FormatTokens(long tokens, char *out, size_t cap)
     }
 }
 
+void FormatModelLabel(const char *model, const char *effort, char *out, size_t cap)
+{
+    if (effort && effort[0]) snprintf(out, cap, "Model: %s (%s)", model, effort);
+    else snprintf(out, cap, "Model: %s", model);
+}
+
 void ComputeLayout(DisplayLayout *layout)
 {
     layout->ResponseLabelRect = (DisplayRect){ 52, 10, 68, 200 };
