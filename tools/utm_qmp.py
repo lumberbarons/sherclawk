@@ -26,6 +26,19 @@ Usage:
     utm_qmp.py dclick <x> <y>
     utm_qmp.py type "text"
     utm_qmp.py key <qcode> [<qcode>...]
+
+Closed-loop pointer commands (no template; they work over dialogs, menus
+and text, where goto/click lose the pointer). Each re-parks the pointer in the
+corner and re-measures, so the pointer ends within a couple of pixels:
+    utm_qmp.py pgoto <x> <y>           # move the pointer tip to x, y
+    utm_qmp.py pclick <x> <y>          # move there and click
+    utm_qmp.py pdclick <x> <y>         # move there and double-click
+    utm_qmp.py phold <x> <y>           # move there and hold the button down
+    utm_qmp.py nudge <dx> <dy>         # raw relative move (menus, popups)
+    utm_qmp.py release                 # let the button up
+
+The QMP socket takes one client at a time; do not run two of these at once
+(a script holding a QMP connection must use its own screendump).
 """
 import os
 import shutil
@@ -66,14 +79,56 @@ def load_pos():
         return None
 
 
+KEY_HOLD_MS = 200  # the guest drops keys held for less (QMP's default is 100)
+KEY_GAP = 0.3      # release time between keys so none is merged with the next
+TYPE_KEYS = {
+    " ": "spc", "-": "minus", ".": "dot", ",": "comma", "/": "slash",
+    ";": "semicolon", "'": "apostrophe", "=": "equal", "\n": "ret", "\t": "tab",
+}
+TYPE_SHIFTED = {
+    "_": "minus", "~": "grave_accent", "!": "1", "?": "slash", ":": "semicolon",
+    "+": "equal", "(": "9", ")": "0", "@": "2", "#": "3", "*": "8", '"': "apostrophe",
+}
+
+
 class QMP(qmpdrive.QMP):
+    """The QMP socket serves one client at a time: a second process connecting
+    while this one is open (a helper shelling out to `utm_qmp.py screendump`,
+    say) never gets its greeting. The timeout turns that hang into an error."""
+
     def __init__(self, path=SOCK):
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.connect(path)
-        self.buf = b""
-        self._readline()  # greeting
+        self.sock.settimeout(20)
+        try:
+            self.sock.connect(path)
+            self.buf = b""
+            self._readline()  # greeting
+        except socket.timeout:
+            raise RuntimeError(
+                "QMP greeting timed out: another process may hold the socket"
+            ) from None
         self.cmd("qmp_capabilities")
         self._shot_no = 0
+
+    def key(self, *qcodes):
+        """Press the keys together for KEY_HOLD_MS, then wait KEY_GAP."""
+        self.cmd(
+            "send-key",
+            keys=[{"type": "qcode", "data": k} for k in qcodes],
+            **{"hold-time": KEY_HOLD_MS},
+        )
+        time.sleep(KEY_GAP)
+
+    def type_text(self, text):
+        for ch in text:
+            if ch.isascii() and ch.isalnum():
+                self.key(*(["shift", ch.lower()] if ch.isupper() else [ch]))
+            elif ch in TYPE_KEYS:
+                self.key(TYPE_KEYS[ch])
+            elif ch in TYPE_SHIFTED:
+                self.key("shift", TYPE_SHIFTED[ch])
+            else:
+                raise ValueError(f"no keymap for {ch!r}")
 
     def screendump(self, path, fmt="ppm"):
         """Shoot a screenshot into the group container, then copy it out.
@@ -140,6 +195,135 @@ class Cursor(qmpdrive.Cursor):
         return (x0, y0)
 
 
+class Pointer:
+    """Template-free closed-loop pointer control for the relative-mouse guest.
+
+    The guest pointer's gain varies with move speed, and template matching
+    loses it over dialogs and text. Instead park the pointer in the top-left
+    corner, keep that screen as a baseline, and find the pointer later as the
+    arrow-sized blob of pixels that differ from it. Blinking carets, the clock
+    and redraws are not arrow-sized, so they are ignored. Rebase whenever the
+    screen contents change enough to matter; each move re-measures the pointer
+    and corrects, so gain does not need to be known.
+    """
+
+    CORNER = 24          # the parked pointer lives in this square of the baseline
+    MIN_PIXELS = 30      # a pointer outline is ~50 differing pixels
+    W_RANGE = (6, 20)    # bounding-box limits of the pointer blob
+    H_RANGE = (10, 28)
+
+    def __init__(self, q):
+        self.q = q
+        self.base = None
+
+    def _shot(self):
+        path = os.path.join(SNAP_DIR, "pointer.ppm")
+        self.q.screendump(path)
+        w, h, px = qmpdrive.read_ppm(path)
+        os.remove(path)
+        return w, h, px
+
+    def rebase(self):
+        for _ in range(12):
+            self.q.move(-300, -300)
+            time.sleep(0.05)
+        time.sleep(0.6)
+        self.base = self._shot()
+
+    def find(self):
+        """Return the (x, y) of the pointer tip, or None when it is not found."""
+        w, h, cur = self._shot()
+        bw, bh, base = self.base
+        if (w, h) != (bw, bh):
+            raise RuntimeError("screen size changed since rebase")
+        stride = w * 3
+        diff = set()
+        for y in range(h):
+            if cur[y * stride:(y + 1) * stride] == base[y * stride:(y + 1) * stride]:
+                continue
+            for x in range(w):
+                if x < self.CORNER and y < self.CORNER:
+                    continue
+                i = y * stride + x * 3
+                if (abs(cur[i] - base[i]) + abs(cur[i + 1] - base[i + 1])
+                        + abs(cur[i + 2] - base[i + 2])) > 120:
+                    diff.add((x, y))
+        if len(diff) < self.MIN_PIXELS:
+            return (0, 0)  # still parked in the corner
+        best = None
+        seen = set()
+        for start in diff:
+            if start in seen:
+                continue
+            blob, stack = [], [start]
+            seen.add(start)
+            while stack:  # 8-connected with a 2px reach: outline pixels touch
+                px, py = stack.pop()
+                blob.append((px, py))
+                for dx in range(-2, 3):
+                    for dy in range(-2, 3):
+                        n = (px + dx, py + dy)
+                        if n in diff and n not in seen:
+                            seen.add(n)
+                            stack.append(n)
+            xs = [p[0] for p in blob]
+            ys = [p[1] for p in blob]
+            bw_, bh_ = max(xs) - min(xs) + 1, max(ys) - min(ys) + 1
+            if (len(blob) >= self.MIN_PIXELS
+                    and self.W_RANGE[0] <= bw_ <= self.W_RANGE[1]
+                    and self.H_RANGE[0] <= bh_ <= self.H_RANGE[1]):
+                if best is None or len(blob) > len(best):
+                    best = blob
+        if best is None:
+            return None
+        top = min(p[1] for p in best)
+        return (min(p[0] for p in best), top)
+
+    def goto(self, x, y, tolerance=2, attempts=10):
+        """Move the pointer tip to (x, y); returns where it ended up."""
+        self.rebase()
+        pos = self.find()
+        gain = 1.0
+        for _ in range(attempts):
+            if pos is None:
+                raise RuntimeError("pointer not found; screen changed too much to track")
+            dx, dy = x - pos[0], y - pos[1]
+            if abs(dx) <= tolerance and abs(dy) <= tolerance:
+                return pos
+            mx = int(round(dx / gain))
+            my = int(round(dy / gain))
+            steps = max(1, max(abs(mx), abs(my)) // 20)
+            for _i in range(steps):  # equal small steps keep the gain steady
+                self.q.move(mx // steps, my // steps)
+                time.sleep(0.03)
+            time.sleep(0.4)
+            new = self.find()
+            if new is not None and new != pos:
+                moved = max(abs(new[0] - pos[0]), abs(new[1] - pos[1]))
+                asked = max(abs(mx), abs(my))
+                if asked >= 8 and moved:
+                    gain = moved / asked
+            pos = new
+        return pos
+
+    def press(self):
+        """Wiggle (the guest ignores a press with no preceding motion) and hold."""
+        self.q.move(1, 0)
+        time.sleep(0.1)
+        self.q.move(-1, 0)
+        time.sleep(0.15)
+        self.q.button(True)
+
+    def release(self):
+        self.q.button(False)
+        time.sleep(0.3)
+
+    def click(self, hold=0.25):
+        self.press()
+        time.sleep(hold)
+        self.release()
+
+
 def prepare(q):
     c = Cursor(q, workdir=SNAP_DIR)
     if c.load_template() and c.verify_template():
@@ -187,6 +371,21 @@ def main():
         q.key(*sys.argv[2:])
     elif cmd == "type":
         q.type_text(sys.argv[2])
+    elif cmd in ("pgoto", "pclick", "pdclick", "phold"):
+        ptr = Pointer(q)
+        pos = ptr.goto(int(sys.argv[2]), int(sys.argv[3]))
+        print("pointer at", pos)
+        if cmd == "pclick":
+            ptr.click()
+        elif cmd == "pdclick":
+            ptr.click()
+            ptr.click()
+        elif cmd == "phold":
+            ptr.press()
+    elif cmd == "nudge":
+        q.move(int(sys.argv[2]), int(sys.argv[3]))
+    elif cmd == "release":
+        q.button(False)
     elif cmd == "prepare":
         prepare(q)
     elif cmd == "locate":
