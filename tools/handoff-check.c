@@ -48,7 +48,7 @@ int main(void)
         strcpy(first, gHandoffPath);
         Check("second handoff saves a distinct file", !CommitHandoff() && strcmp(first, gHandoffPath));
     }
-    Check("continue from seed", !agent_begin(&gAgent, "Continue", error, sizeof(error)) && agent_request(&gAgent, "model", gJSON, sizeof(gJSON)) > 0 && strstr(gJSON, "Inspect sources"));
+    Check("continue from seed", !agent_begin(&gAgent, "Continue", error, sizeof(error)) && agent_request(&gAgent, "model", "", gJSON, sizeof(gJSON)) > 0 && strstr(gJSON, "Inspect sources"));
     agent_stop(&gAgent, "diagnostic ended");
     session_close(&gSession);
     fprintf(check_log, "RESULT failures=%d\n", failures);

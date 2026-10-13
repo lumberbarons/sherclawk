@@ -14,6 +14,7 @@ static void defaults(void)
     assert(!strcmp(p.model, SHERCLAWK_MODEL));
     assert(!strcmp(p.api_key, SHERCLAWK_API_KEY));
     assert(!strcmp(p.workspace, SHERCLAWK_WORKSPACE));
+    assert(!p.effort[0]);
     assert(p.max_rounds == AGENT_TURN_MAX && p.max_tools == AGENT_TOOL_MAX);
     assert(p.show_tool_debug == 0);
 }
@@ -25,13 +26,15 @@ static void full_file(void)
         "workspace=Macintosh HD:Projects:\r"
         "max_rounds=2\r"
         "max_tools=1\r"
-        "show_tool_debug=1\r";
+        "show_tool_debug=1\r"
+        "effort=high\r";
     prefs_defaults(&p);
-    assert(prefs_parse(text, strlen(text), &p) == 6);
+    assert(prefs_parse(text, strlen(text), &p) == 7);
     assert(!strcmp(p.model, "openai/gpt-6-luna"));
     assert(!strcmp(p.api_key, "sk-or-v1-abcdef"));
     assert(!strcmp(p.workspace, "Macintosh HD:Projects:"));
     assert(p.max_rounds == 2 && p.max_tools == 1 && p.show_tool_debug == 1);
+    assert(!strcmp(p.effort, "high"));
 }
 
 static void syntax_tolerated(void)
@@ -86,6 +89,34 @@ static void empty_key_clears(void)
     strcpy(p.api_key, "compiled-key");
     assert(prefs_parse(text, strlen(text), &p) == 1);
     assert(p.api_key[0] == 0);
+}
+
+static void effort_values(void)
+{
+    /* The stored effort is empty or one exact provider effort name. */
+    static const char *const names[] = {
+        "max", "xhigh", "high", "medium", "low", "minimal", "none"
+    };
+    size_t i;
+    for (i = 0; i < sizeof(names) / sizeof(*names); i++)
+        assert(prefs_effort_ok(names[i]));
+    assert(prefs_effort_ok("")); /* empty is the stored no-effort value */
+    assert(!prefs_effort_ok("extreme") && !prefs_effort_ok("HIGH"));
+    assert(!prefs_effort_ok("high ") && !prefs_effort_ok(" high"));
+    assert(!prefs_effort_ok("reasoning"));
+    {
+        char long_effort[AGENT_EFFORT_CAP + 1];
+        memset(long_effort, 'x', AGENT_EFFORT_CAP); long_effort[AGENT_EFFORT_CAP] = 0;
+        assert(!prefs_effort_ok(long_effort)); /* no room for the terminator */
+    }
+    /* A known name is taken over the default; unknown, malformed and blank
+     * values are refused and leave the previous one. */
+    prefs_defaults(&p);
+    assert(prefs_parse("effort=medium\r", 14, &p) == 1 && !strcmp(p.effort, "medium"));
+    assert(prefs_parse("effort=extreme\r", 15, &p) == 0 && !strcmp(p.effort, "medium"));
+    assert(prefs_parse("effort=HIGH\r", 12, &p) == 0 && !strcmp(p.effort, "medium"));
+    assert(prefs_parse("effort=high low\r", 16, &p) == 0 && !strcmp(p.effort, "medium"));
+    assert(prefs_parse("effort=\r", 8, &p) == 1 && !p.effort[0]); /* explicit clear */
 }
 
 static void boundaries(void)
@@ -145,20 +176,25 @@ static void format_round_trip(void)
     strcpy(p.model, "openai/gpt-6-luna");
     strcpy(p.api_key, "sk-or-v1-quoted=value"); /* '=' must survive a round trip */
     strcpy(p.workspace, "Macintosh HD:Projects:");
+    strcpy(p.effort, "minimal");
     p.max_rounds = 7; p.max_tools = 128; p.show_tool_debug = 1;
     n = prefs_format(&p, buf, sizeof(buf));
     assert(n > 0 && buf[n - 1] == '\r');
     prefs_defaults(&base);
-    assert(prefs_parse(buf, (size_t)n, &base) == 6);
+    assert(prefs_parse(buf, (size_t)n, &base) == 7);
     assert(!strcmp(base.model, p.model));
     assert(!strcmp(base.api_key, p.api_key));
     assert(!strcmp(base.workspace, p.workspace));
+    assert(!strcmp(base.effort, "minimal"));
     assert(base.max_rounds == 7 && base.max_tools == 128 && base.show_tool_debug == 1);
     /* A buffer that cannot hold the file fails instead of truncating. */
     memset(buf, 0, sizeof(buf));
     assert(prefs_format(&p, buf, 16) == -1);
     /* Values with line breaks cannot round-trip. */
     strcpy(p.api_key, "bad\nkey");
+    assert(prefs_format(&p, buf, sizeof(buf)) == -1);
+    strcpy(p.api_key, "sk-or-v1-quoted=value");
+    strcpy(p.effort, "bad\neffort");
     assert(prefs_format(&p, buf, sizeof(buf)) == -1);
 }
 
@@ -169,6 +205,7 @@ int main(void)
     syntax_tolerated();
     malformed_keeps_defaults();
     empty_key_clears();
+    effort_values();
     boundaries();
     over_long_lines_ignored();
     format_round_trip();

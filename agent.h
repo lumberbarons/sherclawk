@@ -102,13 +102,16 @@ typedef struct {
 } Agent;
 void agent_reset(Agent *a, AgentJournal journal, void *context);
 int agent_begin(Agent *a, const char *prompt, char *error, size_t cap);
-int agent_request(const Agent *a, const char *model, char *out, size_t cap);
+/* `effort` is the reasoning effort of the request, sent as the top-level
+ * `reasoning` object's `effort` member. NULL or "" sends no reasoning member,
+ * exactly the body earlier builders produced. */
+int agent_request(const Agent *a, const char *model, const char *effort, char *out, size_t cap);
 /* Like agent_request, but the request that follows agent_attach_image carries
  * the image's pixels as a base64 data URL in place of its note. The pixels are
  * never in history, the journal or a handoff request, so a later request sends
  * the note alone. A NULL image sends the note as plain text. */
-int agent_request_image(const Agent *a, const char *model, const AgentImage *image,
-                        char *out, size_t cap);
+int agent_request_image(const Agent *a, const char *model, const char *effort,
+                        const AgentImage *image, char *out, size_t cap);
 /* Record the note for an image once every tool result of the round is in:
  * chat-completions tool messages cannot carry pixels, so the image follows as
  * a user message. Returns -1 for an unusable image, a round still in progress
@@ -131,8 +134,9 @@ int agent_project_seen(const Agent *a, const char *project);
  * for a round still in progress or a recording failure. */
 int agent_project_note(Agent *a, const char *project, const char *text);
 /* Independent, tool-free summary request works even when history is full.
- * Seed a fresh candidate only; caller publishes it after durable persistence. */
-int agent_handoff_request(const Agent *a, const char *model, char *out, size_t cap);
+ * Seed a fresh candidate only; caller publishes it after durable persistence.
+ * `effort` rides like agent_request's. */
+int agent_handoff_request(const Agent *a, const char *model, const char *effort, char *out, size_t cap);
 int agent_handoff_response(const char *body, size_t len, int status, char *summary,
                            size_t cap, char *error, size_t error_cap);
 int agent_handoff_seed(Agent *candidate, const char *summary, const char *source,
