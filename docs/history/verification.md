@@ -703,3 +703,17 @@ reported `free_heap_bytes` 4,266,608 to the model. Both runs completed their two
 model rounds normally. The shipped build (16 MiB preferred) was republished
 afterwards. A failed TLS context allocation was not induced in the guest; host
 tests inject it for the model request and for MCP discovery and calls.
+
+## Build-check fixtures, October 12, 2026
+
+`SherclawkBuildCheck`, `SherclawkRunCheck`, `SherclawkQuitCheck` and
+`SherclawkSelfBuildCheck` had failed (2, 3, 3 and 3) on `main` since #91 gave the
+starter five sources: the fixture's edit of `"sources":["main.c"]` in the
+starter's `project.json` no longer matched, so `extra.c` never joined the build,
+the build meant to fail on its `#error` succeeded and the Run and Quit variants
+launched an app they expected to be refused. The failures reproduced on
+`3924cf1` in OS 9.2.2. The edit now inserts `extra.c` after `main.c`; all four
+diagnostics report `RESULT failures=0` in the guest. In the Quit variant the
+first project's `QUIT_TIMEOUT`, the `PROCESS_PREEXISTED` relaunch and
+`RUN_NOT_OWNED` are expected outcomes, and the second project reports
+`QUIT_OBSERVED`.
