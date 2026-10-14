@@ -159,8 +159,13 @@ int main(void)
     assert(client.state == MCP_COMPLETE && client.call_error && calls == 2);
     assert(mcp_client_response(&client)[0]);
     mcp_client_close(&client); assert(creates == closes && !client.session[0] && !mcp_client_response(&client)[0]);
+    /* Each step of a stalled handshake pumps its connection exactly once; the
+     * deadline check fails the client before any further pump. */
     reset(); stalled = 1; assert(!mcp_client_discover(&client, &config, 0));
-    expect_step(1799, 0); expect_step(1800, -1);
+    assert(contexts[0].pumps == 0);
+    expect_step(1, 0); assert(contexts[0].pumps == 1);
+    expect_step(1799, 0); assert(contexts[0].pumps == 2);
+    expect_step(1800, -1); assert(contexts[0].pumps == 2);
     assert(client.state == MCP_FAILED && !lists);
     n = creates; assert(mcp_client_call(&client, "mcp_tavily_tavily_search", "{}", 1801) < 0 && creates == n);
     reset(); bad_version = 1; assert(!mcp_client_discover(&client, &config, 0));
@@ -216,6 +221,11 @@ int main(void)
     assert(!mcp_client_discover(&client, &config, 0));
     for (i = 0; i < 1600 && !(client.working && client.work.steps >= 2); i++) { expect_step((unsigned long)i, 0); }
     assert(client.working && client.state == MCP_LIST && client.work.steps >= 2);
+    /* A step that only processes a received message does not pump. */
+    {
+        int before = contexts[0].pumps;
+        expect_step(1600, 0); assert(client.working && contexts[0].pumps == before);
+    }
     mcp_client_stop(&client, 1700);
     assert(!client.working && !client.registry.count);
     for (i = 1700; i < 1900 && !step((unsigned long)i); i++) {}
