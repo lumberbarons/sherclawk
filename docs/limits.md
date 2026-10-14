@@ -77,6 +77,22 @@ with the zone grown and equal `FreeMem` plus the gap:
 | 10 MiB (minimum) | 4,267,344 bytes | 4,149,520 bytes |
 | 16 MiB (preferred) | 10,558,400 bytes | 10,440,608 bytes |
 
+The integrated MCP acceptance target measures the same run loop with additional
+diagnostic storage, rather than inferring available memory from linked size.
+On 2026-10-14 the shipping application linked at 651,264 bytes text, 10,672
+data and 6,906,256 bss (7,568,192 total). `SherclawkMCPAgentCheck` linked at
+675,840 text, 10,848 data and 6,965,280 bss (7,651,968 total), an additional
+83,776 bytes. Its separate `SIZE` resource asks for exactly 10,485,760 bytes
+as both preferred and minimum; the guest's actual process partition includes
+additional PEF loader overhead (11,307,620 bytes in that run). Setup left
+4,204,512 bytes free; a model TLS context left 4,085,728; holding an unpumped
+model TLS allocation alongside MCP connect cleanup left 3,978,640. Final
+headroom recovered to 4,203,760 bytes, and the full diagnostic ended with
+`RESULT failures=0`. The shipping 10 MiB minimum / 16 MiB preferred
+and all protocol, history and result caps remain unchanged. See the
+[integrated acceptance record](history/verification.md#integrated-mcp-agent-acceptance-october-14-2026)
+for measured runtime headroom and the exercised cases.
+
 A TLS context with its transport costs about 117,800 bytes while open (one
 model request, or up to two for an MCP exchange plus its acknowledgment POST).
 This margin is accepted: the minimum partition leaves roughly 35 times that.

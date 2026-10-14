@@ -13,6 +13,10 @@ hand on (see [Credential redaction](#credential-redaction)). The OS 9.2.2 Tavily
 and the integrated run loop completed a Tavily search, retention, paging and
 Stop in the guest on October 11, 2026 (see
 [guest evidence](history/verification.md#mcp-run-loop-in-the-guest-october-11-2026)).
+The integrated release gate passed on October 14, 2026: model-triggered
+extraction and pagination, fallback, disabled configuration, Stop, credential
+checks and operation at the 10 MiB minimum are recorded in the
+[acceptance evidence](history/verification.md#integrated-mcp-agent-acceptance-october-14-2026).
 
 ## Configuration editor
 
@@ -146,8 +150,9 @@ most 31 bytes and mapped tool names at most 63 bytes.
 
 At the exact official Tavily endpoint only `tavily_search` and `tavily_extract`
 are eligible. Other endpoints need `readOnlyHint: true` plus selection. Such
-annotations are server claims, not proof of safety. Native schemas are not yet
-combined with these schemas. Unsupported individual tools are skipped with a
+annotations are server claims, not proof of safety. The standalone protocol
+diagnostic uses only remote schemas; the app merges them with native schemas
+as described below. Unsupported individual tools are skipped with a
 registry notice; ambiguous or over-budget discovery clears the whole registry.
 
 ## Credential redaction
@@ -252,12 +257,42 @@ handoff wait until the drain finishes. A run's end — completion, any Stop or
 error abort, a limit pause or New Chat — closes the client and wipes its copy
 of the configuration credentials; the next run re-discovers from the file.
 
-## Remaining implementation and acceptance
+## Integrated acceptance diagnostic
 
-- Demonstrate in the guest the remaining cases: extraction and multi-page
-  results, failed-discovery fallback, and absence of credentials in
-  model-visible output. Model-triggered search with a source link, retention,
-  paging and Stop mid-call are demonstrated.
+`SherclawkMCPAgentCheck` includes the production UI and run controller. It
+reads the owner's saved model preferences and editor-written private Tavily
+configuration, runs live model-selected search and extraction, reads retained
+pages, and saves a real model-generated handoff. Its separate resource requests
+10 MiB as both preferred and minimum; the shipping app still prefers 16 MiB.
+The log records the requested sizes, actual process partition (which includes
+PEF loader overhead), heap headroom including the ungrown application-zone
+gap, stack space and the longest observed event-loop work step.
+
+```sh
+SHARE_HOST=<afp-host> APP=SherclawkMCPAgentCheck tools/deploy-to-share.sh
+# Select the app in Finder and launch with Command-O over QMP.
+ssh "$SHARE_HOST" 'cat /srv/retro68/SherclawkMCPAgentCheck.log'
+```
+
+The diagnostic uses fixture configuration loaders after its initial private
+load: switching to disabled after a run starts must leave that run's discovery
+and calls intact, then disable the next run without opening MCP transport.
+A public missing endpoint exercises failed discovery and native-tool fallback.
+The private file is preserved. Stop targets are discovery, a remote call,
+received-message parsing, artifact publication, and the next retained-page
+dispatch. A page itself is one synchronous, bounded 512-byte read; Stop is
+observed between page calls. The diagnostic checks that Stop clears the frozen
+names, returns within 60 ticks, drains, and never advances the RPC ID during
+drain. It also holds an unpumped model TLS allocation alongside MCP cleanup to
+measure that overlap without issuing a model request during drain.
+
+Credential checks use the actual private header/query values, bearer token,
+model key and negotiated session ID as exact-value oracles against frozen
+schemas, model request/history/reply, retained artifacts, handoff, closed
+journals and lifecycle log. Only statuses and counts are logged. The host
+redaction fixtures additionally inject plain, escaped and nested reflections;
+the live service is not an adversarial reflection fixture. The acceptance log
+ends with `RESULT failures=0` only when every diagnostic assertion passes.
 
 ## Verification evidence (2026-10-08)
 
