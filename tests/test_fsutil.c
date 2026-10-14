@@ -1,7 +1,7 @@
 /* Direct fault model for fs_write_verified and fs_verify_body: every step of
  * the ladder must fail closed, and out_info must only describe a verified
  * body. Callers' own suites cover their journals and renames. */
-#include "fsutil.h"
+#include "tools/fsutil.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>

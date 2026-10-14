@@ -10,13 +10,13 @@ specified separately. Active work lives in the
 
 ## Display boundary
 
-`main.c` owns the Toolbox controls, TextEdit handles and drawing. `display.c`
+`src/app/main.c` owns the Toolbox controls, TextEdit handles and drawing. `src/app/display.c`
 contains pure token/tool formatting, model and prompt validation, pause reasons,
 scroll calculations and layout rectangles. Its inputs and outputs use ordinary
 C values; the UI adapts the rectangles to QuickDraw and applies scroll offsets.
 The transcript and MCP editor share the same scroll calculations.
 
-`chat_append_message()` in `chat.c` converts UTF-8 to bounded MacRoman/CR display
+`chat_append_message()` in `src/app/chat.c` converts UTF-8 to bounded MacRoman/CR display
 text, substitutes session-file notices for oversized entries, and caps accumulated
 transcript bytes and separators. When the next entry does not fit, it drops the
 oldest whole entries, behind one session-file notice, rather than clearing the
@@ -88,7 +88,7 @@ conversion. Detailed mutation recovery rules belong in [tools](tools.md).
 Workspace and project `AGENTS.md` text is owner guidance, not tool authority:
 the system rules say it cannot override them or widen a tool, and it never
 changes which tools may run. The workspace-root text lives outside history (a
-static in `agent.c`, in the system message of each request) so it survives New
+static in `src/agent/agent.c`, in the system message of each request) so it survives New
 Chat and handoff without being summarized; a project's text is a history
 message, so it follows the conversation. See
 [ADR-0004](adr/0004-load-agents-md-as-bounded-owner-guidance.md).
@@ -118,7 +118,7 @@ and leave these alone unless the contract and its tests change with it.
   settle first (pumped without sending the request, bounded at 30 seconds and
   logged if forced), because an outstanding async connect can fault the
   classic OT stack. A connected or finished exchange closes at once. The yields around that cycle are
-  tunable and soaked; see the comment on `CloseChatContext` in `main.c` and
+  tunable and soaked; see the comment on `CloseChatContext` in `src/app/main.c` and
   [development](development.md).
 
 ## Preferences implementation notes
@@ -150,7 +150,7 @@ The editor is a modal dialog with its own `TextEdit` record and scroll bar
 rather than a dialog edit item, because an edit item is limited to 255
 characters. It shares the pane scroll helpers and the Cut/Copy/Paste handler
 with the main window, and runs its own event loop like Preferences. The
-text rules (`mcp_editor.c`) and persistence (`mcp_store.c`) have no Toolbox
+text rules (`src/mcp/editor.c`) and persistence (`src/mcp/store.c`) have no Toolbox
 dependency beyond the File Manager, so host tests exercise them against a
 fault-injecting model. Saves stage, verify and swap rather than truncating in
 place: the file is hand-edited and holds credentials, so a failed save must
@@ -158,10 +158,10 @@ never cost the previous version.
 
 ## MCP run loop notes
 
-Remote MCP tools are driven by a controller (`mcp_run.c`) that owns the
+Remote MCP tools are driven by a controller (`src/mcp/run.c`) that owns the
 client, the retention folder and the deferred close, and reaches the
 application only through a small host callback struct: configuration loading,
-the workspace path, Open Transport, the tick clock and the journal. `main.c`
+the workspace path, Open Transport, the tick clock and the journal. `src/app/main.c`
 keeps the run state and the Toolbox presentation around it, so the whole
 sequence — load, discover, freeze, call, retain, Stop, drain — runs on the
 host against a fake network (`tests/test_mcp_run.c`).

@@ -178,7 +178,7 @@ Limits are explicit: by default 32 model rounds and 64 executed calls per run,
 each adjustable 1–128 in Preferences; four calls per
 response, 8 KiB arguments per call, 1 MiB history, 1,056 KiB JSON request, 64 KiB
 raw HTTP response, 40 KiB of reply text, and 6,000 output tokens per model request (`AGENT_MAX_TOKENS`
-in `agent.h`; the handoff request has its own `AGENT_HANDOFF_MAX_TOKENS`). Reasoning
+in `src/agent/agent.h`; the handoff request has its own `AGENT_HANDOFF_MAX_TOKENS`). Reasoning
 tokens count against that budget. A message you type may be up to 8,192 characters.
 The transcript pane is limited by TextEdit; when it fills, the oldest text is
 dropped from the window (not from history or the session file). The

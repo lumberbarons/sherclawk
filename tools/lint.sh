@@ -31,11 +31,11 @@ if command -v cppcheck >/dev/null 2>&1; then
         --suppress=assertWithSideEffect:tests/test_tools.c \
         --suppress=assertWithSideEffect:tests/test_jobs.c \
         --suppress=assertWithSideEffect:tests/test_build_project.c \
-        -I tests/toolbox -I . -I vendor \
-        mcp_config.c mcp_protocol.c mcp_stream.c mcp_client.c mcp_editor.c mcp_store.c tests/test_mcp.c tests/test_mcp_client.c \
+        -I tests/toolbox -I . -I src -I vendor \
+        src/mcp/config.c src/mcp/protocol.c src/mcp/stream.c src/mcp/client.c src/mcp/editor.c src/mcp/store.c tests/test_mcp.c tests/test_mcp_client.c \
         tests/test_mcp_editor.c tests/test_mcp_store.c \
-        tools.c fsutil.c jsonargs.c inspect.c mcp_guard.c view_image.c json.c text.c chat.c display.c agent.c network.c jobs.c \
-        selfbuild.c build_project.c run_application.c application_process.c ae_dispatch.c toolserver.c session.c vendor/http.c \
+        src/tools/tools.c src/tools/fsutil.c src/agent/jsonargs.c src/tools/inspect.c src/mcp/guard.c src/tools/view_image.c src/agent/json.c src/agent/text.c src/app/chat.c src/app/display.c src/agent/agent.c src/agent/network.c src/native/jobs.c \
+        src/native/selfbuild.c src/native/build_project.c src/native/run_application.c src/native/application_process.c src/native/ae_dispatch.c src/native/toolserver.c src/app/session.c vendor/http.c \
         tests/test_core.c tests/test_display.c tests/test_chat_display.c tests/test_tools.c tests/test_agent.c tests/test_base64.c \
         tests/test_jobs.c tests/test_build_project.c tests/test_selfbuild.c \
         tests/test_session.c tests/test_quit_application.c tests/test_fsutil.c tests/test_jsonargs.c \

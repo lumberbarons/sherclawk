@@ -5,10 +5,10 @@
  * log carries only fixed milestones, status, code, os_error and identifiers:
  * never a result body, because the file under test holds credentials. If the
  * configuration is absent a placeholder is created and removed afterwards. */
-#include "tools.h"
-#include "mcp_guard.h"
-#include "mcp_store.h"
-#include "json.h"
+#include "tools/tools.h"
+#include "mcp/guard.h"
+#include "mcp/store.h"
+#include "agent/json.h"
 #include "config.h"
 #include <Quickdraw.h>
 #include <Fonts.h>

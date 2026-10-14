@@ -272,10 +272,10 @@ after explicit invocation is reliable and users identify a need for it.
 ## Implementation Notes
 
 - Keep parsing, catalog validation and instruction delivery host-testable.
-  Toolbox glue in `main.c` handles selection and workspace File Manager access;
+  Toolbox glue in `src/app/main.c` handles selection and workspace File Manager access;
   do not put all skill logic into the UI/event loop.
-- `agent.c` must frame selected instructions as user-requested guidance in
-  conversation history and account for their serialized size. `session.c`
+- `src/agent/agent.c` must frame selected instructions as user-requested guidance in
+  conversation history and account for their serialized size. `src/app/session.c`
   records their delivery and uses the existing summary-based handoff. No
   active-task state or skill-specific restoration is required to interpret
   subsequent messages.

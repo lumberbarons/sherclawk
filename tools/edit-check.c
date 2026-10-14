@@ -1,8 +1,8 @@
 /* Native exact-edit acceptance. AFP rename/open behavior cannot be inferred
  * from host mocks: preserve a unique fixture and every journal/backup, then
  * exercise guards, MacRoman/CR, paging, locks and replacement in OS 9. */
-#include "tools.h"
-#include "json.h"
+#include "tools/tools.h"
+#include "agent/json.h"
 #include "config.h"
 #include <Quickdraw.h>
 #include <Fonts.h>

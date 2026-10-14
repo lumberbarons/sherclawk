@@ -1,7 +1,7 @@
 /* Credential redaction across decoded and escaped reflections: the plain-text
  * helper against an independent reference, and the schema and call-result
  * stages end to end. Each fixture states what the model may see afterwards. */
-#include "mcp.h"
+#include "mcp/mcp.h"
 #include <assert.h>
 #include <stdarg.h>
 #include <stdio.h>

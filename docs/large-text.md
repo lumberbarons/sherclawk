@@ -11,7 +11,7 @@ The implementation supports 65,536 encoded bytes through search, verified
 read, unique exact edit, readback and native build. Shipping Sherclawk retains
 its guest-verified 4 KiB file/input limit. `SherclawkLargeTextCheck`,
 `SherclawkEditCheck` and the build diagnostics opt into 64 KiB; host checks
-exercise both modes. Set `SHERCLAWK_LARGE_TEXT_VERIFIED` in `text_limits.h` only
+exercise both modes. Set `SHERCLAWK_LARGE_TEXT_VERIFIED` in `src/agent/text_limits.h` only
 after the OS 9.2.2 evidence below is recorded. Schemas, environment fields and
 validation use the same selected limit.
 

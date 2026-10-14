@@ -1,9 +1,9 @@
 /* Session journal and handoff persistence against a File Manager model. Faults
  * check that a failed handoff leaves the agent, the open journal and the file
  * handles exactly as they were, and that an existing file is never reused. */
-#include "session.h"
-#include "mcp_result.h"
-#include "json.h"
+#include "app/session.h"
+#include "mcp/result.h"
+#include "agent/json.h"
 #include <Files.h>
 #include <Script.h>
 #include <assert.h>

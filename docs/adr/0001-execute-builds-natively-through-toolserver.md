@@ -19,7 +19,7 @@ queue. Originally a Perl worker (`worker/worker.pl`) running inside MacRelix
 claimed each job and ran its generated shell `script`, whose real work is
 `tlsrvr` sending a "Do Script" Apple event to MPW's ToolServer. The queue
 bookkeeping (exclusive folder create, marker rename, closed-file records,
-`STOP` polling) was already native in `jobs.c`; only execution was external.
+`STOP` polling) was already native in `src/native/jobs.c`; only execution was external.
 That left a human step (start MacRelix, keep it foregrounded because an idle
 background worker stops polling), an out-of-band `ssh` step to create the
 queue, and a worker file that had to be republished under a fresh name on every
@@ -117,8 +117,8 @@ unattended appeared, the choice should be revisited.
 
 ## Implementation Notes
 
-- `toolserver.c`/`.h` is a single-outstanding-command asynchronous client;
-  `selfbuild.c`/`.h` is the executor integrated with `build_project`.
+- `src/native/toolserver.c`/`.h` is a single-outstanding-command asynchronous client;
+  `src/native/selfbuild.c`/`.h` is the executor integrated with `build_project`.
 - Invariants future changes must respect:
   - One validated build representation generates both the shell recipe and the
     native steps, so they cannot drift.

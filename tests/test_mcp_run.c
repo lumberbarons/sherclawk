@@ -1,16 +1,16 @@
-/* Integration fixture for the run controller main.c drives (mcp_run.c):
+/* Integration fixture for the run controller main.c drives (mcp/run.c):
  * load the saved configuration, discover eligible tools, freeze the admitted
  * schemas into the model advertisement, dispatch a model-selected remote call
  * with its arguments verbatim, retain the redacted response and page it back,
  * and stop and drain at each phase. No API key; the fake TLS serves
  * independently authored fixtures and the File Manager model lives in
  * test_mcp_run_fm.c. */
-#include "mcp_run.h"
-#include "mcp_client.h"
-#include "mcp_result.h"
-#include "agent.h"
-#include "json.h"
-#include "chat.h"
+#include "mcp/run.h"
+#include "mcp/client.h"
+#include "mcp/result.h"
+#include "agent/agent.h"
+#include "agent/json.h"
+#include "app/chat.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

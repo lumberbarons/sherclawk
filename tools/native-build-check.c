@@ -5,7 +5,7 @@
  * process as evidence of the executor environment.
  */
 #include "config.h"
-#include "toolserver.h"
+#include "native/toolserver.h"
 #include <Quickdraw.h>
 #include <Fonts.h>
 #include <Windows.h>

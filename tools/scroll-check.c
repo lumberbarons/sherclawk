@@ -2,7 +2,7 @@
  * Host mocks miss TESelView's disabled-autoscroll behavior and destRect drift.
  * Only synthetic transcript text is used; no requests or credentials are sent. */
 #define main SherclawkMain
-#include "../main.c"
+#include "app/main.c"
 #undef main
 
 static FILE *check_log;

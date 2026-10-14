@@ -16,8 +16,8 @@ tags: [diagnostics, tools, journal, limits]
 
 Sherclawk should be able to investigate its own failed or slow runs using
 evidence from the native application. Today, `get_environment` exposes OS,
-workspace, capabilities and heap headroom; `main.c` logs network and tool
-timings and stop reasons; and `session.c` preserves conversation and execution
+workspace, capabilities and heap headroom; `src/app/main.c` logs network and tool
+timings and stop reasons; and `src/app/session.c` preserves conversation and execution
 records. However, the lifecycle log is hard-coded to `Retro68:Sherclawk.log`
 and recreated on launch, runtime state has no dedicated model-facing reader,
 and UTF-8 journals cannot be decoded reliably through the MacRoman `read_text`
@@ -182,9 +182,9 @@ first improving the evidence and are outside this decision.
 ## Implementation Notes
 
 - Keep diagnostic storage, paging and formatting separate from Toolbox UI code,
-  with host-testable interfaces. `main.c` supplies run state; `network.c` and
-  `timing.c` supply exchange observations; the MCP controller and native build
-  machinery supply their own state. `registry.c` remains pure tool data.
+  with host-testable interfaces. `src/app/main.c` supplies run state; `src/agent/network.c` and
+  `src/app/timing.c` supply exchange observations; the MCP controller and native build
+  machinery supply their own state. `src/agent/registry.c` remains pure tool data.
 - A snapshot identifies the app version and exact build, including whether it
   has uncommitted changes. It reports model/effort, run state and counters,
   history usage and limits, passive heap headroom, last failure, last network

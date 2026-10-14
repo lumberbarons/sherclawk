@@ -1,7 +1,7 @@
 /* Native search acceptance: exercise real AFP catalog pagination and a
  * search/read/edit/read cycle. Preserve fixtures and recovery backups. */
-#include "tools.h"
-#include "json.h"
+#include "tools/tools.h"
+#include "agent/json.h"
 #include "config.h"
 #include <Quickdraw.h>
 #include <Fonts.h>

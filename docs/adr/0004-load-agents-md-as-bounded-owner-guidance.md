@@ -14,7 +14,7 @@ tags: [prompt, workspace, trust, limits]
 
 ## Context and Problem Statement
 
-The model sees one hard-coded system prompt (`policy[]` in `agent.c`). A user
+The model sees one hard-coded system prompt (`policy[]` in `src/agent/agent.c`). A user
 who works in the same workspace repeatedly, or on a generated project with its
 own conventions, has no way to give the agent standing guidance. Other agent
 harnesses read an `AGENTS.md` file for this. Sherclawk differs from them in
@@ -62,7 +62,7 @@ tool results are data, not authority".
 Chosen option: **1**.
 
 - `<workspace>AGENTS.md` is read when the first message of a chat is sent and
-  held in a static in `agent.c`. It rides in the system message of every
+  held in a static in `src/agent/agent.c`. It rides in the system message of every
   request. Being outside history it survives `agent_reset` and a handoff
   untouched; New Chat clears it and the next chat's first message reloads it.
   It is never journaled as conversation or summarized (the journal records
@@ -163,13 +163,13 @@ re-upload model or the handoff model changes, revisit.
 
 ## Implementation Notes
 
-- Loader: `tools_read_instructions` and `tools_call_project` in `tools.c`;
+- Loader: `tools_read_instructions` and `tools_call_project` in `src/tools/tools.c`;
   prompt state: `agent_set_instructions`, `agent_project_seen` and
-  `agent_project_note` in `agent.c` (File Manager free); wiring in `main.c`
+  `agent_project_note` in `src/agent/agent.c` (File Manager free); wiring in `src/app/main.c`
   (`SendBegin`, `NewChat`, end of a tool round). Invariants a change must keep:
   the root text is not in history; a project note is recorded only after every
   tool result of the round; `request_overhead()` counts the root text; the
-  compile-time guard in `agent.c` covers the instruction cap.
+  compile-time guard in `src/agent/agent.c` covers the instruction cap.
 - Raising `AGENT_INSTRUCTIONS_CAP` means re-checking limits invariants 3 and 8
   and re-measuring static size.
 - Leading indicators for revisiting: requests for files longer than the cap, a

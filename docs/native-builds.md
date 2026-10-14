@@ -90,7 +90,7 @@ Optional `template` is provenance only. Protocol-1 descriptors are refused:
 replace their combined sources list with separate C sources/Rez resources, add
 `toolchain` and `output`, and set `protocol` to 2 through ordinary guarded edits.
 
-Declared C/Rez/header files are capped at `BUILD_INPUTS` (`build_plan.h`), with a 4 KiB descriptor;
+Declared C/Rez/header files are capped at `BUILD_INPUTS` (`src/native/build_plan.h`), with a 4 KiB descriptor;
 each input is at most 4 KiB in shipping builds (64 KiB in guest acceptance
 builds), plain Finder `TEXT`, MacRoman/CR, without resource
 forks or aliases. Declare all project-owned headers. Relative paths use colon
@@ -152,7 +152,7 @@ queue and its snapshots are read-only to model-facing source mutation tools.
 ## Native executor
 
 `build_project` publishes the same job-queue (protocol 1) snapshot, then attempts exclusive
-ownership once. `selfbuild.c` renames `ready` to `claimed`, retains the unchanged
+ownership once. `src/native/selfbuild.c` renames `ready` to `claimed`, retains the unchanged
 `started` record plus `native-executor`, and compares every staged input against
 the published representation in 1 KiB pages. It revalidates `project.json`, copies
 only declared inputs into a fresh `build:native` tree as TEXT/ttxt, and uses the
@@ -181,7 +181,7 @@ Serve Build Queue toggle remain future work.
 
 ### ToolServer protocol
 
-The client in `toolserver.c` speaks the same Apple-event protocol as the
+The client in `src/native/toolserver.c` speaks the same Apple-event protocol as the
 upstream `tlsrvr` tool.
 
 - **Discovery.** Find a running process with signature `'MPSX'`; otherwise find

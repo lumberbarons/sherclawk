@@ -7,7 +7,7 @@ in the headers today; the headers win if this drifts.
 
 ## Where each limit lives
 
-### Model request and response (`agent.h`, `chat.h`)
+### Model request and response (`src/agent/agent.h`, `src/app/chat.h`)
 
 | Constant | Value | Bounds |
 |---|---|---|
@@ -20,12 +20,12 @@ in the headers today; the headers win if this drifts.
 | `AGENT_HISTORY_CAP` | 1 MiB | Recorded conversation JSON (`Agent.history`). |
 | `CHAT_REQUEST_CAP` | 1,056 KiB (1,081,344) | The whole request JSON (`gJSON`): history plus system prompt and tool schemas. |
 | `AGENT_INSTRUCTIONS_CAP` | 4096 | UTF-8 bytes of one `AGENTS.md` (marker included). The root file rides in the system message, so it is request overhead; a project file is a history message. Up to `AGENT_PROJECT_MAX` projects are tracked per chat. |
-| `AGENT_TEXT_CAP` | 32 KiB | User prompt and handoff message buffers. Not reply text. Must hold a full prompt in UTF-8 (`CHAT_PROMPT_CAP` below): a compile-time guard in `agent.c` enforces it. |
+| `AGENT_TEXT_CAP` | 32 KiB | User prompt and handoff message buffers. Not reply text. Must hold a full prompt in UTF-8 (`CHAT_PROMPT_CAP` below): a compile-time guard in `src/agent/agent.c` enforces it. |
 | `CHAT_PROMPT_CAP` | 8193 | The prompt field, in MacRoman bytes including the terminator. Each byte can become three bytes of UTF-8 in `gPending`. |
 | `AGENT_RESULT_CAP` | 4096 | One tool result recorded into history. Tool executors fill pages to it, and several keep a record of it in static scratch (the application stack is small). Escaped on the wire it can reach `AGENT_RESULT_WIRE_CAP` (six times as much, plus 256), which `agent_response` reserves per call. |
-| `AGENT_IMAGE_CAP` | 128 KiB | Largest PNG `view_image` reads (`view_image.c` holds one in a static buffer). Its base64 form, a third larger, rides in one request. |
+| `AGENT_IMAGE_CAP` | 128 KiB | Largest PNG `view_image` reads (`src/tools/view_image.c` holds one in a static buffer). Its base64 form, a third larger, rides in one request. |
 | `AGENT_IMAGE_NOTE_CAP` | 2048 | History reserved for the note that accompanies an image, whenever a response calls `view_image`. |
-| JSON token scratch | 4096 tokens | Tokens (not bytes) in any parsed model response; `tokens[]` in `agent.c`, shared by `agent_response`, `agent_handoff_response` and the usage extractors. A catalog page over the cap parses to zero rows. |
+| JSON token scratch | 4096 tokens | Tokens (not bytes) in any parsed model response; `tokens[]` in `src/agent/agent.c`, shared by `agent_response`, `agent_handoff_response` and the usage extractors. A catalog page over the cap parses to zero rows. |
 
 ### Display and time
 
@@ -92,7 +92,7 @@ The starter that `create_project` copies has its own partition in `app.r`:
 2 MiB preferred and 1.5 MiB minimum (it was 1 MiB), raised for self-render.
 Each source file stays at or under 4096 bytes, the `edit_text`, `write_text`
 and `build_project` limit, which is why the starter is several files; they use
-the project's declared inputs, capped by `BUILD_INPUTS` (`build_plan.h`).
+the project's declared inputs, capped by `BUILD_INPUTS` (`src/native/build_plan.h`).
 
 | Item | Size | Notes |
 |---|---|---|
@@ -143,7 +143,7 @@ in bss and 8,224 bytes of text and data, mostly the embedded starter.
    also `AGENT_MCP_SCHEMA_CAP` — see
    [frozen remote schemas](#frozen-remote-schemas-agenth)).
    Raising history means raising the request cap and the HTTP request buffer in
-   `network.h`, which is `CHAT_REQUEST_CAP` plus header room.
+   `src/agent/network.h`, which is `CHAT_REQUEST_CAP` plus header room.
 4. **A cut-off reply is a model round.** At the token limit the reply is
    discarded and the model is told to retry, which consumes one of the run's
    rounds; the round limit is what bounds repeated truncation. A complete reply
@@ -191,10 +191,10 @@ in bss and 8,224 bytes of text and data, mostly the embedded starter.
 | `AGENT_REPLY_CAP` | `Agent.text` in the live and candidate `Agent` | 2 |
 | `AGENT_TEXT_CAP` | prompt buffer; handoff content (once) and message (six times) | 8 |
 | `CHAT_PROMPT_CAP` | `gPending` (three times) and the `SendChat` prompt buffer | 4 |
-| `AGENT_RESULT_CAP` | `gToolResult`, the static record scratch in `tools.c`, and the wire message (`AGENT_RESULT_WIRE_CAP`) | about 15 |
+| `AGENT_RESULT_CAP` | `gToolResult`, the static record scratch in `src/tools/tools.c`, and the wire message (`AGENT_RESULT_WIRE_CAP`) | about 15 |
 | `AGENT_IMAGE_CAP` | the `view_image` PNG buffer | 1 |
-| `AGENT_TOOL_SCHEMA_CAP` | the native schema array and the merged native-plus-remote array in `agent.c` (two buffers) | 2 |
-| `AGENT_MCP_SCHEMA_CAP` | the frozen remote schema text and its validation copy in `agent.c` | 2 |
+| `AGENT_TOOL_SCHEMA_CAP` | the native schema array and the merged native-plus-remote array in `src/agent/agent.c` (two buffers) | 2 |
+| `AGENT_MCP_SCHEMA_CAP` | the frozen remote schema text and its validation copy in `src/agent/agent.c` | 2 |
 | `AGENT_MAX_TOKENS` | none | 0 |
 
 Linked static size is measured, not estimated, with `powerpc-apple-macos-size`
@@ -239,7 +239,7 @@ state are static), text plus data plus bss measured 606,208 + 10,176 + 6,032,256
   [usage limits](usage.md#run-limits), and update the `max_tokens` assertion
   in `tests/test_agent.c`.
 - **`CHAT_RESPONSE_CAP`:** also update the "exceeds 64 KiB" error in
-  `network.c` and the [usage limits](usage.md#run-limits), and re-measure size.
+  `src/agent/network.c` and the [usage limits](usage.md#run-limits), and re-measure size.
 - **History:** raise `CHAT_REQUEST_CAP` with it, update the memory measurements
   here and the [usage limits](usage.md#run-limits), re-measure size, and check
   the `SIZE` resource.
@@ -248,13 +248,13 @@ state are static), text plus data plus bss measured 606,208 + 10,176 + 6,032,256
   `tools.md`, `usage.md` and the README; tests that rely on a result not fitting
   need a larger fixture.
 - **`CHAT_PROMPT_CAP`:** its UTF-8 form (three bytes each) must fit
-  `AGENT_TEXT_CAP`; the guard in `agent.c` enforces it. Update `gPending` and the
+  `AGENT_TEXT_CAP`; the guard in `src/agent/agent.c` enforces it. Update `gPending` and the
   [usage limits](usage.md#run-limits).
 - **`AGENT_IMAGE_CAP`:** check invariant 8 against `CHAT_REQUEST_CAP`, update the
   `view_image` text in `docs/tools.md` and the schema description in the
-  `view_image` registry row in `registry.c` (it quotes the value), and re-measure size.
+  `view_image` registry row in `src/agent/registry.c` (it quotes the value), and re-measure size.
 - **Anything:** run `tools/check.sh`, then a Docker `./build.sh`, then launch on
-  the guest. Compile-time guards in `agent.c` enforce invariants 1 and 2 and
+  the guest. Compile-time guards in `src/agent/agent.c` enforce invariants 1 and 2 and
   the 16 KiB minimum overhead of invariant 3, but only the guest shows the partition is big enough.
 
 ## Reversible delete bounds
@@ -296,13 +296,13 @@ and `down=<bytes>`. Divide `down` by `out` for the real bytes per token, and see
 bytes-per-token figures in invariant 1 against fresh logs whenever the model or
 provider changes.
 
-## MCP limits (`mcp.h`, `mcp_client.h`)
+## MCP limits (`src/mcp/mcp.h`, `src/mcp/client.h`)
 
 The protocol and client buffers below are shared by `SherclawkMCPCheck` and,
 since the run-loop integration, by the main app: every run loads the saved
 configuration, discovers the server's tools and dispatches remote calls
 through this client (see [MCP](mcp.md#agent-integration)). The editor buffers
-remain separate (`mcp_editor.c`, `mcp_store.c`): editor text, its UTF-8
+remain separate (`src/mcp/editor.c`, `src/mcp/store.c`): editor text, its UTF-8
 conversion (up to three bytes per MacRoman byte), the file contents and the
 read-back copies that verify a save, plus the parser's scratch and
 `McpConfig`, wiped after use and bounded by the same 8 KiB configuration
@@ -337,7 +337,7 @@ configuration parsing.
 
 The streaming decoder retains a bounded current line/message rather than the
 whole HTTP exchange, and finishes as soon as the matching response arrives.
-Message processing is resumable (`McpWork` in `mcp.h`; `json.h` for the
+Message processing is resumable (`McpWork` in `src/mcp/mcp.h`; `src/agent/json.h` for the
 parser, key checker, member picker and decoder). A unit is an input byte, a
 token, key or hash-table slot touched, or a byte copied; a step stops before
 an atom that would overrun the budget (atoms are at most 24 units; a member
@@ -368,7 +368,7 @@ header block once per exchange, and the diagnostic's own final summary of a
 search result remains synchronous. The separate acknowledgment connection adds
 TLS allocations, so its footprint must also be measured on the guest.
 
-### Frozen remote schemas (`agent.h`)
+### Frozen remote schemas (`src/agent/agent.h`)
 
 - `AGENT_MCP_SCHEMA_CAP` (8192) bounds the frozen schema text of one run's
   admitted remote tools: the registry's comma-separated function objects,
@@ -392,13 +392,13 @@ TLS allocations, so its footprint must also be measured on the guest.
   each run's end; the run's parse buffer is wiped before the first request
   whenever discovery does not consume it.
 
-### Retained results (`mcp_result.h`)
+### Retained results (`src/mcp/result.h`)
 
 Completed, redacted call responses are retained as immutable UTF-8 artifacts
 in `MCP_RESULT_FOLDER` under the workspace and paged back by
 `read_mcp_result` (see [tools](tools.md#retained-remote-mcp-results)).
 
-- `MCP_RESULT_CAP` is 128 KiB: the staging buffer `mcp_result.c` holds one
+- `MCP_RESULT_CAP` is 128 KiB: the staging buffer `src/mcp/result.c` holds one
   artifact, plus a 2,048-token parse array (32 KiB) and an 8 KiB read-back
   chunk. A response is at most `MCP_MESSAGE_CAP` (64 KiB) and decoding never
   expands text, so the artifact bound has headroom by construction.
@@ -424,7 +424,7 @@ at 667,648 bytes text, 10,496 data and 6,883,984 bss: 7,562,128 total
 
 ## Owned process Quit
 
-`application_process.c` retains 32 ownership entries and a 256-PSN prelaunch
+`src/native/application_process.c` retains 32 ownership entries and a 256-PSN prelaunch
 snapshot. Reclamation and enumeration each advance at most one entry per event
 loop turn. Failed, incomplete or full tracking preserves launch behavior while
 withholding new quit authority. If tracking consumes the remaining 60-second
@@ -436,7 +436,7 @@ prevents another send. These bounds do not change the model argument/result caps
 
 ## Cooperative large text (guest acceptance pending)
 
-| Constant (`text_limits.h`) | Value | Bounds |
+| Constant (`src/agent/text_limits.h`) | Value | Bounds |
 |---|---|---|
 | `TOOLS_FILE_CAP` | 65,536 encoded bytes | Original and edited static snapshots; experimental read/edit/build file maximum. |
 | `TOOLS_ACCEPTED_FILE_CAP` | 4,096 shipping / 65,536 acceptance | Same selected limit for validation, schemas and environment fields. |

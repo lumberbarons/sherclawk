@@ -1,6 +1,6 @@
 /* Editor text rules: validation must accept exactly what the MCP parser does,
  * convert classic text, and never echo credentials into the message. */
-#include "mcp_editor.h"
+#include "mcp/editor.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
