@@ -26,10 +26,10 @@ BEARSSL_SOURCES=()
 while IFS= read -r file; do BEARSSL_SOURCES+=("$file"); done < <(find "$STAGE/bearssl/src" -name '*.c' | sort)
 "${CC:-cc}" -std=gnu99 -O1 -g -Wall -Wextra -Wno-unused-parameter \
     "${SAN_FLAGS[@]}" "${LOCAL_FLAGS[@]}" \
-    -I"$HERE" -I"$HERE/vendor" -I"$HERE/vendor/host-tls/shim" \
+    -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" -I"$HERE/vendor/host-tls/shim" \
     -I"$STAGE/include" -I"$STAGE/src" -I"$STAGE/bearssl/inc" -I"$STAGE/bearssl/src" \
-    "$HERE/tools/probe.c" "$HERE/agent.c" "$HERE/chat.c" "$HERE/json.c" "$HERE/jsonargs.c" "$HERE/registry.c" "$HERE/text.c" \
-    "$HERE/network.c" "$HERE/vendor/http.c" \
+    "$HERE/tools/probe.c" "$HERE/src/agent/agent.c" "$HERE/src/app/chat.c" "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" "$HERE/src/agent/registry.c" "$HERE/src/agent/text.c" \
+    "$HERE/src/agent/network.c" "$HERE/vendor/http.c" \
     "$HERE/vendor/host-tls/host_transport.c" "$HERE/vendor/host-tls/host_shim.c" \
     "$STAGE/src/certainly.c" "$STAGE/src/tls13_handshake.c" \
     "$STAGE/src/tls13_keysched.c" "$STAGE/src/tls13_record.c" \

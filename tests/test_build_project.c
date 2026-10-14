@@ -14,12 +14,12 @@
 #undef FSClose
 #undef SetFPos
 #undef FSpOpenRF
-#include "build_project.h"
-#include "run_application.h"
-#include "toolserver.h"
-#include "selfbuild.h"
+#include "native/build_project.h"
+#include "native/run_application.h"
+#include "native/toolserver.h"
+#include "native/selfbuild.h"
 #include <Processes.h>
-#include "ae_dispatch.h"
+#include "native/ae_dispatch.h"
 #include "ae_model.c"
 /* Queued transport model: replies arrive only when explicitly released. */
 #ifndef TEST_REAL_TOOLSERVER

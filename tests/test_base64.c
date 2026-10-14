@@ -1,5 +1,5 @@
 /* RFC 4648 section 10 vectors plus the bounds the request builder relies on. */
-#include "base64.h"
+#include "agent/base64.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

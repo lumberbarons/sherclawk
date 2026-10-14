@@ -1,6 +1,6 @@
 /* Fake TLS exercises actual cooperative client state transitions; no API key.
  * Request bodies select independently authored response fixtures. */
-#include "mcp_client.h"
+#include "mcp/client.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

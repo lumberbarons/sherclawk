@@ -1,6 +1,6 @@
 /* Native job protocol fault model: publication barriers, bounded event steps,
  * malformed completion, log continuation, Stop/deadline and no replay. */
-#include "jobs.h"
+#include "native/jobs.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

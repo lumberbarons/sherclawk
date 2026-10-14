@@ -1,5 +1,5 @@
 /* Fake Certainly boundaries verify request offsets and failure recovery. */
-#include "network.h"
+#include "agent/network.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

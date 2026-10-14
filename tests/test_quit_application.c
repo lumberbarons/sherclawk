@@ -3,7 +3,7 @@
 #define TEST_REAL_TOOLSERVER 1
 #include "test_build_project.c"
 #undef main
-#include "application_process.h"
+#include "native/application_process.h"
 #include <stdarg.h>
 OSErr PBHGetVInfoSync(HParamBlockRec *p) {(void)p;return fnfErr;}
 OSErr PBDTGetPath(DTPBRec *p) {(void)p;return fnfErr;}

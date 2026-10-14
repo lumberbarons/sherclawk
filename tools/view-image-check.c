@@ -2,8 +2,8 @@
  * a PNG at the size cap read in bounded steps, an over-cap file, a non-PNG
  * file and the vision gate. Fixtures stay in Retro68:Sherclawk View <ticks>:
  * for inspection. The log is Retro68:SherclawkViewImageCheck.log. */
-#include "view_image.h"
-#include "json.h"
+#include "tools/view_image.h"
+#include "agent/json.h"
 #include "config.h"
 #include <Quickdraw.h>
 #include <Fonts.h>

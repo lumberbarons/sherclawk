@@ -1,5 +1,5 @@
 /* Small argument/result boundaries used by every executor and provider path. */
-#include "jsonargs.h"
+#include "agent/jsonargs.h"
 #include <assert.h>
 #include <limits.h>
 #include <stdio.h>

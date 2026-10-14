@@ -4,14 +4,14 @@ cmake_minimum_required(VERSION 3.12)
 project(sherclawk C)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-# Shared native tool sources; read-only inspection lives in inspect.c, and
-# retained MCP results (mcp_result.c) re-run credential redaction from
-# mcp_config.c over what they retain; mcp_config.c parses URLs with
-# vendor/http.c, so every target that links TOOLS_SRC gets it too. jsonargs.c
-# (bounded argument checks and JSON output buffers over json.c) is used by the
-# executors, build_project.c, run_application.c, view_image.c and agent.c, all
+# Shared native tool sources; read-only inspection lives in src/tools/inspect.c, and
+# retained MCP results (src/mcp/result.c) re-run credential redaction from
+# src/mcp/config.c over what they retain; src/mcp/config.c parses URLs with
+# vendor/http.c, so every target that links TOOLS_SRC gets it too. src/agent/jsonargs.c
+# (bounded argument checks and JSON output buffers over src/agent/json.c) is used by the
+# executors, src/native/build_project.c, src/native/run_application.c, src/tools/view_image.c and src/agent/agent.c, all
 # of which link TOOLS_SRC.
-set(TOOLS_SRC tools.c fsutil.c jsonargs.c inspect.c mcp_guard.c mcp_result.c mcp_config.c registry.c vendor/http.c)
+set(TOOLS_SRC src/tools/tools.c src/tools/fsutil.c src/agent/jsonargs.c src/tools/inspect.c src/mcp/guard.c src/mcp/result.c src/mcp/config.c src/agent/registry.c vendor/http.c)
 # Certainly is fetch-only; build.sh expects it next to this repo. Override
 # with -DCERTAINLY_DIR=<path> when it is cloned elsewhere.
 if(NOT CERTAINLY_DIR)
@@ -25,7 +25,7 @@ add_subdirectory("${CERTAINLY_DIR}" certainly-src)
 # module cannot reach only some of the targets (the drift behind #148).
 macro(sherclawk_app name)
     add_application(${name} ${ARGN})
-    target_include_directories(${name} PRIVATE . vendor)
+    target_include_directories(${name} PRIVATE . src vendor)
     target_link_libraries(${name} certainly FontManager)
     target_compile_options(${name} PRIVATE -Wall -Wextra -ffunction-sections)
     set_target_properties(${name} PROPERTIES LINK_FLAGS "-Wl,-gc-sections")
@@ -37,40 +37,40 @@ macro(sherclawk_app name)
     endif()
 endmacro()
 
-set(MCP_CORE mcp_config.c mcp_protocol.c mcp_stream.c mcp_client.c)
-sherclawk_app(SherclawkMCPCheck tools/mcp-check.c ${MCP_CORE} json.c text.c vendor/http.c hello.r)
+set(MCP_CORE src/mcp/config.c src/mcp/protocol.c src/mcp/stream.c src/mcp/client.c)
+sherclawk_app(SherclawkMCPCheck tools/mcp-check.c ${MCP_CORE} src/agent/json.c src/agent/text.c vendor/http.c hello.r)
 # Editor-side MCP code (text rules, staged store); the config parser itself is
-# shared through TOOLS_SRC wherever mcp_result.c links.
-set(MCP_EDITOR_SRC mcp_editor.c mcp_store.c)
+# shared through TOOLS_SRC wherever src/mcp/result.c links.
+set(MCP_EDITOR_SRC src/mcp/editor.c src/mcp/store.c)
 # Agent-run MCP integration: the run controller and the client trio beyond
-# mcp_config.c, which TOOLS_SRC already carries for the result adapter.
-set(MCP_RUN_SRC mcp_run.c mcp_protocol.c mcp_stream.c mcp_client.c)
+# src/mcp/config.c, which TOOLS_SRC already carries for the result adapter.
+set(MCP_RUN_SRC src/mcp/run.c src/mcp/protocol.c src/mcp/stream.c src/mcp/client.c)
 # vendor/http.c comes with TOOLS_SRC, which every CHAT_CORE user also links.
-set(CHAT_CORE display.c chat.c json.c text.c network.c timing.c)
-# The shipping app and the diagnostics that #include main.c themselves.
+set(CHAT_CORE src/app/display.c src/app/chat.c src/agent/json.c src/agent/text.c src/agent/network.c src/app/timing.c)
+# The shipping app and the diagnostics that #include src/app/main.c themselves.
 # Add a module here once and every one of those targets gets it.
-set(APP_SRC agent.c session.c preferences.c ${MCP_EDITOR_SRC} ${MCP_RUN_SRC} ${TOOLS_SRC}
-    view_image.c build_project.c selfbuild.c toolserver.c ae_dispatch.c
-    run_application.c application_process.c jobs.c ${CHAT_CORE} hello.r
+set(APP_SRC src/agent/agent.c src/app/session.c src/app/preferences.c ${MCP_EDITOR_SRC} ${MCP_RUN_SRC} ${TOOLS_SRC}
+    src/tools/view_image.c src/native/build_project.c src/native/selfbuild.c src/native/toolserver.c src/native/ae_dispatch.c
+    src/native/run_application.c src/native/application_process.c src/native/jobs.c ${CHAT_CORE} hello.r
     build/art.r CREATOR ShCk)
-sherclawk_app(Sherclawk main.c ${APP_SRC})
+sherclawk_app(Sherclawk src/app/main.c ${APP_SRC})
 # Full-app acceptance target; shipping Sherclawk retains its verified 4 KiB cap.
-sherclawk_app(SherclawkLargeTextCheck main.c ${APP_SRC})
+sherclawk_app(SherclawkLargeTextCheck src/app/main.c ${APP_SRC})
 target_compile_definitions(SherclawkLargeTextCheck PRIVATE SHERCLAWK_LARGE_TEXT_CHECK=1)
-sherclawk_app(SherclawkProbe tools/probe.c agent.c ${TOOLS_SRC} ${CHAT_CORE} hello.r)
-sherclawk_app(SherclawkWriteCheck tools/write-check.c ${TOOLS_SRC} json.c text.c hello.r)
-sherclawk_app(SherclawkSearchCheck tools/search-check.c ${TOOLS_SRC} json.c text.c hello.r)
-sherclawk_app(SherclawkEditCheck tools/edit-check.c ${TOOLS_SRC} json.c text.c hello.r)
-sherclawk_app(SherclawkProjectCheck tools/project-check.c ${TOOLS_SRC} json.c text.c hello.r)
+sherclawk_app(SherclawkProbe tools/probe.c src/agent/agent.c ${TOOLS_SRC} ${CHAT_CORE} hello.r)
+sherclawk_app(SherclawkWriteCheck tools/write-check.c ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
+sherclawk_app(SherclawkSearchCheck tools/search-check.c ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
+sherclawk_app(SherclawkEditCheck tools/edit-check.c ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
+sherclawk_app(SherclawkProjectCheck tools/project-check.c ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
 # Compile the exact model-facing starter as well as the app that embeds it.
 set(TEMPLATE_DIR templates/ppc-toolbox)
 add_application(SherclawkTemplate ${TEMPLATE_DIR}/main.c ${TEMPLATE_DIR}/scene.c ${TEMPLATE_DIR}/io.c ${TEMPLATE_DIR}/png.c ${TEMPLATE_DIR}/selfrender.c ${TEMPLATE_DIR}/app.r CREATOR SHTP)
 target_include_directories(SherclawkTemplate PRIVATE ${TEMPLATE_DIR})
 target_compile_options(SherclawkTemplate PRIVATE -Wall -Wextra)
 # The build/run/self-build/quit diagnostics share this source set.
-set(BUILD_CHECK_SRC tools/build-check.c build_project.c selfbuild.c toolserver.c
-    ae_dispatch.c run_application.c application_process.c ${TOOLS_SRC} jobs.c
-    json.c text.c hello.r)
+set(BUILD_CHECK_SRC tools/build-check.c src/native/build_project.c src/native/selfbuild.c src/native/toolserver.c
+    src/native/ae_dispatch.c src/native/run_application.c src/native/application_process.c ${TOOLS_SRC} src/native/jobs.c
+    src/agent/json.c src/agent/text.c hello.r)
 sherclawk_app(SherclawkBuildCheck ${BUILD_CHECK_SRC})
 sherclawk_app(SherclawkRunCheck ${BUILD_CHECK_SRC})
 target_compile_definitions(SherclawkRunCheck PRIVATE RUN_CHECK=1)
@@ -81,16 +81,16 @@ target_compile_definitions(SherclawkSelfBuildCheck PRIVATE RUN_CHECK=1 SELF_BUIL
 sherclawk_app(SherclawkSelfBuildStopCheck ${BUILD_CHECK_SRC})
 target_compile_definitions(SherclawkSelfBuildStopCheck PRIVATE RUN_CHECK=1 SELF_BUILD_CHECK=1 SELF_BUILD_STOP_CHECK=1)
 sherclawk_app(SherclawkToolServerCheck tools/toolserver-check.c tools/toolserver-check.r)
-set(NATIVE_BUILD_CHECK_SRC tools/native-build-check.c toolserver.c ae_dispatch.c tools/toolserver-check.r)
+set(NATIVE_BUILD_CHECK_SRC tools/native-build-check.c src/native/toolserver.c src/native/ae_dispatch.c tools/toolserver-check.r)
 sherclawk_app(SherclawkNativeBuildCheck ${NATIVE_BUILD_CHECK_SRC})
 sherclawk_app(SherclawkNativeBuildErrorCheck ${NATIVE_BUILD_CHECK_SRC})
 target_compile_definitions(SherclawkNativeBuildErrorCheck PRIVATE NATIVE_BUILD_ERROR=1)
-sherclawk_app(SherclawkInspectCheck tools/inspect-check.c ${TOOLS_SRC} json.c text.c hello.r)
-sherclawk_app(SherclawkViewImageCheck tools/view-image-check.c ${TOOLS_SRC} view_image.c json.c text.c hello.r)
-sherclawk_app(SherclawkCatalogCheck tools/catalog-check.c ${TOOLS_SRC} json.c text.c hello.r)
-sherclawk_app(SherclawkTrashCheck tools/trash-check.c ${TOOLS_SRC} json.c text.c hello.r)
-sherclawk_app(SherclawkCopyCheck tools/copy-check.c ${TOOLS_SRC} json.c text.c hello.r)
-sherclawk_app(SherclawkMCPGuardCheck tools/mcp-guard-check.c ${TOOLS_SRC} json.c text.c hello.r)
+sherclawk_app(SherclawkInspectCheck tools/inspect-check.c ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
+sherclawk_app(SherclawkViewImageCheck tools/view-image-check.c ${TOOLS_SRC} src/tools/view_image.c src/agent/json.c src/agent/text.c hello.r)
+sherclawk_app(SherclawkCatalogCheck tools/catalog-check.c ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
+sherclawk_app(SherclawkTrashCheck tools/trash-check.c ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
+sherclawk_app(SherclawkCopyCheck tools/copy-check.c ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
+sherclawk_app(SherclawkMCPGuardCheck tools/mcp-guard-check.c ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
 # These two diagnostics #include ../main.c themselves, so APP_SRC carries the
 # app modules they do not name directly.
 sherclawk_app(SherclawkScrollCheck tools/scroll-check.c ${APP_SRC})

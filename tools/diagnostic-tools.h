@@ -1,7 +1,7 @@
 /* Diagnostic-only driver: service native events between bounded tool steps. */
 #ifndef SHERCLAWK_DIAGNOSTIC_TOOLS_H
 #define SHERCLAWK_DIAGNOSTIC_TOOLS_H
-#include "tools.h"
+#include "tools/tools.h"
 #include <Events.h>
 #include <AppleEvents.h>
 static int diagnostic_execute_recorded(const AgentCall *call,char *out,size_t cap,AgentJournal journal,void *ctx)

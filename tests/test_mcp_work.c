@@ -1,7 +1,7 @@
 /* Bounded, resumable MCP processing: differential checks against the
  * synchronous implementations it replaced, then maximum-size fixtures that
  * assert every step stays within the work budget. No keys, no network. */
-#include "mcp.h"
+#include "mcp/mcp.h"
 #include "mcp_sync.h"
 #include <assert.h>
 #include <stdarg.h>

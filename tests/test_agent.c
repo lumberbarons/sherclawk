@@ -1,9 +1,9 @@
 /* Exercise actual call/result protocol, persistence barriers, Stop and bounds. */
-#include "agent.h"
-#include "json.h"
-#include "text.h"
-#include "chat.h"
-#include "base64.h"
+#include "agent/agent.h"
+#include "agent/json.h"
+#include "agent/text.h"
+#include "app/chat.h"
+#include "agent/base64.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

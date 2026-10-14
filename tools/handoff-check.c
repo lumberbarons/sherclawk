@@ -1,7 +1,7 @@
 /* Exercise handoff persistence and history switching with the actual OS 9
  * File Manager. Synthetic summaries only; no network or credentials used. */
 #define main SherclawkMain
-#include "../main.c"
+#include "app/main.c"
 #undef main
 
 static Agent original;

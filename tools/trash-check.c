@@ -3,9 +3,9 @@
  * same-volume rename, verify the destination catalog identity and that the
  * source path is gone, then move the fixture back to show recovery. The tool
  * never deletes and never empties a Trash; the fixture folder is preserved. */
-#include "tools.h"
-#include "json.h"
-#include "text.h"
+#include "tools/tools.h"
+#include "agent/json.h"
+#include "agent/text.h"
 #include "config.h"
 #include <Quickdraw.h>
 #include <Fonts.h>

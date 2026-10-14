@@ -25,7 +25,7 @@ closed. Before Quit, identity and launcher are checked again, with explicit
 self/Finder/system exclusions. Confirmed prior exit removes authority without
 sending an event. Identity changes revoke authority.
 
-`ae_dispatch.c` installs the sole answer handler and reserves monotonically
+`src/native/ae_dispatch.c` installs the sole answer handler and reserves monotonically
 increasing positive signed 16-bit return IDs for both ToolServer and Quit. IDs
 never recycle, including after dispatcher reinitialization. Correlation checks
 both the typed return ID and exact typed sender PSN. Two callback slots allow
