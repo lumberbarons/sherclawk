@@ -16,8 +16,9 @@ void FormatTokens(long tokens, char *out, size_t cap)
     }
 }
 
-void FormatModelLabel(const char *model, const char *effort, char *out, size_t cap)
+void FormatModelLabel(const char *model, const char *chosen, const char *fallback, char *out, size_t cap)
 {
+    const char *effort = chosen && chosen[0] ? chosen : fallback;
     if (effort && effort[0]) snprintf(out, cap, "Model: %s (%s)", model, effort);
     else snprintf(out, cap, "Model: %s", model);
 }

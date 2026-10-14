@@ -550,6 +550,7 @@ enum {
     kPrefsFetchPopular,    /* the one auto-load per launch */
     kPrefsFetchSearch,     /* Find: list the matches for the typed text */
     kPrefsFetchValidate,   /* OK: the typed id must resolve exactly */
+    kPrefsFetchSaved,      /* the saved model's own row, when the popular page lacks it */
     kPrefsRowHeight = 15,
     kPrefsRowsMax = AGENT_MODEL_ROWS_MAX
 };
@@ -594,6 +595,8 @@ static PrefsDialog   gPrefsDlg;
 static AgentModelRow gPopularRows[AGENT_MODEL_ROWS_MAX];
 static int           gPopularCount;
 static int           gPopularLoaded;   /* popular page fetched once per launch */
+static AgentModelRow gSavedRow;        /* the saved model's catalog row, once known */
+static int           gSavedRowLoaded;
 
 static Handle PrefsItem(DialogPtr dlg, short item)
 {
@@ -685,18 +688,16 @@ static void PrefsHint(PrefsDialog *d, const char *text)
 }
 
 /* Draw the popup by hand: a rounded box with its shadow, the chosen effort and
- * a down arrow; the disabled form (no choices) is gray. */
+ * a down arrow. The disabled form (no choices) dims the label and arrow with a
+ * gray pattern and text mode: the dialog is a plain GrafPort, where an RGB gray
+ * maps to white and the label would vanish. */
 static void PrefsEffortDraw(PrefsDialog *d)
 {
     Rect box = d->popup, text;
-    RGBColor fill = { 0xE000, 0xE000, 0xE000 }, gray = { 0x8000, 0x8000, 0x8000 };
     Str255 label;
     int i;
     box.right -= 1; box.bottom -= 1;
-    RGBBackColor(&fill);
     EraseRoundRect(&box, 8, 8);
-    ForeColor(blackColor);
-    BackColor(whiteColor);
     FrameRoundRect(&box, 8, 8);
     MoveTo(box.left + 4, box.bottom); LineTo(box.right - 4, box.bottom);
     MoveTo(box.right, box.top + 4); LineTo(box.right, box.bottom - 4);
@@ -705,15 +706,17 @@ static void PrefsEffortDraw(PrefsDialog *d)
         GetMenuItemText(d->effort, (short)d->effort_choice, label);
     text.left = box.left + 8; text.right = box.right - 22;
     text.top = box.top; text.bottom = box.bottom;
-    if (!d->effort_on) RGBForeColor(&gray);
+    if (!d->effort_on) TextMode(grayishTextOr);
     TruncString(text.right - text.left, label, truncEnd);
     MoveTo(text.left, box.bottom - 5);
     DrawString(label);
+    TextMode(srcOr);
+    if (!d->effort_on) PenPat(&qd.gray);
     for (i = 0; i < 4; i++) {
         MoveTo(box.right - 16 + i, box.top + 7 + i);
         Line(7 - 2 * i, 0);
     }
-    ForeColor(blackColor);
+    PenNormal();
 }
 
 /* Append an item with a plain placeholder, then set its text outright:
@@ -871,6 +874,38 @@ static void PrefsConfirm(PrefsDialog *d, int index)
     PrefsDrawRows(d);
 }
 
+/* Put the saved model's row first in the list and confirm it, so its efforts
+ * are choosable without a search. The page holds at most one row per model, so
+ * the last row makes room when the list is full. */
+static void PrefsSavedShow(PrefsDialog *d, const AgentModelRow *row)
+{
+    int keep = d->count < kPrefsRowsMax ? d->count : kPrefsRowsMax - 1;
+    memmove(&d->rows[1], &d->rows[0], (size_t)keep * sizeof(AgentModelRow));
+    d->rows[0] = *row;
+    d->count = keep + 1;
+    d->selected = 0;
+    d->confirmed_info = row->info;
+    strcpy(d->confirmed_id, row->id);
+    PrefsEffortShow(d, &d->confirmed_info, d->confirmed_id);
+}
+
+static int PrefsFetchStart(PrefsDialog *d, int kind, const char *query);
+
+/* The saved model is not in the list: show its row from this launch's cache,
+ * or fetch it. Skipped once the field names another model or a row is
+ * already confirmed. Returns 1 when a fetch was started. */
+static int PrefsSavedModel(PrefsDialog *d)
+{
+    char text[CHAT_MODEL_CAP];
+    GetPrefsText(d->dlg, kPrefsModelItem, text, sizeof(text));
+    if (d->confirmed_id[0] || strcmp(text, gPrefs.model)) return 0;
+    if (gSavedRowLoaded && !strcmp(gSavedRow.id, gPrefs.model)) {
+        PrefsSavedShow(d, &gSavedRow);
+        return 0;
+    }
+    return PrefsFetchStart(d, kPrefsFetchSaved, gPrefs.model) == 0;
+}
+
 /* Start one catalog exchange; no other fetch may start until this one reaches
  * a terminal state. */
 static int PrefsFetchStart(PrefsDialog *d, int kind, const char *query)
@@ -892,6 +927,7 @@ static int PrefsFetchStart(PrefsDialog *d, int kind, const char *query)
     d->fetch = kind;
     d->fetch_start = (uint32_t)TickCount();
     PrefsHint(d, kind == kPrefsFetchPopular ? "Loading the popular models..." :
+                 kind == kPrefsFetchSaved ? "Loading the saved model..." :
                  kind == kPrefsFetchValidate ? "Checking that model against the catalog..." :
                  "Searching the catalog...");
     return 0;
@@ -910,9 +946,25 @@ static void PrefsFetchFailed(PrefsDialog *d, int timed_out)
  * later opens, where a saved model still in the page resolves at once. */
 static void PrefsFetchComplete(PrefsDialog *d)
 {
+    static AgentModelRow page[kPrefsRowsMax];
     char text[CHAT_MODEL_CAP], hint[128];
-    int kind = d->fetch, at;
-    int count = agent_model_page(gNet.body, gNet.body_len, d->rows, kPrefsRowsMax);
+    int kind = d->fetch, at, count;
+    if (kind == kPrefsFetchSaved) {
+        /* The saved model's row joins the list it is not part of; the
+         * rows already shown stay as they are. */
+        count = agent_model_page(gNet.body, gNet.body_len, page, kPrefsRowsMax);
+        at = agent_model_row_find(page, count, gPrefs.model);
+        d->fetch = kPrefsFetchNone;
+        if (at >= 0) {
+            gSavedRow = page[at];
+            gSavedRowLoaded = 1;
+            PrefsSavedModel(d);
+        }
+        PrefsHint(d, "Type to filter, or press Find to search.");
+        PrefsDrawRows(d);
+        return;
+    }
+    count = agent_model_page(gNet.body, gNet.body_len, d->rows, kPrefsRowsMax);
     /* An empty popular page is a failure, not a list to cache for the launch:
      * a malformed or oversized page parses to zero rows. A search or validate
      * page with no rows is the catalog's answer for a typo. */
@@ -948,6 +1000,7 @@ static void PrefsFetchComplete(PrefsDialog *d)
             PrefsEffortShow(d, &d->confirmed_info, d->confirmed_id);
         }
         PrefsHint(d, "Popular models loaded. Type to filter or Find.");
+        if (at < 0) PrefsSavedModel(d);
     } else {
         snprintf(hint, sizeof(hint), "%d match%s. Click a row to pick it.",
                  d->count, d->count == 1 ? "" : "es");
@@ -1063,6 +1116,7 @@ static void ShowPreferences(void)
             PrefsEffortShow(d, &d->confirmed_info, d->confirmed_id);
         }
         PrefsHint(d, "Type to filter, or press Find to search.");
+        if (i < 0) PrefsSavedModel(d);
         PrefsDrawRows(d);
     } else if (PrefsFetchStart(d, kPrefsFetchPopular, NULL) == 0) {
         PrefsDrawRows(d);
@@ -1194,6 +1248,9 @@ static void ShowPreferences(void)
                                 gModelInfo = d->confirmed_info;
                                 strcpy(gModelInfoModel, gPrefs.model);
                                 gModelInfoAttempted = 1;
+                                gSavedRow.info = d->confirmed_info;
+                                strcpy(gSavedRow.id, gPrefs.model);
+                                gSavedRowLoaded = 1;
                             }
                             saved = 1;
                             done = 1;
@@ -1784,9 +1841,11 @@ static void DrawChrome(void)
     ForeColor(blackColor); FrameOval(&lamp);
     status.left += 14;
     DrawFittedLabel(&status, gStatusText, truncEnd);
-    /* The default effort is the one in effect until a chosen effort is sent;
-     * it only describes the configured model while the info row belongs to it. */
-    FormatModelLabel(gPrefs.model, !strcmp(gModelInfoModel, gPrefs.model) ? gModelInfo.default_effort : "",
+    /* The saved effort is the one every request sends. Without one the model's
+     * default is in effect, which describes the configured model only while
+     * the info row belongs to it. */
+    FormatModelLabel(gPrefs.model, gPrefs.effort,
+                     !strcmp(gModelInfoModel, gPrefs.model) ? gModelInfo.default_effort : "",
                      line, sizeof(line));
     DrawFittedLabel(&gModelRect, line, truncMiddle);
     {
