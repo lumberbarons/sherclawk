@@ -6,7 +6,7 @@ date: 2026-10-12
 deciders: []
 supersedes: []
 superseded-by: []
-related: [ADR-0001, ADR-0002, ADR-0003, ADR-0004]
+related: [ADR-0001, ADR-0002, ADR-0003, ADR-0004, ADR-0007]
 tags: [diagnostics, tools, journal, limits]
 ---
 
@@ -32,6 +32,10 @@ running Sherclawk a coherent account of its own incidents.
   for model-assisted investigation when inference is working again.
 - Relaunch is a normal response to a classic Mac OS fault. Startup must preserve
   the previous launch's diagnostic evidence within a bounded retention policy.
+- Application installation, the chosen data root and the active workspace are
+  separate under ADR-0007. Diagnostics must work without a `Retro68:` volume
+  and may record an unavailable network workspace in an available local data
+  root; they must not silently choose a different store when that root fails.
 - OS 9 uses cooperative scheduling and has no memory protection. Diagnostic
   reads, writes and enumeration must advance in bounded steps and honor Stop;
   the app cannot promise to diagnose a guest-wide hang from inside that hang.
@@ -199,13 +203,22 @@ first improving the evidence and are outside this decision.
   retained launch identity and stable event positions; report stale cursors,
   eviction and partial records explicitly. Do not reinterpret raw UTF-8
   conversation journals as MacRoman or expose them wholesale through this API.
-- Retain records in an application-owned area associated with the configured
-  workspace rather than requiring the literal `Retro68:` volume. All persisted
-  diagnostic evidence and exported reports stay in the workspace; there is no
-  automatic local fallback or mirror when a network workspace is unavailable. Report that
-  storage limitation explicitly. An open record keeps its location when
-  preferences change. Keep a few recent launches for comparison and a bounded
-  history of failed or incomplete launches, within the total storage cap.
+- Retain records in the chosen Sherclawk data root's application-owned `Logs:`
+  area under ADR-0007, independently of the installed application's location
+  and the active workspace. The main lifecycle log and retained launch events
+  share that area; the main log must not be the sole retained evidence if it
+  is replaced on launch. Default local report exports to the data root's
+  `Reports:` folder. Neither location requires the literal `Retro68:` volume.
+  Identify the applicable workspace by its stable ID on workspace-specific
+  events; a launch record can span idle workspace switches without rebinding
+  earlier events. An open record keeps its storage location when preferences
+  change; data-root changes require the quiescent transition in ADR-0007.
+  There is no automatic fallback or mirror when the selected data root is
+  unavailable. Report that storage limitation explicitly. A missing network
+  workspace does not prevent recording or report export if the selected data
+  root remains available, but workspace observations must report unavailability.
+  Keep a few recent launches for comparison and a bounded history of failed or
+  incomplete launches, within the total storage cap.
   Startup never truncates the previous record; app-managed eviction is
   restricted to identified diagnostic records and never prunes session
   journals, build evidence or MCP result artifacts.
@@ -213,12 +226,13 @@ first improving the evidence and are outside this decision.
   event turn, records per launch and total retained launches/bytes before
   implementation is advertised. Record retention loss visibly, protect the
   active record, and document memory costs in the limits guide. Exact caps,
-  paths and tool names are implementation choices, not fixed by this ADR.
+  record filenames and tool names are implementation choices; ADR-0007 governs
+  the data-root layout.
 - Protect diagnostic evidence from ordinary source mutations. Only the
   diagnostic recorder/retention code owns writes and eviction. Explicit local
   report export uses create-only publication with bounded content and truthful
   success/failure; it needs no inference, MCP service or host executor, but does
-  require the configured workspace to be available. It cannot capture new
+  require the selected data root to be available. It cannot capture new
   observations while the app or guest is unable to service events.
 - Operational diagnostics exclude API keys, authentication headers, private
   configuration contents, prompts, tool arguments, file contents and remote
@@ -254,6 +268,7 @@ first improving the evidence and are outside this decision.
 - [ADR-0002: Separate native test applications](0002-run-tests-in-separate-native-app.md)
 - [ADR-0003: Read-only admission and journaled mutations](0003-admit-tools-read-only-first.md)
 - [ADR-0004: Bounded owner guidance](0004-load-agents-md-as-bounded-owner-guidance.md)
+- [ADR-0007: Separate application and data folder](0007-keep-data-separate-from-application.md)
 - [Tool contracts and protected credential files](../tools.md)
 - [Session files](../usage.md#session-files)
 - [Memory partition and measurement constraints](../limits.md#memory-partition-hellor)

@@ -141,6 +141,7 @@ ADRs live in `docs/adr/`. Read the relevant ADRs before proposing architectural 
 | `docs/adr/0003-admit-tools-read-only-first.md` | Adding or changing a model-facing tool, especially one that mutates files, Finder metadata, resources or other processes |
 | `docs/adr/0005-expose-bounded-read-only-self-diagnostics.md` | Adding self-diagnostic state/tools, retaining lifecycle events across launches, exporting diagnostic reports, or changing diagnostic privacy and retention |
 | `docs/adr/0006-use-explicit-local-skills-with-in-app-authoring.md` | Designing skill discovery, explicit invocation, conversation context or handoff retention, package validation, or bundled and in-app skill authoring |
+| `docs/adr/0007-keep-data-separate-from-application.md` | Changing installation, first-launch setup, data-root or workspace selection, session/MCP record locations, or migration of existing workspace data |
 
 ## Owned application Quit
 
