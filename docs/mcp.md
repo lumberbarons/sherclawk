@@ -54,7 +54,7 @@ text and validation rules by `tests/test_mcp_editor.c`.
 
 The workspace confines the file tools, but a workspace may contain the
 Preferences folder.
-`mcp_guard.c` therefore protects `Sherclawk Preferences`, which holds the
+`src/mcp/guard.c` therefore protects `Sherclawk Preferences`, which holds the
 OpenRouter key, and the configuration with its `….json.new` and `….json.old`
 siblings by catalog identity: the Preferences folder's volume and
 directory ID from `FindFolder`, plus the leaf name compared without case.
@@ -156,7 +156,7 @@ A server can reflect what it was sent: a header value in an error, the session
 ID in a description, the API key inside a JSON document echoed as tool content.
 Everything the client keeps for the model is redacted first, in place and
 length-preserving (`*` for each replaced byte), by the resumable `McpRedact`
-in `mcp_config.c`.
+in `src/mcp/config.c`.
 
 **What counts as a credential.** Every configured header value, and the part of
 it after the first space (so `Bearer abc` also redacts `abc`), every query
@@ -181,7 +181,7 @@ reflection, not against a server that is trying to smuggle the key out.
 | Tool names | A name containing a credential is skipped with a registry notice; a name cannot be rewritten because the call uses it verbatim. |
 | Call results and errors | `MCP_STAGE_CALL` rewrites the `result` or `error` member of the response in the stream's message buffer, so `mcp_client_response` never holds the original. Server errors, tool content, structured content and `isError` payloads are all inside that member. |
 | Server instructions, `serverInfo`, notifications, server requests | Never retained or shown; instructions are not propagated. |
-| Retained results | `mcp_result.c` decodes `text` content into a UTF-8 artifact and re-runs `McpRedact` over the decoded text before it is staged, so a wiring mistake cannot retain a credential either; the input response must be the already-redacted `mcp_client_response` text. |
+| Retained results | `src/mcp/result.c` decodes `text` content into a UTF-8 artifact and re-runs `McpRedact` over the decoded text before it is staged, so a wiring mistake cannot retain a credential either; the input response must be the already-redacted `mcp_client_response` text. |
 
 Raw JSON is searched only inside strings and a match is made of whole escape
 sequences, so a redacted message has exactly the same tokens at the same

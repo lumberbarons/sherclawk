@@ -1,8 +1,8 @@
 /* Native create-only acceptance: exercise actual AFP/File Manager behavior,
  * MacRoman/CR/TEXT, readback, collisions, limits and flushed recovery records.
  * Unique fixture folders are preserved so diagnostics never overwrite sources. */
-#include "tools.h"
-#include "json.h"
+#include "tools/tools.h"
+#include "agent/json.h"
 #include "config.h"
 #include <Quickdraw.h>
 #include <Fonts.h>

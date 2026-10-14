@@ -2,10 +2,10 @@
  * Guest: writes Retro68:SherclawkProbe.log, cycles OT between requests, quits.
  * Host: uses the existing Certainly socket shim, never prints credentials.
  * Public model endpoint metadata replaces the unbounded full catalog. */
-#include "chat.h"
-#include "agent.h"
-#include "tools.h"
-#include "network.h"
+#include "app/chat.h"
+#include "agent/agent.h"
+#include "tools/tools.h"
+#include "agent/network.h"
 #include "http.h"
 #include "config.h"
 #include <stdio.h>

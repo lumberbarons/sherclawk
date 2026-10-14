@@ -6,7 +6,7 @@ date: 2026-10-12
 deciders: []
 supersedes: []
 superseded-by: []
-related: [ADR-0001, ADR-0002, ADR-0003, ADR-0004, ADR-0006]
+related: [ADR-0001, ADR-0002, ADR-0003, ADR-0004, ADR-0007]
 tags: [diagnostics, tools, journal, limits]
 ---
 
@@ -16,8 +16,8 @@ tags: [diagnostics, tools, journal, limits]
 
 Sherclawk should be able to investigate its own failed or slow runs using
 evidence from the native application. Today, `get_environment` exposes OS,
-workspace, capabilities and heap headroom; `main.c` logs network and tool
-timings and stop reasons; and `session.c` preserves conversation and execution
+workspace, capabilities and heap headroom; `src/app/main.c` logs network and tool
+timings and stop reasons; and `src/app/session.c` preserves conversation and execution
 records. However, the lifecycle log is hard-coded to `Retro68:Sherclawk.log`
 and recreated on launch, runtime state has no dedicated model-facing reader,
 and UTF-8 journals cannot be decoded reliably through the MacRoman `read_text`
@@ -33,7 +33,7 @@ running Sherclawk a coherent account of its own incidents.
 - Relaunch is a normal response to a classic Mac OS fault. Startup must preserve
   the previous launch's diagnostic evidence within a bounded retention policy.
 - Application installation, the chosen data root and the active workspace are
-  separate under ADR-0006. Diagnostics must work without a `Retro68:` volume
+  separate under ADR-0007. Diagnostics must work without a `Retro68:` volume
   and may record an unavailable network workspace in an available local data
   root; they must not silently choose a different store when that root fails.
 - OS 9 uses cooperative scheduling and has no memory protection. Diagnostic
@@ -186,9 +186,9 @@ first improving the evidence and are outside this decision.
 ## Implementation Notes
 
 - Keep diagnostic storage, paging and formatting separate from Toolbox UI code,
-  with host-testable interfaces. `main.c` supplies run state; `network.c` and
-  `timing.c` supply exchange observations; the MCP controller and native build
-  machinery supply their own state. `registry.c` remains pure tool data.
+  with host-testable interfaces. `src/app/main.c` supplies run state; `src/agent/network.c` and
+  `src/app/timing.c` supply exchange observations; the MCP controller and native build
+  machinery supply their own state. `src/agent/registry.c` remains pure tool data.
 - A snapshot identifies the app version and exact build, including whether it
   has uncommitted changes. It reports model/effort, run state and counters,
   history usage and limits, passive heap headroom, last failure, last network
@@ -204,7 +204,7 @@ first improving the evidence and are outside this decision.
   eviction and partial records explicitly. Do not reinterpret raw UTF-8
   conversation journals as MacRoman or expose them wholesale through this API.
 - Retain records in the chosen Sherclawk data root's application-owned `Logs:`
-  area under ADR-0006, independently of the installed application's location
+  area under ADR-0007, independently of the installed application's location
   and the active workspace. The main lifecycle log and retained launch events
   share that area; the main log must not be the sole retained evidence if it
   is replaced on launch. Default local report exports to the data root's
@@ -212,7 +212,7 @@ first improving the evidence and are outside this decision.
   Identify the applicable workspace by its stable ID on workspace-specific
   events; a launch record can span idle workspace switches without rebinding
   earlier events. An open record keeps its storage location when preferences
-  change; data-root changes require the quiescent transition in ADR-0006.
+  change; data-root changes require the quiescent transition in ADR-0007.
   There is no automatic fallback or mirror when the selected data root is
   unavailable. Report that storage limitation explicitly. A missing network
   workspace does not prevent recording or report export if the selected data
@@ -226,7 +226,7 @@ first improving the evidence and are outside this decision.
   event turn, records per launch and total retained launches/bytes before
   implementation is advertised. Record retention loss visibly, protect the
   active record, and document memory costs in the limits guide. Exact caps,
-  record filenames and tool names are implementation choices; ADR-0006 governs
+  record filenames and tool names are implementation choices; ADR-0007 governs
   the data-root layout.
 - Protect diagnostic evidence from ordinary source mutations. Only the
   diagnostic recorder/retention code owns writes and eviction. Explicit local
@@ -268,7 +268,7 @@ first improving the evidence and are outside this decision.
 - [ADR-0002: Separate native test applications](0002-run-tests-in-separate-native-app.md)
 - [ADR-0003: Read-only admission and journaled mutations](0003-admit-tools-read-only-first.md)
 - [ADR-0004: Bounded owner guidance](0004-load-agents-md-as-bounded-owner-guidance.md)
-- [ADR-0006: Separate application and data folder](0006-keep-data-separate-from-application.md)
+- [ADR-0007: Separate application and data folder](0007-keep-data-separate-from-application.md)
 - [Tool contracts and protected credential files](../tools.md)
 - [Session files](../usage.md#session-files)
 - [Memory partition and measurement constraints](../limits.md#memory-partition-hellor)

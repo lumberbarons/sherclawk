@@ -1,7 +1,7 @@
 /* HTTP/JSON regressions, encodings, and native transcript tool folding. */
-#include "chat.h"
-#include "json.h"
-#include "text.h"
+#include "app/chat.h"
+#include "agent/json.h"
+#include "agent/text.h"
 #include "http.h"
 #include "config.h"
 #include <assert.h>

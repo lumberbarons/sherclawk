@@ -1,8 +1,8 @@
 /* Native project acceptance preserves a unique project on the AFP volume.
  * Verify exact template bytes, Finder metadata and collision-safe publication;
  * this diagnostic does not compile or authorize launch of project artifacts. */
-#include "tools.h"
-#include "json.h"
+#include "tools/tools.h"
+#include "agent/json.h"
 #include "config.h"
 #include "build/project-template.h"
 #include <Quickdraw.h>

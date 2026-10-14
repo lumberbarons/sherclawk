@@ -38,7 +38,7 @@ cp config.example.h config.local.h  # optional local config; gitignored
 ```
 
 - All code changes must pass a Docker-based `./build.sh` before a PR is created:
-  the host checks do not compile `main.c` or the other Toolbox-only sources.
+  the host checks do not compile `src/app/main.c` or the other Toolbox-only sources.
 - `build.sh` runs the `ghcr.io/autc04/retro68` image, swaps in the Universal
   Interfaces, stages Certainly and applies `patches/*.patch` to the staged copy
   (the upstream clone stays pristine), then builds with CMake.
@@ -49,7 +49,7 @@ cp config.example.h config.local.h  # optional local config; gitignored
 - The first argument / `BUILD_TARGET` selects a CMake diagnostic target, e.g.
   `SherclawkProbe_APPL` or `SherclawkWriteCheck_APPL` (see `CMakeLists.txt`).
 - Do not configure CMake by hand in a fresh tree: build.sh and check.sh
-  generate `build/art.r` and `build/project-template.h` first; `tools.c`, some
+  generate `build/art.r` and `build/project-template.h` first; `src/tools/tools.c`, some
   diagnostics and `tests/test_tools.c` include the generated header directly.
 
 ## Deploying to the guest
@@ -72,24 +72,33 @@ cp config.example.h config.local.h  # optional local config; gitignored
 
 ## Layout
 
-- `main.c` Toolbox UI/event loop and run state (`RunState`); `display.c` pure
-  formatting, validation and scroll/layout math; `chat.c` bounded transcript
-  capping and tool-line folding; `session.c` journal and
-  handoff persistence (host-testable); `agent.c` provider loop; `tools.c` +
-  `inspect.c` tool executors (shared with host tests via `TOOLS_SRC` in
-  CMakeLists.txt); `fsutil.c` shared catalog identity, revisions and the verified staged-body write (create,
+- Sources live under `src/`: `app/` (Toolbox UI, transcript, display math,
+  session journal, preferences, timing), `agent/` (provider loop, tool registry,
+  network, JSON and text core), `tools/` (model-facing tool executors),
+  `mcp/` (remote MCP client, run controller, config editor) and `native/`
+  (ToolServer builds, application launch/Quit, jobs). `vendor/` and `config.h` stay
+  outside it. Includes are written relative to `src/` (`#include
+  "agent/json.h"`); builds pass `-I . -I src -I vendor`, so a new directory or
+  file needs no include-path change but does need adding to `CMakeLists.txt`
+  and the `tools/check.sh` / `tools/lint.sh` source lists.
+- `src/app/main.c` Toolbox UI/event loop and run state (`RunState`); `src/app/display.c` pure
+  formatting, validation and scroll/layout math; `src/app/chat.c` bounded transcript
+  capping and tool-line folding; `src/app/session.c` journal and
+  handoff persistence (host-testable); `src/agent/agent.c` provider loop; `src/tools/tools.c` +
+  `src/tools/inspect.c` tool executors (shared with host tests via `TOOLS_SRC` in
+  CMakeLists.txt); `src/tools/fsutil.c` shared catalog identity, revisions and the verified staged-body write (create,
   write, flush, catalog proof, read-back) the publishing callers share;
-  `jsonargs.c` shared bounded argument validation and JSON output buffers;
-  `registry.c` the one table defining every tool's name, wire
+  `src/agent/jsonargs.c` shared bounded argument validation and JSON output buffers;
+  `src/agent/registry.c` the one table defining every tool's name, wire
   schema and `mutates`/`pending` classification (pure data so host suites that
-  link only `agent.c` can join the schemas without the executors); `chat.c`/`json.c`/`text.c`/`network.c`/`vendor/http.c` core.
-- Remote MCP in the run loop: `mcp_run.c` is the controller (load, discover,
+  link only `src/agent/agent.c` can join the schemas without the executors); `src/app/chat.c`/`src/agent/json.c`/`src/agent/text.c`/`src/agent/network.c`/`vendor/http.c` core.
+- Remote MCP in the run loop: `src/mcp/run.c` is the controller (load, discover,
   freeze, call, retain, Stop, drain) behind a host callback struct;
-  `mcp_client.c`, `mcp_protocol.c`, `mcp_stream.c` and `mcp_config.c` are the
-  client, `mcp_result.c` retains and pages results, `mcp_editor.c` and
-  `mcp_store.c` back the configuration editor. See `docs/mcp.md`.
-- Native build/run machinery: `build_project.c`, `selfbuild.c`, `toolserver.c`,
-  `run_application.c`, `jobs.c`. MPW ToolServer is the only build backend; the
+  `src/mcp/client.c`, `src/mcp/protocol.c`, `src/mcp/stream.c` and `src/mcp/config.c` are the
+  client, `src/mcp/result.c` retains and pages results, `src/mcp/editor.c` and
+  `src/mcp/store.c` back the configuration editor. See `docs/mcp.md`.
+- Native build/run machinery: `src/native/build_project.c`, `src/native/selfbuild.c`, `src/native/toolserver.c`,
+  `src/native/run_application.c`, `src/native/jobs.c`. MPW ToolServer is the only build backend; the
   queue's `worker-lock` and `STOP` names are kept for existing queues.
 - `tests/` uses `tests/toolbox/` stubs to compile app sources with host `cc`;
   most `tools/*-check.c` are Mac GUI diagnostics built by CMake, not host
@@ -110,7 +119,7 @@ cp config.example.h config.local.h  # optional local config; gitignored
   from the event loop in small increments and honor Stop. Do not add blocking
   loops or unbounded waits.
 - Buffer, token and deadline limits depend on each other; read
-  `docs/limits.md` before changing any of them (`agent.h`, `chat.h`, `network.h`,
+  `docs/limits.md` before changing any of them (`src/agent/agent.h`, `src/app/chat.h`, `src/agent/network.h`,
   the `SIZE` resource) and keep it current.
 - Model-facing contracts (fixed JSON argument/result bounds, MacRoman/CR text
   and colon paths relative to the `Retro68:` workspace, create-only writes,
@@ -126,19 +135,20 @@ ADRs live in `docs/adr/`. Read the relevant ADRs before proposing architectural 
 
 | ADR | When this applies |
 |---|---|
-| `docs/adr/0001-execute-builds-natively-through-toolserver.md` | Any change to how builds execute: `selfbuild.c`, `toolserver.c`, the build queue, `worker-lock` ownership, retry/replay of builds, or reintroducing MacRelix or a shell worker |
+| `docs/adr/0001-execute-builds-natively-through-toolserver.md` | Any change to how builds execute: `src/native/selfbuild.c`, `src/native/toolserver.c`, the build queue, `worker-lock` ownership, retry/replay of builds, or reintroducing MacRelix or a shell worker |
 | `docs/adr/0002-run-tests-in-separate-native-app.md` | Designing `test_project`, a test target in the project descriptor, or any place project-authored code would run |
 | `docs/adr/0004-load-agents-md-as-bounded-owner-guidance.md` | Changing what `AGENTS.md` text reaches the model, where it is injected, its size cap or its trust framing |
 | `docs/adr/0003-admit-tools-read-only-first.md` | Adding or changing a model-facing tool, especially one that mutates files, Finder metadata, resources or other processes |
 | `docs/adr/0005-expose-bounded-read-only-self-diagnostics.md` | Adding self-diagnostic state/tools, retaining lifecycle events across launches, exporting diagnostic reports, or changing diagnostic privacy and retention |
-| `docs/adr/0006-keep-data-separate-from-application.md` | Changing installation, first-launch setup, data-root or workspace selection, session/MCP record locations, or migration of existing workspace data |
+| `docs/adr/0006-use-explicit-local-skills-with-in-app-authoring.md` | Designing skill discovery, explicit invocation, conversation context or handoff retention, package validation, or bundled and in-app skill authoring |
+| `docs/adr/0007-keep-data-separate-from-application.md` | Changing installation, first-launch setup, data-root or workspace selection, session/MCP record locations, or migration of existing workspace data |
 
 ## Owned application Quit
 
-- `application_process.c` owns only processes newly launched and journaled by
+- `src/native/application_process.c` owns only processes newly launched and journaled by
   this Sherclawk process. Do not reset ownership on New Chat, restore it from
   journals, force quit, or automatically clean up applications.
-- `ae_dispatch.c` owns the shared answer handler and lifetime-unique return IDs
+- `src/native/ae_dispatch.c` owns the shared answer handler and lifetime-unique return IDs
   for ToolServer and Quit. Match both ID and sender PSN; never reuse IDs.
 - `quit_application` is advertised after the OS 9.2.2 `SherclawkQuitCheck` pass
   recorded in `docs/history/verification.md`. Preserve that guest gate for new

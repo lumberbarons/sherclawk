@@ -1,7 +1,7 @@
 /* Phase-one native diagnostic. Reads the user's Preferences configuration;
  * never logs its bytes, tokens, server descriptions or response bodies.
  * Logs only fixed milestones/counts to Retro68:SherclawkMCPCheck.log. */
-#include "mcp_client.h"
+#include "mcp/client.h"
 #include <Quickdraw.h>
 #include <Fonts.h>
 #include <Windows.h>

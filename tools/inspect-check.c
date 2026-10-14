@@ -3,8 +3,8 @@
  * metrics, and resource map/byte reads against a retained fixture whose
  * resource fork is written through the real Resource Manager. Fixtures stay
  * in Retro68:Sherclawk Inspect <ticks>: for inspection. */
-#include "tools.h"
-#include "json.h"
+#include "tools/tools.h"
+#include "agent/json.h"
 #include "config.h"
 #include <Quickdraw.h>
 #include <Fonts.h>

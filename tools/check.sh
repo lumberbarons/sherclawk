@@ -8,7 +8,7 @@ mkdir -p "$HERE/build/tests"
 # intentional bounded-snprintf truncation into fixed-size Mac buffers, which
 # clang does not. Keep -Werror for every other diagnostic.
 # Exercise the not-yet-advertised large-file path; shipping builds keep the
-# guest-verified limit until text_limits.h records acceptance.
+# guest-verified limit until src/agent/text_limits.h records acceptance.
 WARN=(-Wall -Wextra -Werror -DSHERCLAWK_LARGE_TEXT_CHECK=1)
 if ! "${CC:-cc}" -dM -E -x c /dev/null 2>/dev/null | grep -q __clang__; then
     WARN+=(-Wno-format-truncation)
@@ -47,65 +47,65 @@ run_test() {
 
 # Match the app build: SHERCLAWK_APP selects the User-Agent asserted by the test.
 build_test test-core "${WARN[@]}" -DSHERCLAWK_APP=1 \
-    -I"$HERE" -I"$HERE/vendor" \
-    "$HERE/tests/test_core.c" "$HERE/chat.c" "$HERE/json.c" "$HERE/jsonargs.c" "$HERE/text.c" \
+    -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" \
+    "$HERE/tests/test_core.c" "$HERE/src/app/chat.c" "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" "$HERE/src/agent/text.c" \
     "$HERE/vendor/http.c"
 run_test test-core
 
 # Shared bounded argument/result helpers are pure C.
-build_test test-jsonargs "${WARN[@]}" -I"$HERE" \
-    "$HERE/tests/test_jsonargs.c" "$HERE/jsonargs.c" "$HERE/json.c"
+build_test test-jsonargs "${WARN[@]}" -I"$HERE" -I"$HERE/src" \
+    "$HERE/tests/test_jsonargs.c" "$HERE/src/agent/jsonargs.c" "$HERE/src/agent/json.c"
 run_test test-jsonargs
 
-build_test test-display "${WARN[@]}" -I"$HERE" \
-    "$HERE/tests/test_display.c" "$HERE/display.c" "$HERE/json.c" "$HERE/jsonargs.c"
+build_test test-display "${WARN[@]}" -I"$HERE" -I"$HERE/src" \
+    "$HERE/tests/test_display.c" "$HERE/src/app/display.c" "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c"
 run_test test-display
 
-build_test test-chat-display "${WARN[@]}" -I"$HERE" \
-    "$HERE/tests/test_chat_display.c" "$HERE/chat.c" "$HERE/json.c" "$HERE/jsonargs.c" "$HERE/text.c"
+build_test test-chat-display "${WARN[@]}" -I"$HERE" -I"$HERE/src" \
+    "$HERE/tests/test_chat_display.c" "$HERE/src/app/chat.c" "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" "$HERE/src/agent/text.c"
 run_test test-chat-display
 
-build_test test-timing -Wall -Wextra -Werror -I"$HERE" \
-    "$HERE/tests/test_timing.c" "$HERE/timing.c"
+build_test test-timing -Wall -Wextra -Werror -I"$HERE" -I"$HERE/src" \
+    "$HERE/tests/test_timing.c" "$HERE/src/app/timing.c"
 run_test test-timing
 
 # Preferences parser/formatter: pure code, no Toolbox stubs needed.
-build_test test-preferences -Wall -Wextra -Werror -DSHERCLAWK_APP=1 -I"$HERE" \
-    "$HERE/tests/test_preferences.c" "$HERE/preferences.c"
+build_test test-preferences -Wall -Wextra -Werror -DSHERCLAWK_APP=1 -I"$HERE" -I"$HERE/src" \
+    "$HERE/tests/test_preferences.c" "$HERE/src/app/preferences.c"
 run_test test-preferences
 
 # MCP pure configuration/protocol/streaming fixtures, independent of keys.
-build_test test-mcp "${WARN[@]}" -I"$HERE" -I"$HERE/vendor" \
-    "$HERE/tests/test_mcp.c" "$HERE/mcp_config.c" "$HERE/mcp_protocol.c" \
-    "$HERE/mcp_stream.c" "$HERE/json.c" "$HERE/jsonargs.c" "$HERE/text.c" "$HERE/vendor/http.c"
+build_test test-mcp "${WARN[@]}" -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" \
+    "$HERE/tests/test_mcp.c" "$HERE/src/mcp/config.c" "$HERE/src/mcp/protocol.c" \
+    "$HERE/src/mcp/stream.c" "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" "$HERE/src/agent/text.c" "$HERE/vendor/http.c"
 run_test test-mcp
 
 # Resumable MCP parsing, key checks, redaction and discovery against the
 # synchronous implementations they replaced, with per-step work bounds.
-build_test test-mcp-work "${WARN[@]}" -I"$HERE" -I"$HERE/vendor" \
-    "$HERE/tests/test_mcp_work.c" "$HERE/mcp_config.c" "$HERE/mcp_protocol.c" \
-    "$HERE/json.c" "$HERE/jsonargs.c" "$HERE/text.c" "$HERE/vendor/http.c"
+build_test test-mcp-work "${WARN[@]}" -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" \
+    "$HERE/tests/test_mcp_work.c" "$HERE/src/mcp/config.c" "$HERE/src/mcp/protocol.c" \
+    "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" "$HERE/src/agent/text.c" "$HERE/vendor/http.c"
 run_test test-mcp-work
 
 # Credential redaction (decoded and JSON-escaped reflections) in schemas, names
 # and call results, against an independent reference.
-build_test test-mcp-redact "${WARN[@]}" -I"$HERE" -I"$HERE/vendor" \
-    "$HERE/tests/test_mcp_redact.c" "$HERE/mcp_config.c" "$HERE/mcp_protocol.c" \
-    "$HERE/json.c" "$HERE/jsonargs.c" "$HERE/text.c" "$HERE/vendor/http.c"
+build_test test-mcp-redact "${WARN[@]}" -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" \
+    "$HERE/tests/test_mcp_redact.c" "$HERE/src/mcp/config.c" "$HERE/src/mcp/protocol.c" \
+    "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" "$HERE/src/agent/text.c" "$HERE/vendor/http.c"
 run_test test-mcp-redact
 
 # MCP editor text rules and the staged-replace store (File Manager fault model).
 "${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" \
     -fsanitize=address,undefined -fno-omit-frame-pointer \
-    -I"$HERE" -I"$HERE/vendor" \
-    "$HERE/tests/test_mcp_editor.c" "$HERE/mcp_editor.c" "$HERE/mcp_config.c" \
-    "$HERE/json.c" "$HERE/jsonargs.c" "$HERE/text.c" "$HERE/vendor/http.c" \
+    -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" \
+    "$HERE/tests/test_mcp_editor.c" "$HERE/src/mcp/editor.c" "$HERE/src/mcp/config.c" \
+    "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" "$HERE/src/agent/text.c" "$HERE/vendor/http.c" \
     -o "$HERE/build/tests/test-mcp-editor"
 "$HERE/build/tests/test-mcp-editor"
 "${CC:-cc}" -std=c99 -g -O1 "${WARN[@]}" -Wno-multichar \
     -fsanitize=address,undefined -fno-omit-frame-pointer \
-    -I"$HERE" -I"$HERE/tests/toolbox" \
-    "$HERE/tests/test_mcp_store.c" "$HERE/mcp_store.c" \
+    -I"$HERE" -I"$HERE/src" -I"$HERE/tests/toolbox" \
+    "$HERE/tests/test_mcp_store.c" "$HERE/src/mcp/store.c" \
     -o "$HERE/build/tests/test-mcp-store"
 "$HERE/build/tests/test-mcp-store"
 
@@ -113,114 +113,114 @@ run_test test-mcp-redact
 CERTAINLY_DIR="${CERTAINLY_DIR:-$HERE/../Certainly}"
 if [ -d "$CERTAINLY_DIR/include" ]; then
     build_test test-network "${WARN[@]}" \
-        -I"$HERE" -I"$HERE/vendor" -I"$CERTAINLY_DIR/include" \
+        -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" -I"$CERTAINLY_DIR/include" \
         -I"$HERE/vendor/host-tls/shim" \
-        "$HERE/tests/test_network.c" "$HERE/network.c" "$HERE/vendor/http.c"
+        "$HERE/tests/test_network.c" "$HERE/src/agent/network.c" "$HERE/vendor/http.c"
     run_test test-network
     build_test test-mcp-client "${WARN[@]}" \
-        -I"$HERE" -I"$HERE/vendor" -I"$CERTAINLY_DIR/include" \
+        -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" -I"$CERTAINLY_DIR/include" \
         -I"$HERE/vendor/host-tls/shim" \
-        "$HERE/tests/test_mcp_client.c" "$HERE/mcp_client.c" \
-        "$HERE/mcp_config.c" "$HERE/mcp_protocol.c" "$HERE/mcp_stream.c" \
-        "$HERE/json.c" "$HERE/jsonargs.c" "$HERE/vendor/http.c"
+        "$HERE/tests/test_mcp_client.c" "$HERE/src/mcp/client.c" \
+        "$HERE/src/mcp/config.c" "$HERE/src/mcp/protocol.c" "$HERE/src/mcp/stream.c" \
+        "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" "$HERE/vendor/http.c"
     run_test test-mcp-client
-    # The run controller main.c drives (mcp_run.c): configuration loading,
+    # The run controller src/app/main.c drives (src/mcp/run.c): configuration loading,
     # discovery, the schema freeze, sequential dispatch, retention, paging,
     # Stop, the drain and the native-only fallbacks, with the File Manager
     # model in its own unit (the Toolbox headers and the host TLS shim both
     # define noErr).
     build_test test-mcp-run "${WARN[@]}" -Wno-multichar \
-        -I"$HERE" -I"$HERE/vendor" -I"$CERTAINLY_DIR/include" \
+        -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" -I"$CERTAINLY_DIR/include" \
         -I"$HERE/vendor/host-tls/shim" -I"$HERE/tests/toolbox" \
         "$HERE/tests/test_mcp_run.c" "$HERE/tests/test_mcp_run_fm.c" \
-        "$HERE/mcp_run.c" "$HERE/mcp_client.c" "$HERE/mcp_config.c" \
-        "$HERE/mcp_protocol.c" "$HERE/mcp_stream.c" "$HERE/mcp_result.c" "$HERE/agent.c" \
-        "$HERE/registry.c" "$HERE/json.c" "$HERE/jsonargs.c" "$HERE/text.c" "$HERE/vendor/http.c"
+        "$HERE/src/mcp/run.c" "$HERE/src/mcp/client.c" "$HERE/src/mcp/config.c" \
+        "$HERE/src/mcp/protocol.c" "$HERE/src/mcp/stream.c" "$HERE/src/mcp/result.c" "$HERE/src/agent/agent.c" \
+        "$HERE/src/agent/registry.c" "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" "$HERE/src/agent/text.c" "$HERE/vendor/http.c"
     run_test test-mcp-run
 else
     echo "skip: network test needs a Certainly clone at $CERTAINLY_DIR" >&2
     echo "      git clone --recursive --depth 1 https://github.com/minorbug/certainly.git Certainly" >&2
 fi
 
-build_test test-base64 "${WARN[@]}" -I"$HERE" \
+build_test test-base64 "${WARN[@]}" -I"$HERE" -I"$HERE/src" \
     "$HERE/tests/test_base64.c"
 run_test test-base64
 
-build_test test-agent "${WARN[@]}" -I"$HERE" -I"$HERE/tests/toolbox" \
-    "$HERE/tests/test_agent.c" "$HERE/agent.c" "$HERE/registry.c" "$HERE/json.c" "$HERE/jsonargs.c" "$HERE/text.c"
+build_test test-agent "${WARN[@]}" -I"$HERE" -I"$HERE/src" -I"$HERE/tests/toolbox" \
+    "$HERE/tests/test_agent.c" "$HERE/src/agent/agent.c" "$HERE/src/agent/registry.c" "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" "$HERE/src/agent/text.c"
 run_test test-agent
 
 build_test test-tools "${WARN[@]}" -Wno-multichar \
-    -I"$HERE/tests/toolbox" -I"$HERE" -I"$HERE/vendor" \
-    "$HERE/tests/test_tools.c" "$HERE/tools.c" "$HERE/fsutil.c" "$HERE/registry.c" "$HERE/agent.c" \
-    "$HERE/mcp_guard.c" "$HERE/mcp_result.c" "$HERE/mcp_config.c" "$HERE/inspect.c" "$HERE/view_image.c" \
-    "$HERE/json.c" "$HERE/jsonargs.c" "$HERE/text.c" "$HERE/vendor/http.c"
+    -I"$HERE/tests/toolbox" -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" \
+    "$HERE/tests/test_tools.c" "$HERE/src/tools/tools.c" "$HERE/src/tools/fsutil.c" "$HERE/src/agent/registry.c" "$HERE/src/agent/agent.c" \
+    "$HERE/src/mcp/guard.c" "$HERE/src/mcp/result.c" "$HERE/src/mcp/config.c" "$HERE/src/tools/inspect.c" "$HERE/src/tools/view_image.c" \
+    "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" "$HERE/src/agent/text.c" "$HERE/vendor/http.c"
 run_test test-tools
 
 # The sealed queue guard must follow configuration, including its length.
 build_test test-tools-queue "${WARN[@]}" -Wno-multichar \
     -DSHERCLAWK_BUILD_QUEUE='"Build Service:pending"' -DSHERCLAWK_QUEUE_GUARD_CHECK=1 \
-    -I"$HERE/tests/toolbox" -I"$HERE" -I"$HERE/vendor" \
-    "$HERE/tests/test_tools.c" "$HERE/tools.c" "$HERE/fsutil.c" "$HERE/registry.c" "$HERE/agent.c" \
-    "$HERE/mcp_guard.c" "$HERE/mcp_result.c" "$HERE/mcp_config.c" "$HERE/inspect.c" "$HERE/view_image.c" \
-    "$HERE/json.c" "$HERE/jsonargs.c" "$HERE/text.c" "$HERE/vendor/http.c"
+    -I"$HERE/tests/toolbox" -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" \
+    "$HERE/tests/test_tools.c" "$HERE/src/tools/tools.c" "$HERE/src/tools/fsutil.c" "$HERE/src/agent/registry.c" "$HERE/src/agent/agent.c" \
+    "$HERE/src/mcp/guard.c" "$HERE/src/mcp/result.c" "$HERE/src/mcp/config.c" "$HERE/src/tools/inspect.c" "$HERE/src/tools/view_image.c" \
+    "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" "$HERE/src/agent/text.c" "$HERE/vendor/http.c"
 run_test test-tools-queue
 
 build_test test-mcp-result "${WARN[@]}" -Wno-multichar \
-    -I"$HERE/tests/toolbox" -I"$HERE" -I"$HERE/vendor" \
-    "$HERE/tests/test_mcp_result.c" "$HERE/mcp_result.c" "$HERE/mcp_config.c" \
-    "$HERE/json.c" "$HERE/jsonargs.c" "$HERE/text.c" "$HERE/vendor/http.c"
+    -I"$HERE/tests/toolbox" -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" \
+    "$HERE/tests/test_mcp_result.c" "$HERE/src/mcp/result.c" "$HERE/src/mcp/config.c" \
+    "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" "$HERE/src/agent/text.c" "$HERE/vendor/http.c"
 run_test test-mcp-result
 
 build_test test-text-gate "${WARN[@]}" -USHERCLAWK_LARGE_TEXT_CHECK -Wno-multichar \
-    -I"$HERE/tests/toolbox" -I"$HERE" -I"$HERE/vendor" \
-    "$HERE/tests/test_text_gate.c" "$HERE/tools.c" "$HERE/fsutil.c" "$HERE/registry.c" "$HERE/agent.c" \
-    "$HERE/mcp_guard.c" "$HERE/mcp_result.c" "$HERE/mcp_config.c" "$HERE/inspect.c" "$HERE/view_image.c" \
-    "$HERE/json.c" "$HERE/jsonargs.c" "$HERE/text.c" "$HERE/vendor/http.c"
+    -I"$HERE/tests/toolbox" -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" \
+    "$HERE/tests/test_text_gate.c" "$HERE/src/tools/tools.c" "$HERE/src/tools/fsutil.c" "$HERE/src/agent/registry.c" "$HERE/src/agent/agent.c" \
+    "$HERE/src/mcp/guard.c" "$HERE/src/mcp/result.c" "$HERE/src/mcp/config.c" "$HERE/src/tools/inspect.c" "$HERE/src/tools/view_image.c" \
+    "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" "$HERE/src/agent/text.c" "$HERE/vendor/http.c"
 run_test test-text-gate
 
 build_test test-fsutil "${WARN[@]}" -Wno-multichar \
-    -I"$HERE/tests/toolbox" -I"$HERE" \
-    "$HERE/tests/test_fsutil.c" "$HERE/fsutil.c"
+    -I"$HERE/tests/toolbox" -I"$HERE" -I"$HERE/src" \
+    "$HERE/tests/test_fsutil.c" "$HERE/src/tools/fsutil.c"
 run_test test-fsutil
 
 build_test test-jobs "${WARN[@]}" -Wno-multichar \
-    -I"$HERE/tests/toolbox" -I"$HERE" \
-    "$HERE/tests/test_jobs.c" "$HERE/jobs.c" "$HERE/fsutil.c"
+    -I"$HERE/tests/toolbox" -I"$HERE" -I"$HERE/src" \
+    "$HERE/tests/test_jobs.c" "$HERE/src/native/jobs.c" "$HERE/src/tools/fsutil.c"
 run_test test-jobs
 
 build_test test-build-project "${WARN[@]}" -Wno-multichar \
-    -I"$HERE/tests/toolbox" -I"$HERE" -I"$HERE/vendor" \
-    "$HERE/tests/test_build_project.c" "$HERE/selfbuild.c" "$HERE/build_project.c" \
-    "$HERE/run_application.c" "$HERE/application_process.c" "$HERE/ae_dispatch.c" \
-    "$HERE/jobs.c" "$HERE/tools.c" "$HERE/fsutil.c" "$HERE/registry.c" "$HERE/agent.c" "$HERE/mcp_guard.c" "$HERE/mcp_result.c" \
-    "$HERE/mcp_config.c" "$HERE/inspect.c" "$HERE/view_image.c" \
-    "$HERE/json.c" "$HERE/jsonargs.c" "$HERE/text.c" "$HERE/vendor/http.c"
+    -I"$HERE/tests/toolbox" -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" \
+    "$HERE/tests/test_build_project.c" "$HERE/src/native/selfbuild.c" "$HERE/src/native/build_project.c" \
+    "$HERE/src/native/run_application.c" "$HERE/src/native/application_process.c" "$HERE/src/native/ae_dispatch.c" \
+    "$HERE/src/native/jobs.c" "$HERE/src/tools/tools.c" "$HERE/src/tools/fsutil.c" "$HERE/src/agent/registry.c" "$HERE/src/agent/agent.c" "$HERE/src/mcp/guard.c" "$HERE/src/mcp/result.c" \
+    "$HERE/src/mcp/config.c" "$HERE/src/tools/inspect.c" "$HERE/src/tools/view_image.c" \
+    "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" "$HERE/src/agent/text.c" "$HERE/vendor/http.c"
 run_test test-build-project
 
 build_test test-selfbuild "${WARN[@]}" -Wno-multichar \
-    -I"$HERE/tests/toolbox" -I"$HERE" -I"$HERE/vendor" \
-    "$HERE/tests/test_selfbuild.c" "$HERE/selfbuild.c" "$HERE/build_project.c" \
-    "$HERE/run_application.c" "$HERE/application_process.c" "$HERE/ae_dispatch.c" \
-    "$HERE/jobs.c" "$HERE/tools.c" "$HERE/fsutil.c" "$HERE/registry.c" "$HERE/agent.c" "$HERE/mcp_guard.c" "$HERE/mcp_result.c" \
-    "$HERE/mcp_config.c" "$HERE/inspect.c" "$HERE/view_image.c" \
-    "$HERE/json.c" "$HERE/jsonargs.c" "$HERE/text.c" "$HERE/vendor/http.c"
+    -I"$HERE/tests/toolbox" -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" \
+    "$HERE/tests/test_selfbuild.c" "$HERE/src/native/selfbuild.c" "$HERE/src/native/build_project.c" \
+    "$HERE/src/native/run_application.c" "$HERE/src/native/application_process.c" "$HERE/src/native/ae_dispatch.c" \
+    "$HERE/src/native/jobs.c" "$HERE/src/tools/tools.c" "$HERE/src/tools/fsutil.c" "$HERE/src/agent/registry.c" "$HERE/src/agent/agent.c" "$HERE/src/mcp/guard.c" "$HERE/src/mcp/result.c" \
+    "$HERE/src/mcp/config.c" "$HERE/src/tools/inspect.c" "$HERE/src/tools/view_image.c" \
+    "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" "$HERE/src/agent/text.c" "$HERE/vendor/http.c"
 run_test test-selfbuild
 
 build_test test-quit-application "${WARN[@]}" -Wno-multichar \
-    -I"$HERE/tests/toolbox" -I"$HERE" -I"$HERE/vendor" \
-    "$HERE/tests/test_quit_application.c" "$HERE/selfbuild.c" "$HERE/build_project.c" \
-    "$HERE/run_application.c" "$HERE/application_process.c" "$HERE/ae_dispatch.c" \
-    "$HERE/toolserver.c" "$HERE/jobs.c" "$HERE/tools.c" "$HERE/fsutil.c" "$HERE/registry.c" "$HERE/agent.c" "$HERE/mcp_guard.c" \
-    "$HERE/mcp_result.c" "$HERE/mcp_config.c" "$HERE/inspect.c" \
-    "$HERE/view_image.c" "$HERE/json.c" "$HERE/jsonargs.c" "$HERE/text.c" "$HERE/vendor/http.c"
+    -I"$HERE/tests/toolbox" -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" \
+    "$HERE/tests/test_quit_application.c" "$HERE/src/native/selfbuild.c" "$HERE/src/native/build_project.c" \
+    "$HERE/src/native/run_application.c" "$HERE/src/native/application_process.c" "$HERE/src/native/ae_dispatch.c" \
+    "$HERE/src/native/toolserver.c" "$HERE/src/native/jobs.c" "$HERE/src/tools/tools.c" "$HERE/src/tools/fsutil.c" "$HERE/src/agent/registry.c" "$HERE/src/agent/agent.c" "$HERE/src/mcp/guard.c" \
+    "$HERE/src/mcp/result.c" "$HERE/src/mcp/config.c" "$HERE/src/tools/inspect.c" \
+    "$HERE/src/tools/view_image.c" "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" "$HERE/src/agent/text.c" "$HERE/vendor/http.c"
 run_test test-quit-application
 
 build_test test-session "${WARN[@]}" -Wno-multichar \
-    -I"$HERE/tests/toolbox" -I"$HERE" -I"$HERE/vendor" \
-    "$HERE/tests/test_session.c" "$HERE/session.c" "$HERE/mcp_result.c" "$HERE/mcp_config.c" \
-    "$HERE/agent.c" "$HERE/registry.c" \
-    "$HERE/json.c" "$HERE/jsonargs.c" "$HERE/text.c" "$HERE/vendor/http.c"
+    -I"$HERE/tests/toolbox" -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" \
+    "$HERE/tests/test_session.c" "$HERE/src/app/session.c" "$HERE/src/mcp/result.c" "$HERE/src/mcp/config.c" \
+    "$HERE/src/agent/agent.c" "$HERE/src/agent/registry.c" \
+    "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" "$HERE/src/agent/text.c" "$HERE/vendor/http.c"
 run_test test-session
 
 # The starter's file output and self-render run against a modelled Toolbox

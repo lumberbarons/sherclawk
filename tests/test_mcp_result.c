@@ -2,8 +2,8 @@
  * every staging, verification, publication and journal failure must leave
  * no advertised artifact, and Stop must abandon a partial retention. Pages
  * must reconstruct the decoded artifact exactly, across multi-byte UTF-8. */
-#include "mcp_result.h"
-#include "json.h"
+#include "mcp/result.h"
+#include "agent/json.h"
 #include <Files.h>
 #include <assert.h>
 #include <stdio.h>

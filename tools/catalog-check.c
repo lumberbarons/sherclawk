@@ -6,8 +6,8 @@
  * where a write-back of the on-disk name would show; the AFP workspace answers
  * fnfErr instead, so that lookup is allowed to miss while the buffer must
  * still come back untouched. */
-#include "tools.h"
-#include "fsutil.h"
+#include "tools/tools.h"
+#include "tools/fsutil.h"
 #include "config.h"
 #include <Quickdraw.h>
 #include <Fonts.h>

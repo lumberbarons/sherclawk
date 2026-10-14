@@ -1,12 +1,12 @@
 /* Exercise the actual native executor with a File Manager model. Faults verify
  * that journal barriers, short writes, corrupt reads and rename races cannot
  * silently overwrite an existing file or claim an uncertain create succeeded. */
-#include "tools.h"
+#include "tools/tools.h"
 #include "config.h"
-#include "view_image.h"
-#include "mcp_result.h"
-#include "json.h"
-#include "text.h"
+#include "tools/view_image.h"
+#include "mcp/result.h"
+#include "agent/json.h"
+#include "agent/text.h"
 #include "build/project-template.h"
 /* One folder plus every embedded project file. */
 #define PROJECT_FILES ((int)(sizeof(project_inputs)/sizeof(project_inputs[0])))

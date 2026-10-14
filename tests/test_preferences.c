@@ -1,6 +1,6 @@
 /* Preferences parser/formatter regressions: defaults, tolerated syntax,
  * malformed and boundary values. Runs under ASan/UBSan via tools/check.sh. */
-#include "preferences.h"
+#include "app/preferences.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

@@ -1,5 +1,5 @@
-#include "mcp.h"
-#include "text.h"
+#include "mcp/mcp.h"
+#include "agent/text.h"
 #include "mcp_sync.h"
 #include <assert.h>
 #include <stdio.h>

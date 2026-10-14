@@ -2,7 +2,7 @@
  * to its budget; the work itself is what the app steps from its event loop. */
 #ifndef SHERCLAWK_TEST_MCP_SYNC_H
 #define SHERCLAWK_TEST_MCP_SYNC_H
-#include "mcp.h"
+#include "mcp/mcp.h"
 #include <assert.h>
 #include <string.h>
 

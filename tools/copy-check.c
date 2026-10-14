@@ -4,9 +4,9 @@
  * fork bytes against the fixture, confirm the source is untouched, and
  * check that a second copy onto the same name is refused. The fixture
  * folder is preserved for inspection. */
-#include "tools.h"
-#include "json.h"
-#include "text.h"
+#include "tools/tools.h"
+#include "agent/json.h"
+#include "agent/text.h"
 #include "config.h"
 #include <Quickdraw.h>
 #include <Fonts.h>

@@ -1,0 +1,191 @@
+/* Typed model history and a bounded, sequential native tool conversation. */
+#ifndef SHERCLAWK_AGENT_H
+#define SHERCLAWK_AGENT_H
+#include <stddef.h>
+#include "app/chat.h"
+#define AGENT_HISTORY_CAP 1048576
+#define AGENT_RESULT_CAP 4096
+#define AGENT_RESULT_WIRE_CAP (AGENT_RESULT_CAP * 6 + 256)
+#define AGENT_CALL_MAX 4
+#define AGENT_ARGUMENT_CAP 8192
+#define AGENT_TEXT_CAP 32768
+/* Visible text of one model reply: AGENT_MAX_TOKENS of text at up to ~6 bytes
+ * per token, kept separate from the user-prompt and handoff buffers. */
+#define AGENT_REPLY_CAP 40960
+#define AGENT_TURN_MAX 32
+#define AGENT_TOOL_MAX 64
+#define AGENT_MODEL_NAME_CAP 64
+#define AGENT_EFFORT_CAP 16
+#define AGENT_EFFORT_MAX 8
+/* Rows shown or read from one catalog page by the model chooser. */
+#define AGENT_MODEL_ROWS_MAX 10
+/* Completion budget per agent request, reasoning included. */
+#define AGENT_MAX_TOKENS 6000
+#define AGENT_HANDOFF_MAX_TOKENS 6000
+/* Largest PNG, in bytes, that view_image attaches: its base64 form must fit
+ * the one flat request beside a history that is re-sent every round. */
+#define AGENT_IMAGE_CAP 131072
+#define AGENT_IMAGE_PATH_CAP 384
+/* History bytes reserved for the note that accompanies an attached image. */
+#define AGENT_IMAGE_NOTE_CAP 2048
+/* Largest AGENTS.md text, in UTF-8 bytes, that rides in the system message or
+ * a project note. A longer file is cut on a line boundary with a marker. */
+#define AGENT_INSTRUCTIONS_CAP 4096
+/* Largest frozen remote MCP schema text, in bytes: the comma-separated
+ * function objects of one run's admitted remote tools, exactly as discovery
+ * redacted them. A larger discovery, one whose rows do not parse, or one
+ * whose names collide with native tools or each other is refused whole and
+ * the run proceeds with native tools only (see docs/limits.md). */
+#define AGENT_MCP_SCHEMA_CAP 8192
+/* Frozen remote function names: discovery maps names to at most 63 bytes, so
+ * one name also fits AgentCall.name. AGENT_MCP_TOOL_MAX must equal the
+ * registry's MCP_TOOL_MAX (a LIMIT_CHECK in agent.c enforces it). */
+#define AGENT_MCP_TOOL_MAX 8
+#define AGENT_MCP_NAME_CAP 64
+/* Projects whose AGENTS.md is tracked per chat, and the longest tracked name
+ * (UTF-8 bytes, terminator included); past either, a project counts as seen. */
+#define AGENT_PROJECT_MAX 8
+#define AGENT_PROJECT_NAME_CAP 96
+/* Display-grade cost accumulator clamp, in millionths of a US dollar. */
+#define AGENT_COST_MICROS_MAX 9000000000000000LL
+
+typedef struct { char id[128], name[64], arguments[AGENT_ARGUMENT_CAP]; } AgentCall;
+/* Whether a model accepts images, from architecture.input_modalities. A row
+ * without that list is unknown, which callers must not treat as a yes. */
+#define AGENT_VISION_UNKNOWN 0
+#define AGENT_VISION_NO 1
+#define AGENT_VISION_YES 2
+/* A PNG held in memory by its owner, with the workspace path the model named. */
+typedef struct {
+    const unsigned char *data;
+    size_t length;
+    long width, height;
+    char path[AGENT_IMAGE_PATH_CAP];
+} AgentImage;
+/* One /api/v1/models?q= row: the catalog display name, context_length (-1
+ * when the row has none), the vision flag and the optional reasoning block,
+ * whose effort names keep the provider's order. */
+typedef struct {
+    char name[AGENT_MODEL_NAME_CAP];
+    long context_length;
+    int vision;
+    int reasoning, mandatory, default_enabled;
+    char default_effort[AGENT_EFFORT_CAP];
+    char supported_efforts[AGENT_EFFORT_MAX][AGENT_EFFORT_CAP];
+    int effort_count;
+} AgentModelInfo;
+/* One display row of a /api/v1/models page: the exact id that gets saved and
+ * the metadata of the row that carries it. */
+typedef struct {
+    char id[CHAT_MODEL_CAP];
+    AgentModelInfo info;
+} AgentModelRow;
+typedef int (*AgentJournal)(void *context, const char *event, const char *json);
+typedef struct {
+    char history[AGENT_HISTORY_CAP];
+    char text[AGENT_REPLY_CAP];
+    AgentCall calls[AGENT_CALL_MAX];
+    size_t used;
+    int messages, count, next, rounds, tool_count, active, limited, truncated;
+    const char *discarded; /* static reason a whole reply was discarded unrun, else NULL */
+    long long cost_micros;
+    long context_tokens;
+    int cost_seen, context_seen;
+    /* The newest view_image note in history, spliced into the next request. */
+    size_t image_at, image_length;
+    int image_pending;
+    /* Projects whose AGENTS.md was read this chat; cleared with the history. */
+    char projects[AGENT_PROJECT_MAX][AGENT_PROJECT_NAME_CAP];
+    int project_count;
+    AgentJournal journal;
+    void *journal_context;
+} Agent;
+void agent_reset(Agent *a, AgentJournal journal, void *context);
+int agent_begin(Agent *a, const char *prompt, char *error, size_t cap);
+/* `effort` is the reasoning effort of the request, sent as the top-level
+ * `reasoning` object's `effort` member. NULL or "" sends no reasoning member,
+ * exactly the body earlier builders produced. */
+int agent_request(const Agent *a, const char *model, const char *effort, char *out, size_t cap);
+/* Like agent_request, but the request that follows agent_attach_image carries
+ * the image's pixels as a base64 data URL in place of its note. The pixels are
+ * never in history, the journal or a handoff request, so a later request sends
+ * the note alone. A NULL image sends the note as plain text. */
+int agent_request_image(const Agent *a, const char *model, const char *effort,
+                        const AgentImage *image, char *out, size_t cap);
+/* Record the note for an image once every tool result of the round is in:
+ * chat-completions tool messages cannot carry pixels, so the image follows as
+ * a user message. Returns -1 for an unusable image, a round still in progress
+ * or a recording failure. An image the request cannot hold is not attached
+ * and a note says so (returns 0 with image_pending clear). */
+int agent_attach_image(Agent *a, const AgentImage *image);
+/* Workspace-root AGENTS.md text (UTF-8, LF), sent in the system message of
+ * every request. It outlives agent_reset and handoffs, which is why it is held
+ * here and not in history; the app reloads it for each new chat. NULL or ""
+ * clears it. Returns -1, leaving the old text, when it exceeds
+ * AGENT_INSTRUCTIONS_CAP. It is never journaled or summarized. */
+int agent_set_instructions(const char *text);
+/* Whether the project's AGENTS.md is settled for this chat: already read, or
+ * not trackable (table full, empty or over-long name). 0 means look for it. */
+int agent_project_seen(const Agent *a, const char *project);
+/* Settle a project's AGENTS.md once every tool result of the round is in. A
+ * non-empty text is recorded as one user message (journaled as
+ * project_instructions); NULL or "" settles a folder that has none. Settled
+ * projects are a no-op returning 0. Returns -1, leaving the project unsettled,
+ * for a round still in progress or a recording failure. */
+int agent_project_note(Agent *a, const char *project, const char *text);
+/* Independent, tool-free summary request works even when history is full.
+ * Seed a fresh candidate only; caller publishes it after durable persistence.
+ * `effort` rides like agent_request's. */
+int agent_handoff_request(const Agent *a, const char *model, const char *effort, char *out, size_t cap);
+int agent_handoff_response(const char *body, size_t len, int status, char *summary,
+                           size_t cap, char *error, size_t error_cap);
+int agent_handoff_seed(Agent *candidate, const char *summary, const char *source,
+                       const char *path);
+/* Complete responses are recorded before any tool may execute. A reply cut off
+ * at the output limit with no usable text, or with tool calls, executes
+ * nothing: it is discarded, a user notice telling the model to retry smaller
+ * is recorded instead, and the run stays active with `truncated` set and no
+ * pending calls (the caller sends the next request). Text-only cut-offs end the
+ * run with `limited` set. A complete reply whose tool calls exceed
+ * AGENT_ARGUMENT_CAP or AGENT_CALL_MAX is discarded the same way, with
+ * `discarded` pointing at the reason instead of `truncated` set. Every other
+ * rejection returns -1 with the failed check named in `error`. */
+int agent_response(Agent *a, const char *body, size_t len, int status, char *error, size_t cap);
+int agent_tool_result(Agent *a, const char *result, char *error, size_t cap);
+int agent_stop(Agent *a, const char *reason);
+/* Provider-reported usage is display-grade: absorb never fails and moves
+ * totals only for present, sane values. */
+void agent_usage_absorb(Agent *a, const char *body, size_t len);
+/* Select the data row whose id equals model exactly and copy its name,
+ * context_length and reasoning metadata into info. Returns 0 when found, -1
+ * for a malformed, over-cap or matching-free page; absent optional fields
+ * keep their zero defaults. */
+int agent_model_info(const char *body, size_t len, const char *model, AgentModelInfo *info);
+/* Read up to max rows of one /api/v1/models page in page order, skipping rows
+ * without a usable id. Returns the row count, 0 for a malformed or empty page. */
+int agent_model_page(const char *body, size_t len, AgentModelRow *rows, int max);
+/* Case-insensitive substring match against a row's id or name for local
+ * filtering; empty text matches every row. */
+int agent_model_row_match(const AgentModelRow *row, const char *text);
+/* Index of the row whose id equals model exactly, or -1. */
+int agent_model_row_find(const AgentModelRow *rows, int count, const char *model);
+/* Path of the popular catalog page the Preferences dialog loads first:
+ * /api/v1/models?limit=10&sort=most-popular. Returns the length, or -1. */
+int agent_popular_query(char *out, size_t cap);
+/* Build the lookup path /api/v1/models?q=<model>&limit=10, percent-encoding
+ * model bytes outside [A-Za-z0-9-._~]. Returns the path length, or -1 when
+ * it does not fit. */
+int agent_model_query(char *out, size_t cap, const char *model);
+/* usage.completion_tokens, and reasoning_tokens (-1 when not reported). Returns
+ * 0 when the completion count is present, -1 otherwise. */
+int agent_usage_completion(const char *body, size_t len, long *completion, long *reasoning);
+const char *agent_tool_schemas(void);
+/* Freeze the run's remote MCP tool schemas (NULL or "" clears): the merged
+ * tools array of the next requests carries them after the native rows, and
+ * their bytes count toward the request overhead. Returns 0, or -1 with
+ * nothing changed when the text is refused (see AGENT_MCP_SCHEMA_CAP). */
+int agent_set_mcp_schemas(const char *schemas);
+/* The frozen remote function names are the run's dispatchable set. */
+int agent_mcp_tool_count(void);
+int agent_mcp_tool_frozen(const char *name); /* 1 when `name` is one of them */
+#endif

@@ -1,5 +1,5 @@
 /* Pure display behavior shared by the app and native diagnostics. */
-#include "display.h"
+#include "app/display.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

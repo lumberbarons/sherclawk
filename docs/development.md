@@ -81,7 +81,7 @@ matching `llvm-profdata`/`llvm-cov` (macOS Command Line Tools, or
 `CHECK_COVERAGE=1`, and merges every suite into one per-file report. Coverage
 is the union over suites; the gate fails below the checked-in floors (92%
 lines, 67% branches over non-test sources; measured baseline 93.6% / 69.2%).
-Guest-only sources that cannot compile on the host (`main.c`) and staged
+Guest-only sources that cannot compile on the host (`src/app/main.c`) and staged
 Certainly code are excluded. Branch coverage is the emphasis because the
 suites exist for command and error paths; the report lists the weakest files
 first. Raise the floors deliberately.
@@ -296,7 +296,7 @@ Launch each separately in Finder and save its root log before repeating it:
 `Retro68:SherclawkNativeBuildCheck.log` or
 `Retro68:SherclawkNativeBuildErrorCheck.log`. The good diagnostic stages exact
 current starter sources into a fresh `Retro68:NativeBuildCheck<ticks>:` folder,
-then sends separate queued MrC, PPCLink and Rez commands through `toolserver.c`.
+then sends separate queued MrC, PPCLink and Rez commands through `src/native/toolserver.c`.
 It verifies both forks, the PowerPC PEF header, `cfrg`, `SIZE`, Finder `APPL/SHTP`
 and the closed success record before native launch. Expected title/text in the
 launched window supply visual acceptance beyond the recorded process observation.

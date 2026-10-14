@@ -1,7 +1,7 @@
 /* MCP configuration persistence against a File Manager model with fault
  * injection. Every failure before the swap must leave the previous file as it
  * was, a failure after it must restore it, and nothing may be left staged. */
-#include "mcp_store.h"
+#include "mcp/store.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>

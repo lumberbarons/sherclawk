@@ -1,16 +1,16 @@
 /* Exercise the real build tool through native File Manager snapshots and the
  * native MPW executor. Keeps fresh independent
  * and starter projects, repaired snapshots and revision-bound rebuild IDs. */
-#include "build_project.h"
-#include "selfbuild.h"
-#include "toolserver.h"
+#include "native/build_project.h"
+#include "native/selfbuild.h"
+#include "native/toolserver.h"
 #include <AppleEvents.h>
 #ifdef RUN_CHECK
-#include "run_application.h"
+#include "native/run_application.h"
 #endif
 #include "config.h"
-#include "json.h"
-#include "text.h"
+#include "agent/json.h"
+#include "agent/text.h"
 #include <Quickdraw.h>
 #include <Fonts.h>
 #include <Windows.h>
