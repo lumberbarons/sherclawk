@@ -39,7 +39,7 @@ redacted results retained in the workspace and paged back through
 Reasoning-effort metadata
 is displayed in Preferences; the chosen effort is saved and sent as the
 requests' `reasoning.effort`. Confirming a model also saves its context window,
-so the accounting line shows its percentage before the first send. Follow active
+which keeps the accounting percentage when the send-time lookup fails. Follow active
 work in [GitHub issues](https://github.com/lumberbarons/sherclawk/issues).
 
 ## Prerequisites

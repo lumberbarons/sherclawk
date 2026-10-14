@@ -41,7 +41,8 @@ choices leaves the popup disabled and saves none. Confirming a model also saves
 its catalog context window (`context`) with the model it belongs to
 (`context_for`); the saved window is used only while `context_for` equals the
 current model ID, so a file from an older build, or one whose model was edited
-by hand, shows no percentage until the first send looks the model up. OK saves only
+by hand, relies on the first send's lookup alone. The saved window is not
+refreshed by that lookup; confirm the model again in Preferences to update it. OK saves only
 a model that resolved to a catalog row — a changed, unconfirmed ID is checked
 with `GET /api/v1/models?q=<id>&limit=10` first, and a typo leaves the dialog
 open with the closest candidates. The model already saved is not re-checked,
@@ -124,8 +125,8 @@ The bottom row also reports provider accounting.
 `usage.prompt_tokens` (cached input included) and its rounded share of that
 model's context window; before the first reply it reads `Context: -`, and the
 percentage is omitted while the window is unknown. The window comes from the
-value saved in Preferences for the current model, then from the first send's
-catalog lookup, which replaces it when it succeeds. `Cost: $0.012345` is the
+first send's catalog lookup; the value saved in Preferences for the current
+model is used when that lookup fails or its row has no window. `Cost: $0.012345` is the
 running sum, across the session's model rounds, of the provider-computed USD
 `usage.cost` (OpenRouter credits are USD 1:1), accumulated in millionths of a
 dollar and hidden while it is zero. Accounting is display-grade: values below

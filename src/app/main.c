@@ -277,9 +277,10 @@ static void PrefsLoad(void)
     prefs_parse(bytes, (size_t)length, &gPrefs);
 }
 
-/* The saved context window stands in for the lookup until one runs, so the
- * accounting line has its percentage before the first send. Attempted stays
- * clear: the first send still looks the model up for the rest of its row. */
+/* The saved context window stands in until the send-time lookup replaces it,
+ * and survives when that lookup fails. Attempted stays clear: the first send
+ * still looks the model up for the vision flag and default effort, which are
+ * not stored. */
 static void ModelInfoSeedFromPrefs(void)
 {
     long context = prefs_context_for(&gPrefs, gPrefs.model);
@@ -1897,7 +1898,7 @@ static void DrawChrome(void)
     gDisplayedHistory = gAgent.used;
     if (gAgent.context_seen) FormatTokens(gAgent.context_tokens, count, sizeof(count));
     else strcpy(count, "-");
-    if (gAgent.context_seen && gModelInfo.context_length > 0 && !strcmp(gModelInfoModel, gPrefs.model)) {
+    if (gAgent.context_seen && gModelInfo.context_length > 0 && !strcmp(gModelInfoModel, gRunModel)) {
         long long contextPercent = ((long long)gAgent.context_tokens * 100 + gModelInfo.context_length / 2) / gModelInfo.context_length;
         if (contextPercent > 100) contextPercent = 100;
         snprintf(line, sizeof(line), "Context: %s tokens (%ld%%)", count, (long)contextPercent);
@@ -2596,10 +2597,11 @@ static void SendAdvance(void)
 static void FinishContextLookup(int completed)
 {
     AgentModelInfo info;
+    long saved = prefs_context_for(&gPrefs, gRunModel);
     if (completed && gNet.status == 200 && !agent_model_info(gNet.body, gNet.body_len, gRunModel, &info))
         gModelInfo = info;
-    else if (prefs_context_for(&gPrefs, gRunModel) > 0)
-        gModelInfo.context_length = prefs_context_for(&gPrefs, gRunModel); /* failed lookup: keep the saved window */
+    /* A failed lookup, or a row without a window, keeps the saved one. */
+    if (saved > 0 && gModelInfo.context_length <= 0) gModelInfo.context_length = saved;
     if (gWindow) InvalRect(&gModelRect);
     if (gNet.ctx || gOTOpen) CloseChatContext();
     {
