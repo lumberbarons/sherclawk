@@ -14,6 +14,11 @@
 #include "Menus.r"
 #include "Dialogs.r"
 
+/* Native acceptance diagnostics may request the minimum as preferred too. */
+#ifndef SHERCLAWK_PREFERRED_MEMORY
+#define SHERCLAWK_PREFERRED_MEMORY (16 * 1024 * 1024)
+#endif
+
 resource 'SIZE' (-1) {
     reserved,
     acceptSuspendResumeEvents,
@@ -31,7 +36,7 @@ resource 'SIZE' (-1) {
     reserved,
     reserved,
     reserved,
-    16 * 1024 * 1024,  /* preferred */
+    SHERCLAWK_PREFERRED_MEMORY,  /* preferred */
     10 * 1024 * 1024   /* minimum   */
 };
 

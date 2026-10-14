@@ -54,6 +54,11 @@ set(APP_SRC src/agent/agent.c src/app/session.c src/app/preferences.c ${MCP_EDIT
     src/native/run_application.c src/native/application_process.c src/native/jobs.c ${CHAT_CORE} hello.r
     build/art.r CREATOR ShCk)
 sherclawk_app(Sherclawk src/app/main.c ${APP_SRC})
+# Includes the production UI/controller to observe short-lived parsing/drain
+# states without adding diagnostic hooks to the shipping application.
+set(MCP_AGENT_CHECK_SRC ${APP_SRC})
+list(REMOVE_ITEM MCP_AGENT_CHECK_SRC src/mcp/run.c hello.r)
+sherclawk_app(SherclawkMCPAgentCheck tools/mcp-agent-check.c tools/mcp-agent-check.r ${MCP_AGENT_CHECK_SRC})
 # Full-app acceptance target; shipping Sherclawk retains its verified 4 KiB cap.
 sherclawk_app(SherclawkLargeTextCheck src/app/main.c ${APP_SRC})
 target_compile_definitions(SherclawkLargeTextCheck PRIVATE SHERCLAWK_LARGE_TEXT_CHECK=1)
@@ -97,7 +102,7 @@ sherclawk_app(SherclawkScrollCheck tools/scroll-check.c ${APP_SRC})
 sherclawk_app(SherclawkHandoffCheck tools/handoff-check.c ${APP_SRC})
 
 # Main-window controls use the OS 9 Appearance Manager's default-button ring.
-foreach(app SherclawkLargeTextCheck Sherclawk SherclawkScrollCheck SherclawkHandoffCheck)
+foreach(app SherclawkLargeTextCheck Sherclawk SherclawkScrollCheck SherclawkHandoffCheck SherclawkMCPAgentCheck)
     target_link_libraries(${app} AppearanceLib)
 endforeach()
 

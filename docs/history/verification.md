@@ -738,3 +738,67 @@ diagnostics report `RESULT failures=0` in the guest. In the Quit variant the
 first project's `QUIT_TIMEOUT`, the `PROCESS_PREEXISTED` relaunch and
 `RUN_NOT_OWNED` are expected outcomes, and the second project reports
 `QUIT_OBSERVED`.
+
+## Integrated MCP agent acceptance, October 14, 2026
+
+Issue #165's release gate passed in the OS 9.2.2 UTM guest with
+`SherclawkMCPAgentCheck`, built from the production UI, agent and MCP
+controller on the branch based at `081707b`. The owner’s private Tavily
+configuration was saved through **Edit ▸ MCP Servers…**; the diagnostic read
+that file and the saved model preferences (`openai/gpt-6.1-sol`, medium).
+It was published fork-aware to `Retro68:` on the AFP share and launched with
+Command-O over QMP. AFP/netatalk was not restarted. No populated configuration,
+key, session ID, schema or response body is included in this record.
+
+`Retro68:SherclawkMCPAgentCheck.log` ended with `RESULT failures=0`:
+
+| Acceptance case | Observed outcome |
+|---|---|
+| Real model-selected search and extraction | `s0001eed1.jsonl` records `mcp_tavily_tavily_search` and `mcp_tavily_tavily_extract`, both `status: ok`, `is_error: false`; retained bodies were 2,600 and 1,260 bytes. The final answer contained source links. |
+| Retained pagination through the agent | The model read the entire extraction at offsets 0, 512 and 1,024 (end 1,260), and search at 0, 512, 1,024, 1,536, 2,048 and 2,560 (end 2,600), all successfully. Extraction used the small public IANA example-domains page. |
+| Frozen configuration / disabled next run | After the private configuration was loaded, the diagnostic loader was changed to return a disabled fixture. The current run still discovered and used both tools; the next run called `get_environment` successfully without opening MCP transport. The private file was preserved. |
+| Failed discovery | A public missing-endpoint fixture produced a sanitized notice, then the live model called native `get_environment` successfully (`s0001fb1f.jsonl`). |
+| Stop and no replay | Discovery, remote call, received-message parsing, artifact publication and next-page dispatch were each reached and stopped. The frozen names cleared, cleanup settled and the RPC ID never advanced during drain. Call/parse/publication journals have `STOPPED`; the queued page has an interrupted result. |
+| Credential/session checks | Exact private-value oracles passed on frozen schemas, pure model request JSON, history, final reply, retained artifacts, real model-generated handoff, closed session journals and lifecycle log. Host fixtures separately injected escaped and nested reflections. |
+
+Stop-handler durations, measured in 60 Hz ticks, were 23 during discovery,
+26 during the remote call, 26 during parsing, 25 during publication and 3
+before the next page. The longest observed `DriveChatStep` was 34 ticks.
+A retained page is a synchronous bounded 512-byte operation: this exercises
+Stop between page dispatches, not interruption inside a File Manager call.
+The server-side outcome of a stopped request remains unknown; no server-side
+cancellation guarantee is inferred.
+
+Both diagnostic `SIZE` values were 10,485,760 bytes; Process Manager reported
+11,307,620 bytes including PEF loader overhead. Sampled heap headroom was
+4,204,512 bytes after setup, 4,085,728 with a model TLS context open, and
+3,978,640 with an additional unpumped model TLS allocation held while the MCP
+connect drained. That stress allocation sent no model request. The final
+headroom recovered to 4,203,760 bytes; the lowest sampled stack space was
+38,400 bytes. These are observations between work steps, not a stack peak
+measurement. The diagnostic contains 83,776 more linked bytes than the
+shipping app, so this acceptance includes its additional storage.
+
+Retro68 `powerpc-apple-macos-size` measured:
+
+| Target | Text | Data | Bss | Total |
+|---|---:|---:|---:|---:|
+| `Sherclawk` | 651,264 | 10,672 | 6,906,256 | 7,568,192 |
+| `SherclawkMCPAgentCheck` | 675,840 | 10,848 | 6,965,280 | 7,651,968 |
+
+The diagnostic APPL's SHA-256 was
+`1bde5bd1cbfab2c7df48e4573cd6de8e69880f569c143160570170b223cba77f`.
+`tools/check.sh`, `tools/check-transport.sh`, `tools/lint.sh` (all three
+analyzers installed), and Docker `./build.sh` for both targets passed.
+No runtime buffer, deadline or shipping partition limit was raised. This
+completes the integrated read-only MCP admission gate under ADR-0003; it
+does not admit additional servers, tools or encodings beyond the existing
+configuration, schema and redaction contracts.
+
+The first diagnostic iteration correctly refused the preferred-size launch.
+A subsequent run exercised search and Stop but extraction of a larger
+reference page failed with the client's connection/HTTP-framing error; its
+model read the retained search instead. That run was not counted as extraction
+acceptance. Its journal scans also failed because the files were still open
+for writing; the final diagnostic scans them after close. The final run above
+requires successful retained extraction and distinct successful page reads.
