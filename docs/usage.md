@@ -38,11 +38,13 @@ supported efforts in order (`none` hidden on models where reasoning is
 mandatory; only efforts the preferences file accepts are listed). Reopening Preferences on the saved model preselects its saved effort instead of the default; when the saved model is not among the popular models, its own row is fetched after the list loads (once per launch) and shown first, selected, so its effort can be changed without a search. Until then, or if that fetch fails, the Effort popup is dimmed and shows the saved effort. The choice is saved — `Default (X)` stores X — and sent as the
 `reasoning.effort` of every model and handoff request; a model without effort
 choices leaves the popup disabled and saves none. Confirming a model also saves
-its catalog context window (`context`) with the model it belongs to
-(`context_for`); the saved window is used only while `context_for` equals the
-current model ID, so a file from an older build, or one whose model was edited
-by hand, relies on the first send's lookup alone. The saved window is not
-refreshed by that lookup; confirm the model again in Preferences to update it. OK saves only
+its catalog row's context window (`context`), image support (`vision`: 0
+unknown, 1 no, 2 yes) and default effort (`default_effort`) with the model they
+belong to (`context_for`). They are used only while `context_for` equals the
+current model ID, and only with a known window: a file from an older build, one
+whose model was edited by hand, or a row without a window makes the first send
+look the model up as before. A saved row is never refreshed in the background;
+confirm the model again in Preferences to pick up a changed window. OK saves only
 a model that resolved to a catalog row — a changed, unconfirmed ID is checked
 with `GET /api/v1/models?q=<id>&limit=10` first, and a typo leaves the dialog
 open with the closest candidates. The model already saved is not re-checked,
@@ -125,8 +127,8 @@ The bottom row also reports provider accounting.
 `usage.prompt_tokens` (cached input included) and its rounded share of that
 model's context window; before the first reply it reads `Context: -`, and the
 percentage is omitted while the window is unknown. The window comes from the
-first send's catalog lookup; the value saved in Preferences for the current
-model is used when that lookup fails or its row has no window. `Cost: $0.012345` is the
+value saved in Preferences for the current model, or, when none is saved, the
+first send's catalog lookup. `Cost: $0.012345` is the
 running sum, across the session's model rounds, of the provider-computed USD
 `usage.cost` (OpenRouter credits are USD 1:1), accumulated in millionths of a
 dollar and hidden while it is zero. Accounting is display-grade: values below

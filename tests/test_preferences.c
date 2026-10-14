@@ -16,6 +16,7 @@ static void defaults(void)
     assert(!strcmp(p.workspace, SHERCLAWK_WORKSPACE));
     assert(!p.effort[0]);
     assert(p.context == 0 && !p.context_for[0]);
+    assert(p.vision == AGENT_VISION_UNKNOWN && !p.default_effort[0]);
     assert(p.max_rounds == AGENT_TURN_MAX && p.max_tools == AGENT_TOOL_MAX);
     assert(p.show_tool_debug == 0);
 }
@@ -30,15 +31,18 @@ static void full_file(void)
         "show_tool_debug=1\r"
         "effort=high\r"
         "context=262144\r"
-        "context_for=openai/gpt-6-luna\r";
+        "context_for=openai/gpt-6-luna\r"
+        "vision=2\r"
+        "default_effort=medium\r";
     prefs_defaults(&p);
-    assert(prefs_parse(text, strlen(text), &p) == 9);
+    assert(prefs_parse(text, strlen(text), &p) == 11);
     assert(!strcmp(p.model, "openai/gpt-6-luna"));
     assert(!strcmp(p.api_key, "sk-or-v1-abcdef"));
     assert(!strcmp(p.workspace, "Macintosh HD:Projects:"));
     assert(p.max_rounds == 2 && p.max_tools == 1 && p.show_tool_debug == 1);
     assert(!strcmp(p.effort, "high"));
     assert(p.context == 262144 && !strcmp(p.context_for, "openai/gpt-6-luna"));
+    assert(p.vision == AGENT_VISION_YES && !strcmp(p.default_effort, "medium"));
 }
 
 static void syntax_tolerated(void)
@@ -170,6 +174,26 @@ static void context_trust(void)
     }
 }
 
+static void catalog_row_values(void)
+{
+    /* vision is one of the three AGENT_VISION_* digits; default_effort follows
+     * the effort rules. Anything else leaves the previous value. */
+    prefs_defaults(&p);
+    assert(parse_str("vision=1\rdefault_effort=low\r") == 2);
+    assert(p.vision == AGENT_VISION_NO && !strcmp(p.default_effort, "low"));
+    assert(parse_str("vision=3\rvision=yes\rvision=\rvision=12\r") == 0);
+    assert(p.vision == AGENT_VISION_NO);
+    assert(parse_str("default_effort=extreme\rdefault_effort=HIGH\r") == 0);
+    assert(!strcmp(p.default_effort, "low"));
+    assert(parse_str("vision=0\rdefault_effort=\r") == 2); /* explicit unknown / none */
+    assert(p.vision == AGENT_VISION_UNKNOWN && !p.default_effort[0]);
+    /* A value that cannot round-trip is refused by the formatter. */
+    p.vision = 3;
+    assert(prefs_format(&p, buf, sizeof(buf)) == -1);
+    p.vision = AGENT_VISION_YES; strcpy(p.default_effort, "bad\neffort");
+    assert(prefs_format(&p, buf, sizeof(buf)) == -1);
+}
+
 static void older_build_file(void)
 {
     /* Files written before effort, context and context_for existed. */
@@ -178,6 +202,7 @@ static void older_build_file(void)
     prefs_defaults(&p);
     assert(prefs_parse(text, strlen(text), &p) == 6);
     assert(!p.effort[0] && p.context == 0 && !p.context_for[0]);
+    assert(p.vision == AGENT_VISION_UNKNOWN && !p.default_effort[0]);
     assert(prefs_context_for(&p, p.model) == -1);
     assert(p.max_rounds == 8 && p.show_tool_debug == 1);
 }
@@ -241,17 +266,19 @@ static void format_round_trip(void)
     strcpy(p.workspace, "Macintosh HD:Projects:");
     strcpy(p.effort, "minimal");
     p.context = 1000000; strcpy(p.context_for, "openai/gpt-6-luna");
+    p.vision = AGENT_VISION_YES; strcpy(p.default_effort, "high");
     p.max_rounds = 7; p.max_tools = 128; p.show_tool_debug = 1;
     n = prefs_format(&p, buf, sizeof(buf));
     assert(n > 0 && buf[n - 1] == '\r');
     prefs_defaults(&base);
-    assert(prefs_parse(buf, (size_t)n, &base) == 9);
+    assert(prefs_parse(buf, (size_t)n, &base) == 11);
     assert(!strcmp(base.model, p.model));
     assert(!strcmp(base.api_key, p.api_key));
     assert(!strcmp(base.workspace, p.workspace));
     assert(!strcmp(base.effort, "minimal"));
     assert(base.context == 1000000 && !strcmp(base.context_for, p.context_for));
     assert(prefs_context_for(&base, base.model) == 1000000);
+    assert(base.vision == AGENT_VISION_YES && !strcmp(base.default_effort, "high"));
     assert(base.max_rounds == 7 && base.max_tools == 128 && base.show_tool_debug == 1);
     /* A buffer that cannot hold the file fails instead of truncating. */
     memset(buf, 0, sizeof(buf));
@@ -277,6 +304,7 @@ int main(void)
     effort_values();
     context_values();
     context_trust();
+    catalog_row_values();
     older_build_file();
     boundaries();
     over_long_lines_ignored();

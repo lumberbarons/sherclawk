@@ -277,18 +277,19 @@ static void PrefsLoad(void)
     prefs_parse(bytes, (size_t)length, &gPrefs);
 }
 
-/* The saved context window stands in until the send-time lookup replaces it,
- * and survives when that lookup fails. Attempted stays clear: the first send
- * still looks the model up for the vision flag and default effort, which are
- * not stored. */
+/* A trusted saved row (window, vision flag and default effort, stored when
+ * the model was confirmed) stands in for the send-time lookup, so the first
+ * send needs no catalog request. Without one the lookup runs as before. */
 static void ModelInfoSeedFromPrefs(void)
 {
     long context = prefs_context_for(&gPrefs, gPrefs.model);
     if (context <= 0) return;
     memset(&gModelInfo, 0, sizeof(gModelInfo));
     gModelInfo.context_length = context;
+    gModelInfo.vision = gPrefs.vision;
+    strcpy(gModelInfo.default_effort, gPrefs.default_effort);
     strcpy(gModelInfoModel, gPrefs.model);
-    gModelInfoAttempted = 0;
+    gModelInfoAttempted = 1;
 }
 
 /* Write, flush and read back the whole file; a save that cannot be verified
@@ -1251,12 +1252,15 @@ static void ShowPreferences(void)
                         effort = confirmed ? PrefsEffortValue(d) : gPrefs.effort;
                         if (!prefs_effort_ok(effort)) effort = "";
                         strcpy(candidate.effort, effort);
-                        /* The confirmed row's context window is stored with
-                         * the model it belongs to; an unchanged, unconfirmed
-                         * model keeps what it had. */
+                        /* The confirmed row's window, vision flag and default
+                         * effort are stored with the model they belong to; an
+                         * unchanged, unconfirmed model keeps what it had. */
                         if (confirmed) {
+                            const char *fallback = d->confirmed_info.default_effort;
                             candidate.context = d->confirmed_info.context_length > 0 ?
                                 d->confirmed_info.context_length : 0;
+                            candidate.vision = d->confirmed_info.vision;
+                            strcpy(candidate.default_effort, prefs_effort_ok(fallback) ? fallback : "");
                             strcpy(candidate.context_for, model);
                         }
                         if (PrefsSave(&candidate)) {
@@ -2597,11 +2601,8 @@ static void SendAdvance(void)
 static void FinishContextLookup(int completed)
 {
     AgentModelInfo info;
-    long saved = prefs_context_for(&gPrefs, gRunModel);
     if (completed && gNet.status == 200 && !agent_model_info(gNet.body, gNet.body_len, gRunModel, &info))
         gModelInfo = info;
-    /* A failed lookup, or a row without a window, keeps the saved one. */
-    if (saved > 0 && gModelInfo.context_length <= 0) gModelInfo.context_length = saved;
     if (gWindow) InvalRect(&gModelRect);
     if (gNet.ctx || gOTOpen) CloseChatContext();
     {

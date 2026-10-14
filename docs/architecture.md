@@ -187,12 +187,13 @@ exactly matches the model supplies `context_length`, and its optional
 `default_enabled`) is kept with it. Substring matches such as `-pro` or
 `:batch` variants, dated aliases and other rows are ignored. The app requests
 it at most once per model per launch, with a 30-second deadline and the same
-64 KiB response bound. Confirming a model in Preferences also stores its
-`context_length` as `context` beside `context_for`, the model it was read for;
-launch seeds the model info from it only while `context_for` equals the saved
-model. The send-time lookup still runs and replaces it, and a failed lookup,
-or a row without a window, keeps the saved one. The lookup does not rewrite
-the stored value. Any HTTP error, timeout, oversized body, a page with no
+64 KiB response bound. Confirming a model in Preferences also stores the
+row's `context_length`, vision flag and default effort as `context`, `vision`
+and `default_effort` beside `context_for`, the model they were read for.
+Launch seeds the model info from them only while `context_for` equals the
+saved model and the window is known, and then the send makes no lookup at
+all. Otherwise the lookup runs as described. The stored row is refreshed only
+by confirming the model again. Any HTTP error, timeout, oversized body, a page with no
 exact row, or a response beyond the 4096-token JSON parser cap silently omits
 the percentage and proceeds with the send; there is no retry. The lookup is
 display metadata only: the reasoning effort a request carries is the value

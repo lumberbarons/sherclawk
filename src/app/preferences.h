@@ -26,8 +26,12 @@ typedef struct {
     char api_key[PREFS_KEY_CAP];
     char workspace[PREFS_WORKSPACE_CAP];
     char effort[AGENT_EFFORT_CAP];
-    long context;                    /* context window of context_for; 0 = unknown */
-    char context_for[CHAT_MODEL_CAP];/* model id `context` was stored for */
+    /* The confirmed catalog row, kept so a launch needs no lookup. All three
+     * belong to context_for and are trusted only while it names the model. */
+    long context;                    /* context window; 0 = unknown */
+    int vision;                      /* AGENT_VISION_* */
+    char default_effort[AGENT_EFFORT_CAP];
+    char context_for[CHAT_MODEL_CAP];/* model id the row was stored for */
     int max_rounds;
     int max_tools;
     int show_tool_debug;
@@ -53,7 +57,7 @@ int prefs_limit_value(const char *s);  /* decimal 1-128, else -1 */
 int prefs_effort_ok(const char *s);
 /* Decimal token count 0..PREFS_CONTEXT_MAX (empty and "0" mean unknown), else -1. */
 long prefs_context_value(const char *s);
-/* The stored context window when `context_for` names exactly `model` and the
+/* The stored context window (with vision and default_effort beside it) when `context_for` names exactly `model` and the
  * value is known, else -1: preferences from older builds and hand-edited
  * model ids then fall back to a catalog lookup. */
 long prefs_context_for(const Prefs *p, const char *model);

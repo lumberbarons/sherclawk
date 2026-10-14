@@ -144,6 +144,12 @@ int prefs_parse(const char *text, size_t len, Prefs *p)
         } else if (key_is(key, key_len, "context")) {
             long n = prefs_context_value(value_buf);
             if (n >= 0) { p->context = n; accepted++; }
+        } else if (key_is(key, key_len, "vision")) {
+            if (value_buf[0] >= '0' && value_buf[0] <= '2' && !value_buf[1]) {
+                p->vision = value_buf[0] - '0'; accepted++;
+            }
+        } else if (key_is(key, key_len, "default_effort")) {
+            if (prefs_effort_ok(value_buf)) { strcpy(p->default_effort, value_buf); accepted++; }
         } else if (key_is(key, key_len, "context_for")) {
             if (!value_buf[0] || prefs_model_ok(value_buf)) { strcpy(p->context_for, value_buf); accepted++; }
         }
@@ -165,10 +171,13 @@ int prefs_format(const Prefs *p, char *out, size_t cap)
     int n;
     if (has_break(p->model, CHAT_MODEL_CAP) || has_break(p->api_key, PREFS_KEY_CAP) ||
         has_break(p->workspace, PREFS_WORKSPACE_CAP) || has_break(p->effort, AGENT_EFFORT_CAP) ||
-        has_break(p->context_for, CHAT_MODEL_CAP) || p->context < 0 || p->context > PREFS_CONTEXT_MAX) return -1;
+        has_break(p->context_for, CHAT_MODEL_CAP) || has_break(p->default_effort, AGENT_EFFORT_CAP) ||
+        p->context < 0 || p->context > PREFS_CONTEXT_MAX ||
+        p->vision < AGENT_VISION_UNKNOWN || p->vision > AGENT_VISION_YES) return -1;
     n = snprintf(out, cap, "model=%s\rapi_key=%s\rworkspace=%s\rmax_rounds=%d\rmax_tools=%d\r"
-        "show_tool_debug=%d\reffort=%s\rcontext=%ld\rcontext_for=%s\r", p->model, p->api_key,
-        p->workspace, p->max_rounds, p->max_tools, p->show_tool_debug, p->effort,
-        p->context, p->context_for);
+        "show_tool_debug=%d\reffort=%s\rcontext=%ld\rvision=%d\rdefault_effort=%s\r"
+        "context_for=%s\r", p->model, p->api_key, p->workspace, p->max_rounds, p->max_tools,
+        p->show_tool_debug, p->effort, p->context, p->vision, p->default_effort,
+        p->context_for);
     return n >= 0 && (size_t)n < cap ? n : -1;
 }
