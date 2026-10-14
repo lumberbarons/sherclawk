@@ -131,6 +131,7 @@ ADRs live in `docs/adr/`. Read the relevant ADRs before proposing architectural 
 | `docs/adr/0004-load-agents-md-as-bounded-owner-guidance.md` | Changing what `AGENTS.md` text reaches the model, where it is injected, its size cap or its trust framing |
 | `docs/adr/0003-admit-tools-read-only-first.md` | Adding or changing a model-facing tool, especially one that mutates files, Finder metadata, resources or other processes |
 | `docs/adr/0005-expose-bounded-read-only-self-diagnostics.md` | Adding self-diagnostic state/tools, retaining lifecycle events across launches, exporting diagnostic reports, or changing diagnostic privacy and retention |
+| `docs/adr/0006-keep-data-separate-from-application.md` | Changing installation, first-launch setup, data-root or workspace selection, session/MCP record locations, or migration of existing workspace data |
 
 ## Owned application Quit
 
