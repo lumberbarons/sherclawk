@@ -92,6 +92,28 @@ long prefs_context_for(const Prefs *p, const char *model)
     return p->context;
 }
 
+void prefs_store_row(Prefs *p, const char *model, const AgentModelInfo *info)
+{
+    p->context = info->context_length >= 1 && info->context_length <= PREFS_CONTEXT_MAX ?
+        info->context_length : 0;
+    p->vision = info->vision >= AGENT_VISION_UNKNOWN && info->vision <= AGENT_VISION_YES ?
+        info->vision : AGENT_VISION_UNKNOWN;
+    strcpy(p->default_effort, info->default_effort[0] && prefs_effort_ok(info->default_effort) ?
+        info->default_effort : "");
+    copy_value(p->context_for, sizeof(p->context_for), model);
+}
+
+int prefs_row_for(const Prefs *p, const char *model, AgentModelInfo *out)
+{
+    long context = prefs_context_for(p, model);
+    if (context <= 0) return 0;
+    memset(out, 0, sizeof(*out));
+    out->context_length = context;
+    out->vision = p->vision;
+    copy_value(out->default_effort, sizeof(out->default_effort), p->default_effort);
+    return 1;
+}
+
 static int key_is(const char *key, size_t len, const char *name)
 {
     return strlen(name) == len && !memcmp(key, name, len);
@@ -172,6 +194,7 @@ int prefs_format(const Prefs *p, char *out, size_t cap)
     if (has_break(p->model, CHAT_MODEL_CAP) || has_break(p->api_key, PREFS_KEY_CAP) ||
         has_break(p->workspace, PREFS_WORKSPACE_CAP) || has_break(p->effort, AGENT_EFFORT_CAP) ||
         has_break(p->context_for, CHAT_MODEL_CAP) || has_break(p->default_effort, AGENT_EFFORT_CAP) ||
+        !prefs_effort_ok(p->default_effort) || (p->context_for[0] && !prefs_model_ok(p->context_for)) ||
         p->context < 0 || p->context > PREFS_CONTEXT_MAX ||
         p->vision < AGENT_VISION_UNKNOWN || p->vision > AGENT_VISION_YES) return -1;
     n = snprintf(out, cap, "model=%s\rapi_key=%s\rworkspace=%s\rmax_rounds=%d\rmax_tools=%d\r"

@@ -194,6 +194,52 @@ static void catalog_row_values(void)
     assert(prefs_format(&p, buf, sizeof(buf)) == -1);
 }
 
+static void stored_row(void)
+{
+    AgentModelInfo info, seeded;
+    memset(&info, 0, sizeof(info));
+    info.context_length = 262144; info.vision = AGENT_VISION_YES;
+    strcpy(info.default_effort, "medium");
+    prefs_defaults(&p);
+    strcpy(p.model, "openai/gpt-6-luna");
+    prefs_store_row(&p, "openai/gpt-6-luna", &info);
+    assert(p.context == 262144 && p.vision == AGENT_VISION_YES);
+    assert(!strcmp(p.default_effort, "medium") && !strcmp(p.context_for, "openai/gpt-6-luna"));
+    /* The stored row seeds exactly what was confirmed, and only for its model. */
+    assert(prefs_row_for(&p, "openai/gpt-6-luna", &seeded));
+    assert(seeded.context_length == 262144 && seeded.vision == AGENT_VISION_YES);
+    assert(!strcmp(seeded.default_effort, "medium"));
+    assert(!prefs_row_for(&p, "openai/gpt-6-luna:free", &seeded));
+    assert(!prefs_row_for(&p, "", &seeded));
+    /* Survives the file. */
+    {
+        int n = prefs_format(&p, buf, sizeof(buf));
+        assert(n > 0);
+        prefs_defaults(&base);
+        prefs_parse(buf, (size_t)n, &base);
+        assert(prefs_row_for(&base, "openai/gpt-6-luna", &seeded) && seeded.context_length == 262144);
+    }
+    /* A window the file cannot hold, or none at all, stores unknown (0), which
+     * keeps the file saveable and makes the next launch look the model up. */
+    info.context_length = PREFS_CONTEXT_MAX + 1;
+    prefs_store_row(&p, "openai/gpt-6-luna", &info);
+    assert(p.context == 0 && prefs_format(&p, buf, sizeof(buf)) > 0);
+    assert(!prefs_row_for(&p, "openai/gpt-6-luna", &seeded));
+    info.context_length = -1;
+    prefs_store_row(&p, "openai/gpt-6-luna", &info);
+    assert(p.context == 0 && !prefs_row_for(&p, "openai/gpt-6-luna", &seeded));
+    /* A provider word the file would not accept, or a bad vision value, is not stored. */
+    info.context_length = 1000; info.vision = 9; strcpy(info.default_effort, "extreme");
+    prefs_store_row(&p, "openai/gpt-6-luna", &info);
+    assert(p.vision == AGENT_VISION_UNKNOWN && !p.default_effort[0]);
+    assert(prefs_row_for(&p, "openai/gpt-6-luna", &seeded) && seeded.vision == AGENT_VISION_UNKNOWN);
+    /* Everything the formatter writes, the parser takes back. */
+    strcpy(p.default_effort, "BOGUS");
+    assert(prefs_format(&p, buf, sizeof(buf)) == -1);
+    p.default_effort[0] = 0; strcpy(p.context_for, "has space");
+    assert(prefs_format(&p, buf, sizeof(buf)) == -1);
+}
+
 static void older_build_file(void)
 {
     /* Files written before effort, context and context_for existed. */
@@ -305,6 +351,7 @@ int main(void)
     context_values();
     context_trust();
     catalog_row_values();
+    stored_row();
     older_build_file();
     boundaries();
     over_long_lines_ignored();

@@ -282,12 +282,7 @@ static void PrefsLoad(void)
  * send needs no catalog request. Without one the lookup runs as before. */
 static void ModelInfoSeedFromPrefs(void)
 {
-    long context = prefs_context_for(&gPrefs, gPrefs.model);
-    if (context <= 0) return;
-    memset(&gModelInfo, 0, sizeof(gModelInfo));
-    gModelInfo.context_length = context;
-    gModelInfo.vision = gPrefs.vision;
-    strcpy(gModelInfo.default_effort, gPrefs.default_effort);
+    if (!prefs_row_for(&gPrefs, gPrefs.model, &gModelInfo)) return;
     strcpy(gModelInfoModel, gPrefs.model);
     gModelInfoAttempted = 1;
 }
@@ -1256,12 +1251,7 @@ static void ShowPreferences(void)
                          * effort are stored with the model they belong to; an
                          * unchanged, unconfirmed model keeps what it had. */
                         if (confirmed) {
-                            const char *fallback = d->confirmed_info.default_effort;
-                            candidate.context = d->confirmed_info.context_length > 0 ?
-                                d->confirmed_info.context_length : 0;
-                            candidate.vision = d->confirmed_info.vision;
-                            strcpy(candidate.default_effort, prefs_effort_ok(fallback) ? fallback : "");
-                            strcpy(candidate.context_for, model);
+                            prefs_store_row(&candidate, model, &d->confirmed_info);
                         }
                         if (PrefsSave(&candidate)) {
                             PrefsProblem(dlg, "Could not save the preferences file. Nothing was changed.");

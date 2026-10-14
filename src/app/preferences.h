@@ -57,8 +57,16 @@ int prefs_limit_value(const char *s);  /* decimal 1-128, else -1 */
 int prefs_effort_ok(const char *s);
 /* Decimal token count 0..PREFS_CONTEXT_MAX (empty and "0" mean unknown), else -1. */
 long prefs_context_value(const char *s);
-/* The stored context window (with vision and default_effort beside it) when `context_for` names exactly `model` and the
- * value is known, else -1: preferences from older builds and hand-edited
+/* The stored context window when `context_for` names exactly `model` and the
+ * window is known, else -1: preferences from older builds and hand-edited
  * model ids then fall back to a catalog lookup. */
 long prefs_context_for(const Prefs *p, const char *model);
+/* Store the confirmed catalog row for `model`. A window outside 1..
+ * PREFS_CONTEXT_MAX, a bad vision value or an effort word the file would not
+ * accept is stored as unknown or empty so the file always saves. */
+void prefs_store_row(Prefs *p, const char *model, const AgentModelInfo *info);
+/* Fill `out` from the stored row and return 1 when it is trusted for `model`
+ * (same test as prefs_context_for); else return 0 and leave `out` alone. Only
+ * the window, vision flag and default effort are stored, the rest stays zero. */
+int prefs_row_for(const Prefs *p, const char *model, AgentModelInfo *out);
 #endif

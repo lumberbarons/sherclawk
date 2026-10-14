@@ -43,8 +43,9 @@ unknown, 1 no, 2 yes) and default effort (`default_effort`) with the model they
 belong to (`context_for`). They are used only while `context_for` equals the
 current model ID, and only with a known window: a file from an older build, one
 whose model was edited by hand, or a row without a window makes the first send
-look the model up as before. A saved row is never refreshed in the background;
-confirm the model again in Preferences to pick up a changed window. OK saves only
+look the model up as before. A saved row is never refreshed in the background, and a send-time lookup does
+not store its result: open Preferences on the model and press OK (once its row
+has loaded) to save or refresh the row. OK saves only
 a model that resolved to a catalog row — a changed, unconfirmed ID is checked
 with `GET /api/v1/models?q=<id>&limit=10` first, and a typo leaves the dialog
 open with the closest candidates. The model already saved is not re-checked,
