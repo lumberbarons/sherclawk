@@ -38,7 +38,8 @@ redacted results retained in the workspace and paged back through
 `read_mcp_result`. Integrated OS 9.2.2 guest acceptance is still pending.
 Reasoning-effort metadata
 is displayed in Preferences; the chosen effort is saved and sent as the
-requests' `reasoning.effort`. Follow active
+requests' `reasoning.effort`. Confirming a model also saves its context window, image support and default
+effort, so the first send after a launch needs no catalog lookup. Follow active
 work in [GitHub issues](https://github.com/lumberbarons/sherclawk/issues).
 
 ## Prerequisites

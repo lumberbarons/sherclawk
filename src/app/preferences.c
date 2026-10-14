@@ -74,6 +74,46 @@ int prefs_effort_ok(const char *s)
     return 0;
 }
 
+long prefs_context_value(const char *s)
+{
+    long n = 0;
+    size_t i;
+    if (strlen(s) > 9) return -1;
+    for (i = 0; s[i]; i++) {
+        if (s[i] < '0' || s[i] > '9') return -1;
+        n = n * 10 + (s[i] - '0');
+    }
+    return n <= PREFS_CONTEXT_MAX ? n : -1;
+}
+
+long prefs_context_for(const Prefs *p, const char *model)
+{
+    if (p->context <= 0 || !model[0] || strcmp(p->context_for, model)) return -1;
+    return p->context;
+}
+
+void prefs_store_row(Prefs *p, const char *model, const AgentModelInfo *info)
+{
+    p->context = info->context_length >= 1 && info->context_length <= PREFS_CONTEXT_MAX ?
+        info->context_length : 0;
+    p->vision = info->vision >= AGENT_VISION_UNKNOWN && info->vision <= AGENT_VISION_YES ?
+        info->vision : AGENT_VISION_UNKNOWN;
+    strcpy(p->default_effort, info->default_effort[0] && prefs_effort_ok(info->default_effort) ?
+        info->default_effort : "");
+    copy_value(p->context_for, sizeof(p->context_for), model);
+}
+
+int prefs_row_for(const Prefs *p, const char *model, AgentModelInfo *out)
+{
+    long context = prefs_context_for(p, model);
+    if (context <= 0) return 0;
+    memset(out, 0, sizeof(*out));
+    out->context_length = context;
+    out->vision = p->vision;
+    copy_value(out->default_effort, sizeof(out->default_effort), p->default_effort);
+    return 1;
+}
+
 static int key_is(const char *key, size_t len, const char *name)
 {
     return strlen(name) == len && !memcmp(key, name, len);
@@ -123,6 +163,17 @@ int prefs_parse(const char *text, size_t len, Prefs *p)
             else if (!strcmp(value_buf, "1")) { p->show_tool_debug = 1; accepted++; }
         } else if (key_is(key, key_len, "effort")) {
             if (prefs_effort_ok(value_buf)) { strcpy(p->effort, value_buf); accepted++; }
+        } else if (key_is(key, key_len, "context")) {
+            long n = prefs_context_value(value_buf);
+            if (n >= 0) { p->context = n; accepted++; }
+        } else if (key_is(key, key_len, "vision")) {
+            if (value_buf[0] >= '0' && value_buf[0] <= '2' && !value_buf[1]) {
+                p->vision = value_buf[0] - '0'; accepted++;
+            }
+        } else if (key_is(key, key_len, "default_effort")) {
+            if (prefs_effort_ok(value_buf)) { strcpy(p->default_effort, value_buf); accepted++; }
+        } else if (key_is(key, key_len, "context_for")) {
+            if (!value_buf[0] || prefs_model_ok(value_buf)) { strcpy(p->context_for, value_buf); accepted++; }
         }
         /* Unknown keys are ignored. */
     }
@@ -141,9 +192,15 @@ int prefs_format(const Prefs *p, char *out, size_t cap)
 {
     int n;
     if (has_break(p->model, CHAT_MODEL_CAP) || has_break(p->api_key, PREFS_KEY_CAP) ||
-        has_break(p->workspace, PREFS_WORKSPACE_CAP) || has_break(p->effort, AGENT_EFFORT_CAP)) return -1;
+        has_break(p->workspace, PREFS_WORKSPACE_CAP) || has_break(p->effort, AGENT_EFFORT_CAP) ||
+        has_break(p->context_for, CHAT_MODEL_CAP) || has_break(p->default_effort, AGENT_EFFORT_CAP) ||
+        !prefs_effort_ok(p->default_effort) || (p->context_for[0] && !prefs_model_ok(p->context_for)) ||
+        p->context < 0 || p->context > PREFS_CONTEXT_MAX ||
+        p->vision < AGENT_VISION_UNKNOWN || p->vision > AGENT_VISION_YES) return -1;
     n = snprintf(out, cap, "model=%s\rapi_key=%s\rworkspace=%s\rmax_rounds=%d\rmax_tools=%d\r"
-        "show_tool_debug=%d\reffort=%s\r", p->model, p->api_key, p->workspace,
-        p->max_rounds, p->max_tools, p->show_tool_debug, p->effort);
+        "show_tool_debug=%d\reffort=%s\rcontext=%ld\rvision=%d\rdefault_effort=%s\r"
+        "context_for=%s\r", p->model, p->api_key, p->workspace, p->max_rounds, p->max_tools,
+        p->show_tool_debug, p->effort, p->context, p->vision, p->default_effort,
+        p->context_for);
     return n >= 0 && (size_t)n < cap ? n : -1;
 }

@@ -277,6 +277,16 @@ static void PrefsLoad(void)
     prefs_parse(bytes, (size_t)length, &gPrefs);
 }
 
+/* A trusted saved row (window, vision flag and default effort, stored when
+ * the model was confirmed) stands in for the send-time lookup, so the first
+ * send needs no catalog request. Without one the lookup runs as before. */
+static void ModelInfoSeedFromPrefs(void)
+{
+    if (!prefs_row_for(&gPrefs, gPrefs.model, &gModelInfo)) return;
+    strcpy(gModelInfoModel, gPrefs.model);
+    gModelInfoAttempted = 1;
+}
+
 /* Write, flush and read back the whole file; a save that cannot be verified
  * leaves the previous file and the previous in-memory values in place. */
 static int PrefsSave(const Prefs *p)
@@ -1237,6 +1247,12 @@ static void ShowPreferences(void)
                         effort = confirmed ? PrefsEffortValue(d) : gPrefs.effort;
                         if (!prefs_effort_ok(effort)) effort = "";
                         strcpy(candidate.effort, effort);
+                        /* The confirmed row's window, vision flag and default
+                         * effort are stored with the model they belong to; an
+                         * unchanged, unconfirmed model keeps what it had. */
+                        if (confirmed) {
+                            prefs_store_row(&candidate, model, &d->confirmed_info);
+                        }
                         if (PrefsSave(&candidate)) {
                             PrefsProblem(dlg, "Could not save the preferences file. Nothing was changed.");
                         } else {
@@ -2796,6 +2812,7 @@ int main(void)
     InitGraf(&qd.thePort); InitFonts(); InitWindows(); InitMenus();
     TEInit(); InitDialogs(NULL); InitCursor(); MacTLS_Init();
     PrefsLoad();
+    ModelInfoSeedFromPrefs();
     tools_set_workspace(gPrefs.workspace);
     mcp_run_init(&kMcpHost);
     UIInit();
