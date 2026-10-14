@@ -60,7 +60,11 @@ int tools_find_dir(const FSSpec *spec, long dir, const char *prefix, long wanted
                    char *found, size_t cap, int depth, int *budget, int *complete);
 #endif
 int tools_execute(const AgentCall *call, char *result, size_t cap);
-/* 2 pending, 0 completed, 1 stop (recording failed or uncertain outcome). */
+/* 2 pending, 0 completed, 1 stop (recording failed or uncertain outcome).
+ * TOOLS_CAPACITY: result buffer below AGENT_RESULT_CAP; nothing ran, result
+ * is empty, and it is not a step stop. Nonzero, so callers that abort on any
+ * nonzero return still do. */
+#define TOOLS_CAPACITY (-1)
 int tools_execute_recorded(const AgentCall *call, char *result, size_t cap,
                            AgentJournal journal, void *context);
 /* Common preflight for both dispatch paths. tokens has 128 entries; -1

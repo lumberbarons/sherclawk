@@ -76,7 +76,7 @@ OSErr GetProcessInformation(const ProcessSerialNumber *p,ProcessInfoRec *i)
   GetCurrentProcess(&i->processLauncher);
   if(launcher_override)i->processLauncher.lowLongOfPSN=launcher_override;
   return process_error ? ioErr : 0; }
-static int build_journals, build_result_failure, check_revisions;
+static int build_journals, build_result_failure, check_revisions, saw_build_result;
 static char build_events[12][20];
 static int build_event_count;
 static int build_journal(void *ctx,const char *event,const char *json)
@@ -84,6 +84,7 @@ static int build_journal(void *ctx,const char *event,const char *json)
     JsonToken t[128]; (void)ctx;
     if((run_journal_error==1 && !strcmp(event,"run_intent")) || (run_journal_error==2 && !strcmp(event,"run_observed")))return -1;
     if(build_result_failure && !strcmp(event,"build_result"))return -1;
+    if(!strcmp(event,"build_result"))saw_build_result=1;
     assert(json_parse(json,strlen(json),t,128)>0); build_journals++;
     if(check_revisions && !strcmp(event,"build_snapshot")) { manifest_matches_read_text(json); check_revisions=0; }
     if(!strcmp(event,"queue_intent") || !strcmp(event,"queue_created")) {
@@ -102,7 +103,7 @@ static int entry(const char *name)
 }
 static int fixture(const char *descriptor_text)
 {
-    int d,i,w,q; reset();build_journals=0;build_event_count=0;
+    int d,i,w,q; reset();build_journals=0;build_event_count=0;saw_build_result=0;
     selfbuild_close();ts_busy=ts_ready=ts_sends=ts_abandoned=ts_failure=ts_malformed=ts_send_error=ts_unreachable=0;
     assert(!selfbuild_init());
     d=add(10,"project",1); i=add(files[d].id,"project.json",0);
@@ -168,6 +169,33 @@ static void terminal_check(const char *good,int artifact_ok)
         for(int k=0;k<64;k++)assert(!files[k].used || strcmp(files[k].name,"launch.rec"));
         return; }
     assert(r==0 && strstr(result,"\"status\":\"ok\"") && strstr(result,"native:sample") && entry("launch.rec")>=0);
+}
+/* Drive a successful build to the point where its result is journaled and
+ * artifact authorization is the pending phase, then interrupt or break it.
+ * mode 0: Stop; 1: the artifact changes under the fork scan. The step result
+ * must name the cause; neither case may leave a launch record. */
+static void authorization_check(const char *good,int mode)
+{
+    int i,r=2,turns;uint32_t now=2;
+    fixture(good);
+    for(turns=0;ts_sends<1 && turns<300;turns++) { r=build_project_step(result,sizeof(result),now++,0);assert(r==2); }
+    ts_ready=1;
+    for(turns=0;ts_sends<2 && turns<300;turns++) { r=build_project_step(result,sizeof(result),now++,0);assert(r==2); }
+    i=entry("native");assert(i>=0);
+    i=record_file(files[i].id,"sample","Joy!peffpwpc............................");files[i].resource=100;
+    ts_ready=1;
+    for(turns=0;r==2 && !saw_build_result && turns<300;turns++,now+=60)r=build_project_step(result,sizeof(result),now,0);
+    assert(r==2 && saw_build_result && entry("launch.rec")<0);
+    if(mode)files[i].resource=101;
+    r=build_project_step(result,sizeof(result),now,mode==0);
+    if(!mode) {
+        /* An interrupted authorization is a Stop, not an authorization failure. */
+        assert(r==1 && strstr(result,"ARTIFACT_AUTHORIZATION_STOPPED") && !strstr(result,"ARTIFACT_AUTHORIZATION_FAILED"));
+    } else {
+        while(r==2)r=build_project_step(result,sizeof(result),now,0);
+        assert(r==1 && strstr(result,"ARTIFACT_AUTHORIZATION_FAILED") && !strstr(result,"ARTIFACT_AUTHORIZATION_STOPPED"));
+    }
+    assert(entry("launch.rec")<0);
 }
 
 #ifdef TEST_SELFBUILD
@@ -249,6 +277,8 @@ int main(void)
     for(steps=0;r==2 && steps<100;steps++) r=build_project_step(result,sizeof(result),(uint32_t)(steps+2),0);
     assert(!r && strstr(result,"QUEUE_MISSING") && entry("buildjobs")<0 && !build_event_count && !build_journals);
     queue_mode=0;
+    authorization_check(good,0);authorization_check(good,1);
+    puts("PASS build authorization outcomes: Stop and artifact change are distinct failures");
     build_result_failure=1;terminal_check(good,1);build_result_failure=0;
     terminal_check(good,0);terminal_check(good,1);
     { char bid[25],runargs[128]; int r;

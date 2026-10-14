@@ -33,7 +33,13 @@ static size_t diagnostic_size;
 static FSSpec specs[INPUTS+1];
 static CInfoPBRec infos[INPUTS+1];
 static long sizes[INPUTS+1];
-static int active, phase, file_index, second_pass, native_attempted, native_claimed, not_started;
+/* READ_DESCRIPTOR reads project.json; READ_INPUTS reads the sources; BUILD
+ * stages, runs and awaits the native job; AUTHORIZE seals the successful
+ * artifact; DONE reports the authorized build. Order matters: the two read
+ * phases compare below BUILD. */
+typedef enum { PHASE_READ_DESCRIPTOR, PHASE_READ_INPUTS, PHASE_BUILD, PHASE_AUTHORIZE, PHASE_DONE } Phase;
+static Phase phase;
+static int active, file_index, second_pass, native_attempted, native_claimed, not_started;
 static FSSpec build_queue;
 static long offset;
 static uint32_t start_ticks;
@@ -244,7 +250,7 @@ int build_project_begin(const AgentCall *call,char *out,size_t cap,AgentJournal 
     sizes[0]=infos[0].hFileInfo.ioFlLgLen;
     if(sizes[0]>TOOLS_DESCRIPTOR_CAP)return error_message(out,cap,"SNAPSHOT_SIZE_LIMIT", TOOLS_SNAPSHOT_LIMIT_MESSAGE, 0);
     source_offsets[0]=0;arena_used=(size_t)sizes[0]+1;hashes[0]=fs_fnv1a(NULL,0);
-    native_attempted=native_claimed=not_started=0; diagnostic_size=0; diagnostic[0]=0; phase=0; file_index=0; offset=0; second_pass=0; active=1;
+    native_attempted=native_claimed=not_started=0; diagnostic_size=0; diagnostic[0]=0; phase=PHASE_READ_DESCRIPTOR; file_index=0; offset=0; second_pass=0; active=1;
     return 2;
 }
 static int read_step(int i)
@@ -301,11 +307,11 @@ static int finish(char *out,size_t cap,uint32_t now)
     for(size_t k=0;k<diagnostic_size;k++)if((unsigned char)diagnostic[k]<32 && diagnostic[k]!='\r' && diagnostic[k]!='\n' && diagnostic[k]!='\t')diagnostic[k]='?';
     if(text_to_utf8(diagnostic,diagnostic_size,utf8,sizeof(utf8))<0 || json_quote(utf8,qd,sizeof(qd))<0)strcpy(qd,"\"[Use read_build_log]\"");
     snprintf(out,cap,"{\"status\":\"%s\",%s\"build_id\":\"%s\",\"snapshot\":\"" QUEUE ":%s\",\"adapter\":\"" ADAPTER "\",\"state\":%d,\"exit\":%d,\"os_error\":%d,\"artifact\":%s,\"logs\":\"read_build_log with stream stdout or stderr and byte offset\",\"next_stdout_byte\":0,\"next_stderr_byte\":0,\"launch_supported\":%s,\"diagnostics\":%s}",status,reason,id,id,job.state,job.exit_code,job.error,q,job.state==JOB_SUCCEEDED ? "true" : "false",qd);
-    if(phase!=4 && journal_fn(journal_context,"build_result",out))return error(out,cap,"JOURNAL_AFTER_BUILD",1);
-    if(job.state==JOB_SUCCEEDED && phase==2) {
+    if(phase!=PHASE_DONE && journal_fn(journal_context,"build_result",out))return error(out,cap,"JOURNAL_AFTER_BUILD",1);
+    if(job.state==JOB_SUCCEEDED && phase==PHASE_BUILD) {
         if(application_authorize_begin(id,descriptor.output,journal_fn,journal_context,now)<0)
             return error(out,cap,"ARTIFACT_AUTHORIZATION_BEGIN",1);
-        phase=3; return 2;
+        phase=PHASE_AUTHORIZE; return 2;
     }
     active=0;
     return job.state==JOB_UNKNOWN || job.state==JOB_ABANDONED || job.state==JOB_REJECTED ? 1 : 0;
@@ -362,12 +368,12 @@ static int ensure_queue(void)
 int build_project_step(char *out,size_t cap,uint32_t now,int stop)
 {
     if(!active)return error(out,cap,"NO_ACTIVE_BUILD",1);
-    if(phase<2 && (stop || (uint32_t)(now-start_ticks)>=300UL*60UL))return error(out,cap,"SNAPSHOT_ABANDONED",1);
-    if(phase<2) {
+    if(phase<PHASE_BUILD && (stop || (uint32_t)(now-start_ticks)>=300UL*60UL))return error(out,cap,"SNAPSHOT_ABANDONED",1);
+    if(phase<PHASE_BUILD) {
         int r=read_step(file_index);
         if(r<0)return error(out,cap,"INPUT_CHANGED_OR_UNREADABLE",0);
         if(!r)return 2;
-        if(phase==0) {
+        if(phase==PHASE_READ_DESCRIPTOR) {
             if(parse(input_bytes(0),&descriptor) || build_project_recipe(input_bytes(0),recipe,sizeof(recipe)))return error(out,cap,"DESCRIPTOR_UNSUPPORTED_USE_PROTOCOL_2",0);
             for(int i=1;i<=descriptor.count;i++) {
                 if(resolve_input(i))return error(out,cap,"INPUT_MISSING_TEXT_OR_SIZE",0);
@@ -375,7 +381,7 @@ int build_project_step(char *out,size_t cap,uint32_t now,int stop)
                 if(sizes[i]>FILE_BYTES || (size_t)sizes[i]+1>sizeof(arena)-arena_used)return error_message(out,cap,"SNAPSHOT_SIZE_LIMIT", TOOLS_SNAPSHOT_LIMIT_MESSAGE, 0);
                 source_offsets[i]=arena_used;arena_used+=(size_t)sizes[i]+1;hashes[i]=fs_fnv1a(NULL,0);
             }
-            phase=1; file_index=1; return 2;
+            phase=PHASE_READ_INPUTS; file_index=1; return 2;
         }
         if(++file_index<=descriptor.count)return 2;
         {
@@ -405,14 +411,19 @@ int build_project_step(char *out,size_t cap,uint32_t now,int stop)
             inputs[i].name="script"; inputs[i].bytes=recipe; inputs[i++].size=strlen(recipe);
             build_queue=queue;
             if(jobs_begin(&job,&queue,id,inputs,i,now,300UL*60UL,journal_fn,journal_context))return error(out,cap,"JOB_RESERVATION_FAILED",1);
-            phase=2; return 2;
+            phase=PHASE_BUILD; return 2;
         }
     }
-    if(phase==3) {
-        int r=run_application_step(out,cap,now,stop);
-        if(r==2)return 2;
-        if(r || !strstr(out,"\"status\":\"ok\""))return error(out,cap,"ARTIFACT_AUTHORIZATION_FAILED",1);
-        phase=4; return finish(out,cap,now);
+    if(phase==PHASE_AUTHORIZE) {
+        /* The outcome is typed; the JSON the step fills in is the journaled
+         * model-facing record and is replaced by finish() on success. */
+        switch(application_authorize_step(out,cap,now,stop)) {
+        case AUTHORIZE_PENDING: return 2;
+        case AUTHORIZE_AUTHORIZED: phase=PHASE_DONE; return finish(out,cap,now);
+        case AUTHORIZE_STOPPED: return error(out,cap,"ARTIFACT_AUTHORIZATION_STOPPED",1);
+        case AUTHORIZE_FAILED: break;
+        }
+        return error(out,cap,"ARTIFACT_AUTHORIZATION_FAILED",1);
     }
     if(job.state==JOB_WAITING && !native_attempted && !stop) {
         SelfBuildStart started;

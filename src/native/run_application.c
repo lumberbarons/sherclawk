@@ -25,6 +25,7 @@ static Authority seal, observed;
 static FSSpec artifact;
 static char build_id[25], run_id[32];
 static int active, authorizing, fork_index, tracking_done;
+static AuthorizeResult authorization;
 static long offset;
 static uint32_t started;
 static unsigned long sequence;
@@ -82,6 +83,7 @@ static int same_metadata(const Authority *a,const Authority *b)
 static int fail(char *out,size_t cap,const char *code,int uncertain)
 {
     active=0;
+    if(authorizing && authorization==AUTHORIZE_PENDING)authorization=AUTHORIZE_FAILED;
     snprintf(out,cap,"{\"status\":\"%s\",\"code\":\"%s\",\"build_id\":\"%s\",\"run_id\":\"%s\"}",uncertain ? "uncertain" : "error",code,build_id,run_id);
     return uncertain;
 }
@@ -92,7 +94,7 @@ static int begin(int authorize,AgentJournal journal,void *ctx,uint32_t now)
     if(!journal || metadata(&observed))return -1;
     if(!authorize && !same_metadata(&observed,&seal))return -1;
     observed.data_hash=observed.resource_hash=fs_fnv1a(NULL,0);
-    authorizing=authorize; fork_index=0; offset=0; started=now;
+    authorizing=authorize; authorization=AUTHORIZE_PENDING; fork_index=0; offset=0; started=now;
     journal_fn=journal; journal_context=ctx; active=1; tracking_done=0;
     if(!authorize)application_tracking_begin();
     return 2;
@@ -103,6 +105,12 @@ int application_authorize_begin(const char *id,const char *output,AgentJournal j
     memset(&seal,0,sizeof(seal)); seal.magic=0x53484131UL;
     strcpy(build_id,id); strcpy(seal.build,id); strcpy(seal.output,output); run_id[0]=0;
     return begin(1,journal,ctx,now);
+}
+AuthorizeResult application_authorize_step(char *out,size_t cap,uint32_t now,int stop)
+{
+    if(!active || !authorizing) { if(cap)out[0]=0; return AUTHORIZE_FAILED; }
+    if(run_application_step(out,cap,now,stop)==2)return AUTHORIZE_PENDING;
+    return authorization;
 }
 int run_application_begin(const AgentCall *call,char *out,size_t cap,AgentJournal journal,void *ctx,uint32_t now)
 {
@@ -144,7 +152,10 @@ int run_application_step(char *out,size_t cap,uint32_t now,int stop)
     Authority current=observed; short ref; OSErr e,c; long n;
     unsigned char page[1024]; uint32_t *h;
     if(!active)return fail(out,cap,"NO_ACTIVE_LAUNCH",1);
-    if(stop || ((authorizing || fork_index<2) && (uint32_t)(now-started)>=60UL*60UL))return fail(out,cap,"LAUNCH_VERIFICATION_STOPPED",0);
+    if(stop || ((authorizing || fork_index<2) && (uint32_t)(now-started)>=60UL*60UL)) {
+        if(authorizing)authorization=AUTHORIZE_STOPPED;
+        return fail(out,cap,"LAUNCH_VERIFICATION_STOPPED",0);
+    }
     if(metadata(&current) || !same_metadata(&current,&observed))return fail(out,cap,"ARTIFACT_CHANGED",0);
     if(fork_index<2) {
         n=(long)(fork_index ? observed.resource_size : observed.data_size)-offset;
@@ -165,7 +176,7 @@ int run_application_step(char *out,size_t cap,uint32_t now,int stop)
         snprintf(out,cap,"{\"status\":\"ok\",\"build_id\":\"%s\",\"snapshot\":\"" QUEUE ":%s\",\"launch_supported\":true}",build_id,build_id);
         if(journal_fn(journal_context,"artifact_authorization_intent",out) ||
             journal_fn(journal_context,"artifact_authorization_ready",out) || persist())return fail(out,cap,"AUTHORIZATION_PERSISTENCE",1);
-        active=0;return 0;
+        authorization=AUTHORIZE_AUTHORIZED; active=0;return 0;
     }
     if(memcmp(&seal,&observed,sizeof(seal)))return fail(out,cap,"ARTIFACT_CHANGED",0);
     /* Recheck the authority after the multi-turn fork scan. */
