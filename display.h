@@ -32,6 +32,9 @@ short ComputeMaxScroll(short line_height, short line_count, int view_height);
 short ClampScroll(long pixels, short maximum);
 short ResponsePageHeight(short line_height, int view_height);
 void FormatTokens(long tokens, char *out, size_t cap);
+/* "Model: <id>", plus " (<effort>)" for the chosen effort, else the fallback,
+ * only when one is nonempty. Truncates to cap. */
+void FormatModelLabel(const char *model, const char *chosen, const char *fallback, char *out, size_t cap);
 /* Append whole strings only; out/events must be NUL-terminated when cap > 0. */
 void AppendText(char *out, size_t cap, const char *text);
 void RenderToolCall(const AgentCall *call, char *out, size_t cap);

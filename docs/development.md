@@ -201,8 +201,19 @@ ssh "$SHARE_HOST" 'cat /srv/retro68/SherclawkCopyCheck.log'
 The cursor matcher can mistake highlights in the lobster artwork for the arrow.
 After using UTM, check `info mice`; this VM needs `mouse_set 4` for the
 working relative HID mouse. The active absolute tablet ignores relative input.
-For UI diagnostics, reanchor, use blind `moveto`, verify a screenshot, then
-use `tools/guest-input.py --click` with the pointer still.
+For UI diagnostics prefer the closed-loop pointer commands in `tools/utm_qmp.py`
+(`pgoto`, `pclick`, `pdclick`, `phold`, `nudge`, `release`). They park the pointer
+in the corner, keep that screen as a baseline and find the pointer as the
+arrow-sized blob that differs from it, so they work over dialogs, menus and text
+where the template matcher loses the arrow, and they end within a couple of
+pixels whatever the gain. Menus and popups need the button held: `phold` on the
+title, `nudge` down (a nudge of about 28 moves one item), screendump to confirm
+the highlighted item, then `release`. Only one process may hold the QMP socket:
+a script that already has a connection must call its own `screendump` rather
+than shelling out to `utm_qmp.py screendump`, which would wait on the greeting.
+Keys are held 200ms with a release gap, since the guest drops shorter presses
+(Escape included). The older route (reanchor, blind `moveto`, verify a
+screenshot, then `tools/guest-input.py --click` with the pointer still) remains.
 
 The host probe labels its simulated file executor explicitly; it checks actual
 provider protocol and transport. The guest probe uses actual native tools and a

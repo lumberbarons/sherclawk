@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Send non-overlapping QMP key presses for reliable OS 9 guest diagnostics.
 
-QMP send-key defaults to a 100ms hold, while the original fast text helper
-sends again after 40ms. Keep a complete hold/release interval between keys.
-Control clicks use a small move and 250ms hold, as required by the guest.
+QMP send-key defaults to a 100ms hold, which the guest can drop (Escape in
+particular), while the original fast text helper sends again after 40ms.
+QMP.type_text in utm_qmp.py holds each key long enough and keeps a complete
+release interval between keys. Control clicks use a small move and 250ms hold, as required by the guest.
 Uses the vendored UTM socket helper (tools/utm_qmp.py); it does not change
 VM configuration.
 """
@@ -19,15 +20,4 @@ q = QMP()
 if args.click:
     q.move(1, 0); time.sleep(.1); q.move(-1, 0); time.sleep(.15)
     q.button(True); time.sleep(.25); q.button(False); time.sleep(.3)
-keymap = {' ': 'spc', '.': 'dot', '-': 'minus', '/': 'slash', '\n': 'ret'}
-for ch in args.text:
-    if ch.isascii() and ch.isalpha():
-        keys = ['shift', ch.lower()] if ch.isupper() else [ch]
-    elif ch.isdigit() and ch.isascii():
-        keys = [ch]
-    elif ch in keymap:
-        keys = [keymap[ch]]
-    else:
-        raise SystemExit('Unsupported diagnostic character')
-    q.cmd('send-key', keys=[{'type': 'qcode', 'data': key} for key in keys], **{'hold-time': 200})
-    time.sleep(.3)
+q.type_text(args.text)
