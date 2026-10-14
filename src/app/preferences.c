@@ -74,6 +74,24 @@ int prefs_effort_ok(const char *s)
     return 0;
 }
 
+long prefs_context_value(const char *s)
+{
+    long n = 0;
+    size_t i;
+    if (strlen(s) > 9) return -1;
+    for (i = 0; s[i]; i++) {
+        if (s[i] < '0' || s[i] > '9') return -1;
+        n = n * 10 + (s[i] - '0');
+    }
+    return n <= PREFS_CONTEXT_MAX ? n : -1;
+}
+
+long prefs_context_for(const Prefs *p, const char *model)
+{
+    if (p->context <= 0 || !model[0] || strcmp(p->context_for, model)) return -1;
+    return p->context;
+}
+
 static int key_is(const char *key, size_t len, const char *name)
 {
     return strlen(name) == len && !memcmp(key, name, len);
@@ -123,6 +141,11 @@ int prefs_parse(const char *text, size_t len, Prefs *p)
             else if (!strcmp(value_buf, "1")) { p->show_tool_debug = 1; accepted++; }
         } else if (key_is(key, key_len, "effort")) {
             if (prefs_effort_ok(value_buf)) { strcpy(p->effort, value_buf); accepted++; }
+        } else if (key_is(key, key_len, "context")) {
+            long n = prefs_context_value(value_buf);
+            if (n >= 0) { p->context = n; accepted++; }
+        } else if (key_is(key, key_len, "context_for")) {
+            if (!value_buf[0] || prefs_model_ok(value_buf)) { strcpy(p->context_for, value_buf); accepted++; }
         }
         /* Unknown keys are ignored. */
     }
@@ -141,9 +164,11 @@ int prefs_format(const Prefs *p, char *out, size_t cap)
 {
     int n;
     if (has_break(p->model, CHAT_MODEL_CAP) || has_break(p->api_key, PREFS_KEY_CAP) ||
-        has_break(p->workspace, PREFS_WORKSPACE_CAP) || has_break(p->effort, AGENT_EFFORT_CAP)) return -1;
+        has_break(p->workspace, PREFS_WORKSPACE_CAP) || has_break(p->effort, AGENT_EFFORT_CAP) ||
+        has_break(p->context_for, CHAT_MODEL_CAP) || p->context < 0 || p->context > PREFS_CONTEXT_MAX) return -1;
     n = snprintf(out, cap, "model=%s\rapi_key=%s\rworkspace=%s\rmax_rounds=%d\rmax_tools=%d\r"
-        "show_tool_debug=%d\reffort=%s\r", p->model, p->api_key, p->workspace,
-        p->max_rounds, p->max_tools, p->show_tool_debug, p->effort);
+        "show_tool_debug=%d\reffort=%s\rcontext=%ld\rcontext_for=%s\r", p->model, p->api_key,
+        p->workspace, p->max_rounds, p->max_tools, p->show_tool_debug, p->effort,
+        p->context, p->context_for);
     return n >= 0 && (size_t)n < cap ? n : -1;
 }

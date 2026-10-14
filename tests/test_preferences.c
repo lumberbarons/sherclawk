@@ -15,6 +15,7 @@ static void defaults(void)
     assert(!strcmp(p.api_key, SHERCLAWK_API_KEY));
     assert(!strcmp(p.workspace, SHERCLAWK_WORKSPACE));
     assert(!p.effort[0]);
+    assert(p.context == 0 && !p.context_for[0]);
     assert(p.max_rounds == AGENT_TURN_MAX && p.max_tools == AGENT_TOOL_MAX);
     assert(p.show_tool_debug == 0);
 }
@@ -27,14 +28,17 @@ static void full_file(void)
         "max_rounds=2\r"
         "max_tools=1\r"
         "show_tool_debug=1\r"
-        "effort=high\r";
+        "effort=high\r"
+        "context=262144\r"
+        "context_for=openai/gpt-6-luna\r";
     prefs_defaults(&p);
-    assert(prefs_parse(text, strlen(text), &p) == 7);
+    assert(prefs_parse(text, strlen(text), &p) == 9);
     assert(!strcmp(p.model, "openai/gpt-6-luna"));
     assert(!strcmp(p.api_key, "sk-or-v1-abcdef"));
     assert(!strcmp(p.workspace, "Macintosh HD:Projects:"));
     assert(p.max_rounds == 2 && p.max_tools == 1 && p.show_tool_debug == 1);
     assert(!strcmp(p.effort, "high"));
+    assert(p.context == 262144 && !strcmp(p.context_for, "openai/gpt-6-luna"));
 }
 
 static void syntax_tolerated(void)
@@ -119,6 +123,65 @@ static void effort_values(void)
     assert(prefs_parse("effort=\r", 8, &p) == 1 && !p.effort[0]); /* explicit clear */
 }
 
+static int parse_str(const char *text)
+{
+    return prefs_parse(text, strlen(text), &p);
+}
+
+static void context_values(void)
+{
+    assert(prefs_context_value("1") == 1 && prefs_context_value("1048576") == 1048576);
+    assert(prefs_context_value("0") == 0 && prefs_context_value("") == 0); /* none */
+    assert(prefs_context_value("-1") < 0 && prefs_context_value("12x") < 0);
+    assert(prefs_context_value(" 5") < 0 && prefs_context_value("1.5") < 0);
+    assert(prefs_context_value("100000001") < 0); /* over the ceiling */
+    assert(prefs_context_value("99999999999999999999") < 0);
+    /* Malformed context or context_for leaves the previous value. */
+    prefs_defaults(&p);
+    assert(parse_str("context=2048\rcontext_for=a/b\r") == 2);
+    assert(p.context == 2048 && !strcmp(p.context_for, "a/b"));
+    assert(parse_str("context=-5\rcontext=12x\rcontext_for=has space\r") == 0);
+    assert(p.context == 2048 && !strcmp(p.context_for, "a/b"));
+    /* Empty values are explicit clears. */
+    assert(parse_str("context=\rcontext_for=\r") == 2);
+    assert(p.context == 0 && !p.context_for[0]);
+}
+
+static void context_trust(void)
+{
+    /* The stored context is trusted only for the model it was stored for. */
+    prefs_defaults(&p);
+    strcpy(p.model, "openai/gpt-6-luna");
+    assert(prefs_context_for(&p, p.model) == -1); /* nothing stored */
+    p.context = 200000; strcpy(p.context_for, "openai/gpt-6-luna");
+    assert(prefs_context_for(&p, "openai/gpt-6-luna") == 200000);
+    assert(prefs_context_for(&p, "openai/gpt-6-luna:free") == -1); /* other model */
+    assert(prefs_context_for(&p, "OPENAI/gpt-6-luna") == -1);
+    p.context = 0;
+    assert(prefs_context_for(&p, "openai/gpt-6-luna") == -1);     /* known unknown */
+    p.context = 5; p.context_for[0] = 0;
+    assert(prefs_context_for(&p, "") == -1);                       /* never matches blank */
+    /* A hand-edited model with the old context_for falls back to a lookup. */
+    {
+        const char *text = "model=other/model\rcontext=1000\rcontext_for=openai/gpt-6-luna\r";
+        prefs_defaults(&p);
+        assert(prefs_parse(text, strlen(text), &p) == 3);
+        assert(prefs_context_for(&p, p.model) == -1);
+    }
+}
+
+static void older_build_file(void)
+{
+    /* Files written before effort, context and context_for existed. */
+    const char *text = "model=openai/gpt-6-luna\rapi_key=sk-x\rworkspace=Retro68:\r"
+        "max_rounds=8\rmax_tools=9\rshow_tool_debug=1\r";
+    prefs_defaults(&p);
+    assert(prefs_parse(text, strlen(text), &p) == 6);
+    assert(!p.effort[0] && p.context == 0 && !p.context_for[0]);
+    assert(prefs_context_for(&p, p.model) == -1);
+    assert(p.max_rounds == 8 && p.show_tool_debug == 1);
+}
+
 static void boundaries(void)
 {
     char long_model[CHAT_MODEL_CAP + 1], long_key[PREFS_KEY_CAP + 1];
@@ -177,15 +240,18 @@ static void format_round_trip(void)
     strcpy(p.api_key, "sk-or-v1-quoted=value"); /* '=' must survive a round trip */
     strcpy(p.workspace, "Macintosh HD:Projects:");
     strcpy(p.effort, "minimal");
+    p.context = 1000000; strcpy(p.context_for, "openai/gpt-6-luna");
     p.max_rounds = 7; p.max_tools = 128; p.show_tool_debug = 1;
     n = prefs_format(&p, buf, sizeof(buf));
     assert(n > 0 && buf[n - 1] == '\r');
     prefs_defaults(&base);
-    assert(prefs_parse(buf, (size_t)n, &base) == 7);
+    assert(prefs_parse(buf, (size_t)n, &base) == 9);
     assert(!strcmp(base.model, p.model));
     assert(!strcmp(base.api_key, p.api_key));
     assert(!strcmp(base.workspace, p.workspace));
     assert(!strcmp(base.effort, "minimal"));
+    assert(base.context == 1000000 && !strcmp(base.context_for, p.context_for));
+    assert(prefs_context_for(&base, base.model) == 1000000);
     assert(base.max_rounds == 7 && base.max_tools == 128 && base.show_tool_debug == 1);
     /* A buffer that cannot hold the file fails instead of truncating. */
     memset(buf, 0, sizeof(buf));
@@ -195,6 +261,9 @@ static void format_round_trip(void)
     assert(prefs_format(&p, buf, sizeof(buf)) == -1);
     strcpy(p.api_key, "sk-or-v1-quoted=value");
     strcpy(p.effort, "bad\neffort");
+    assert(prefs_format(&p, buf, sizeof(buf)) == -1);
+    strcpy(p.effort, "minimal");
+    strcpy(p.context_for, "bad\nmodel");
     assert(prefs_format(&p, buf, sizeof(buf)) == -1);
 }
 
@@ -206,6 +275,9 @@ int main(void)
     malformed_keeps_defaults();
     empty_key_clears();
     effort_values();
+    context_values();
+    context_trust();
+    older_build_file();
     boundaries();
     over_long_lines_ignored();
     format_round_trip();

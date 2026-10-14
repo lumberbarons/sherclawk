@@ -277,6 +277,19 @@ static void PrefsLoad(void)
     prefs_parse(bytes, (size_t)length, &gPrefs);
 }
 
+/* The saved context window stands in for the lookup until one runs, so the
+ * accounting line has its percentage before the first send. Attempted stays
+ * clear: the first send still looks the model up for the rest of its row. */
+static void ModelInfoSeedFromPrefs(void)
+{
+    long context = prefs_context_for(&gPrefs, gPrefs.model);
+    if (context <= 0) return;
+    memset(&gModelInfo, 0, sizeof(gModelInfo));
+    gModelInfo.context_length = context;
+    strcpy(gModelInfoModel, gPrefs.model);
+    gModelInfoAttempted = 0;
+}
+
 /* Write, flush and read back the whole file; a save that cannot be verified
  * leaves the previous file and the previous in-memory values in place. */
 static int PrefsSave(const Prefs *p)
@@ -1237,6 +1250,14 @@ static void ShowPreferences(void)
                         effort = confirmed ? PrefsEffortValue(d) : gPrefs.effort;
                         if (!prefs_effort_ok(effort)) effort = "";
                         strcpy(candidate.effort, effort);
+                        /* The confirmed row's context window is stored with
+                         * the model it belongs to; an unchanged, unconfirmed
+                         * model keeps what it had. */
+                        if (confirmed) {
+                            candidate.context = d->confirmed_info.context_length > 0 ?
+                                d->confirmed_info.context_length : 0;
+                            strcpy(candidate.context_for, model);
+                        }
                         if (PrefsSave(&candidate)) {
                             PrefsProblem(dlg, "Could not save the preferences file. Nothing was changed.");
                         } else {
@@ -1876,7 +1897,7 @@ static void DrawChrome(void)
     gDisplayedHistory = gAgent.used;
     if (gAgent.context_seen) FormatTokens(gAgent.context_tokens, count, sizeof(count));
     else strcpy(count, "-");
-    if (gAgent.context_seen && gModelInfo.context_length > 0 && !strcmp(gModelInfoModel, gRunModel)) {
+    if (gAgent.context_seen && gModelInfo.context_length > 0 && !strcmp(gModelInfoModel, gPrefs.model)) {
         long long contextPercent = ((long long)gAgent.context_tokens * 100 + gModelInfo.context_length / 2) / gModelInfo.context_length;
         if (contextPercent > 100) contextPercent = 100;
         snprintf(line, sizeof(line), "Context: %s tokens (%ld%%)", count, (long)contextPercent);
@@ -2577,6 +2598,8 @@ static void FinishContextLookup(int completed)
     AgentModelInfo info;
     if (completed && gNet.status == 200 && !agent_model_info(gNet.body, gNet.body_len, gRunModel, &info))
         gModelInfo = info;
+    else if (prefs_context_for(&gPrefs, gRunModel) > 0)
+        gModelInfo.context_length = prefs_context_for(&gPrefs, gRunModel); /* failed lookup: keep the saved window */
     if (gWindow) InvalRect(&gModelRect);
     if (gNet.ctx || gOTOpen) CloseChatContext();
     {
@@ -2796,6 +2819,7 @@ int main(void)
     InitGraf(&qd.thePort); InitFonts(); InitWindows(); InitMenus();
     TEInit(); InitDialogs(NULL); InitCursor(); MacTLS_Init();
     PrefsLoad();
+    ModelInfoSeedFromPrefs();
     tools_set_workspace(gPrefs.workspace);
     mcp_run_init(&kMcpHost);
     UIInit();

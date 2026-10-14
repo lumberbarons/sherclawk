@@ -19,12 +19,15 @@
 #define PREFS_WORKSPACE_MAX 192 /* room for the session, handoff and build paths */
 #define PREFS_LIMIT_MIN 1
 #define PREFS_LIMIT_MAX 128
+#define PREFS_CONTEXT_MAX 100000000L /* tokens; far above any real window */
 
 typedef struct {
     char model[CHAT_MODEL_CAP];
     char api_key[PREFS_KEY_CAP];
     char workspace[PREFS_WORKSPACE_CAP];
     char effort[AGENT_EFFORT_CAP];
+    long context;                    /* context window of context_for; 0 = unknown */
+    char context_for[CHAT_MODEL_CAP];/* model id `context` was stored for */
     int max_rounds;
     int max_tools;
     int show_tool_debug;
@@ -48,4 +51,10 @@ int prefs_limit_value(const char *s);  /* decimal 1-128, else -1 */
 /* Empty, or one exact provider effort name (max, xhigh, high, medium, low,
  * minimal, none). The dialog stores only what the confirmed row supports. */
 int prefs_effort_ok(const char *s);
+/* Decimal token count 0..PREFS_CONTEXT_MAX (empty and "0" mean unknown), else -1. */
+long prefs_context_value(const char *s);
+/* The stored context window when `context_for` names exactly `model` and the
+ * value is known, else -1: preferences from older builds and hand-edited
+ * model ids then fall back to a catalog lookup. */
+long prefs_context_for(const Prefs *p, const char *model);
 #endif
