@@ -4,6 +4,47 @@ Dated acceptance evidence for the OS 9 guest, host checks and live model runs,
 retained from earlier development. Entries describe the state on their recorded
 dates. Use the [current guides](../../README.md#documentation) for present behavior.
 
+Recorded October 14, 2026 (model chooser and reasoning effort, issue #62):
+the October 13 guest evidence on issues #62 and #57 covers popular-model loading,
+search, rejection of a nonexistent typed model ID, exact confirmation and saving
+of an existing typed ID, model-specific effort choices/defaults, persistence of
+model and effort across relaunch, and provider requests at `low` and `max` with
+different logged reasoning-token counts. That run also passed BuildCheck,
+RunCheck, QuitCheck and SelfBuildCheck (`RESULT failures=0`). These are prior
+observations, not a rerun of those four diagnostics on the October 14 build.
+
+The remaining failure/Cancel checks used OS 9.2.2 and the main application built
+from `58a76bd`, published with `tools/deploy-to-share.sh`. With permission, the
+guest's DHCP configuration was given an unreachable DNS override (`192.0.2.1`),
+leaving its IP address, subnet and router unchanged. Applying the override closed
+the existing AFP connection; the `Retro68` workspace was remounted by server IP
+without restarting netatalk. Preferences then displayed "Could not load the
+catalog. Try Find again." with the saved model and effort still visible. Find
+started another search, and Cancel returned to the main window without a crash.
+After clearing the override, the TCP/IP panel again showed the original DHCP
+DNS server (`10.0.2.3`) in Basic mode, and AFP was remounted. A separate open
+captured "Loading the popular models..." immediately before Escape closed the
+dialog. This is visible fetch/Cancel evidence; internal drain state was not
+instrumented.
+
+Recovery verification is blocked by #234: a subsequent model request and a fresh
+catalog load failed after the DNS settings were restored; the model log recorded
+`TLS error: code=4 bssl=54 OT=-3162`. The same request failure persisted after an
+authorized guest restart, completed by stopping/starting UTM when the normal
+Restart remained at a black firmware screen. AFP mounted again after boot. The
+request log showed `up=0 down=0` and no handshake/send completion; the SDK names
+`-3162` as `kOTNoDataErr` (TNODATA). Host DNS and the public catalog worked.
+**No successful guest catalog/model baseline was taken on this build before
+changing DNS.** Neither the failed fetch nor the persistent transport error can
+therefore be attributed to the DNS override. The previous successful guest run
+used a different revision (`16c1888`). This entry does not establish a successful
+post-failure request or sign off issue #62.
+
+The earlier display findings stay separate: #213 (disabled Effort text) is
+closed, and #214 (cached-list drawing on the main window) remains tracked. No
+application code was changed for this verification. `tools/check.sh`,
+`tools/check-transport.sh`, `tools/lint.sh` and the Docker app build passed.
+
 Recorded October 10, 2026: `copy_file` was exercised in OS 9.2.2 against the
 AFP `Retro68` volume. `SherclawkCopyCheck` reported zero failures: a native
 fixture with both forks (3,000 data and 1,500 resource bytes) and Finder
