@@ -409,9 +409,6 @@ enum {
     kPrefsRowHeight = 15
 };
 
-/* The catalog fetch shares the send-time lookup's 30-second deadline. */
-#define kPrefsFetchDeadline (30UL * 60UL)
-
 /* State carried between events of the modal Preferences loop. The model
  * picker's rows, filter and confirmed row live in `model`
  * (src/app/prefs_model.c); the rest is Toolbox state. */
@@ -732,42 +729,28 @@ static uint32_t PrefsHostNow(void *context)
     return (uint32_t)TickCount();
 }
 
+static int PrefsHostPoll(void *context, const char **body, size_t *len)
+{
+    int result = network_step(&gNet);
+    (void)context;
+    if (result == 0) return PREFS_POLL_PENDING;
+    if (result < 0 || gNet.status != 200) return PREFS_POLL_ERROR;
+    *body = gNet.body;
+    *len = gNet.body_len;
+    return PREFS_POLL_DONE;
+}
+
+static void PrefsHostClose(void *context)
+{
+    (void)context;
+    CloseChatContext();
+}
+
 static const PrefsModelHost kPrefsHost = {
     PrefsHostHint, PrefsHostGetModel, PrefsHostSetModel,
-    PrefsHostDrawRows, PrefsHostShowEffort, PrefsHostSend, PrefsHostNow
+    PrefsHostDrawRows, PrefsHostShowEffort, PrefsHostSend, PrefsHostNow,
+    PrefsHostPoll, PrefsHostClose
 };
-
-/* One network step per pass, with the send-time lookup's deadline and drain
- * rules: a timed-out connect is not torn down mid-flight. */
-static void PrefsFetchStep(PrefsDialog *d)
-{
-    PrefsModel *m = &d->model;
-    int result;
-    uint32_t now = (uint32_t)TickCount();
-    if (!m->draining && now - m->fetch_start > kPrefsFetchDeadline) {
-        m->draining = 1;
-        m->fetch_start = now;
-    }
-    result = network_step(&gNet);
-    if (result == 0) {
-        if (m->draining && (uint32_t)TickCount() - m->fetch_start > kPrefsFetchDeadline) {
-            CloseChatContext();
-            prefs_model_fetch_failed(m, 1);
-        }
-        return;
-    }
-    CloseChatContext();
-    if (m->draining) { prefs_model_fetch_failed(m, 1); return; }
-    if (result < 0 || gNet.status != 200) { prefs_model_fetch_failed(m, 0); return; }
-    prefs_model_fetch_complete(m, gNet.body, gNet.body_len);
-}
-
-/* DragWindow and TrackControl block until the mouse is released and no network
- * step runs meanwhile, so the wait does not count against the deadline. */
-static void PrefsFetchResume(PrefsDialog *d)
-{
-    if (d->model.fetch || d->model.draining) d->model.fetch_start = (uint32_t)TickCount();
-}
 
 static void ShowPreferences(void)
 {
@@ -844,7 +827,7 @@ static void ShowPreferences(void)
                     Rect screen = (*GetGrayRgn())->rgnBBox;
                     DragWindow(dlg, event.where, &screen);
                     SetPort(dlg);
-                    PrefsFetchResume(d);
+                    prefs_model_resume(&d->model);
                     break;
                 }
             }
@@ -863,7 +846,7 @@ static void ShowPreferences(void)
                 prefs_model_find(&d->model);
             } else if (item == kPrefsEffortItem) {
                 PrefsEffortClick(d);
-                PrefsFetchResume(d);
+                prefs_model_resume(&d->model);
             } else if (item == kPrefsResultsItem) {
                 Point local = event.where;
                 GlobalToLocal(&local);
@@ -887,7 +870,7 @@ static void ShowPreferences(void)
                     GetPrefsText(dlg, kPrefsToolsItem, tools_text, sizeof(tools_text));
                     rounds = prefs_limit_value(rounds_text);
                     tools = prefs_limit_value(tools_text);
-                    confirmed = d->model.confirmed_id[0] && !strcmp(d->model.confirmed_id, model);
+                    confirmed = prefs_model_is_confirmed(&d->model, model);
                     if (!prefs_model_ok(model)) {
                         PrefsProblem(dlg, "Enter a model ID: printable characters, no spaces.");
                         SelectDialogItemText(dlg, kPrefsModelItem, 0, 32767);
@@ -956,13 +939,10 @@ static void ShowPreferences(void)
         /* Typing filters the fetched rows locally; programmatic sets keep
          * last_text in sync so only hand edits land here. */
         GetPrefsText(dlg, kPrefsModelItem, model, sizeof(model));
-        if (strcmp(model, d->model.last_text)) {
-            strcpy(d->model.last_text, model);
-            strcpy(d->model.filter, model);
-            d->model.edited = 1;
+        if (prefs_model_text_changed(&d->model, model)) {
             /* The popup describes the confirmed row only while the text
              * still names it. */
-            if (d->model.confirmed_id[0] && !strcmp(model, d->model.confirmed_id)) {
+            if (prefs_model_is_confirmed(&d->model, model)) {
                 if (!d->effort_shown) PrefsEffortShow(d, &d->model.confirmed_info, d->model.confirmed_id);
             } else if (d->effort_shown ||
                        d->effort_saved_label != (!strcmp(model, gPrefs.model) && gPrefs.effort[0])) {
@@ -970,7 +950,7 @@ static void ShowPreferences(void)
             }
             PrefsDrawRows(d);
         }
-        if (d->model.fetch || d->model.draining) PrefsFetchStep(d);
+        prefs_model_step(&d->model);
     }
 
     CloseDialog(dlg);

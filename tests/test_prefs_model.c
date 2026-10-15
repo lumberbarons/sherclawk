@@ -19,6 +19,10 @@ typedef struct {
     int effort_has_info;
     char effort_model[CHAT_MODEL_CAP];
     long effort_context;
+    int poll_result;           /* PREFS_POLL_* the next poll returns */
+    const char *poll_body;
+    int polls, closes;
+    uint32_t poll_tick_step;   /* a poll that stays pending takes this long */
 } Fake;
 
 static void fake_hint(void *c, const char *text)
@@ -63,7 +67,24 @@ static int fake_send(void *c, const char *path)
 
 static uint32_t fake_now(void *c) { return ((Fake *)c)->tick; }
 
-static const PrefsModelHost kHost = { fake_hint, fake_get, fake_set, fake_draw, fake_effort, fake_send, fake_now };
+static int fake_poll(void *c, const char **body, size_t *len)
+{
+    Fake *f = c;
+    f->polls++;
+    f->tick += f->poll_tick_step;
+    if (f->poll_result == PREFS_POLL_DONE) {
+        *body = f->poll_body;
+        *len = strlen(f->poll_body);
+    }
+    return f->poll_result;
+}
+
+static void fake_close(void *c) { ((Fake *)c)->closes++; }
+
+static const PrefsModelHost kHost = {
+    fake_hint, fake_get, fake_set, fake_draw, fake_effort, fake_send, fake_now,
+    fake_poll, fake_close
+};
 
 static const char kPopular[] =
     "{\"data\":["
@@ -485,6 +506,148 @@ static void test_saved_fetch_after_the_field_changed_caches_but_does_not_show(vo
     assert(cache.saved_loaded && !strcmp(cache.saved_row.id, "old/model"));
 }
 
+static void test_text_changed_reports_only_hand_edits(void)
+{
+    PrefsModel m; Fake f; static PrefsModelCache cache;
+    setup(&m, &f, &cache, "z-ai/glm");
+    prefs_model_begin(&m);
+    assert(!prefs_model_text_changed(&m, "z-ai/glm") && !m.edited);
+    assert(prefs_model_text_changed(&m, "gpt"));
+    assert(m.edited && !strcmp(m.filter, "gpt") && !strcmp(m.last_text, "gpt"));
+    assert(!prefs_model_text_changed(&m, "gpt"));
+    m.edited = 0;
+    assert(!prefs_model_text_changed(&m, "gpt") && !m.edited);
+    assert(prefs_model_text_changed(&m, ""));
+    assert(m.edited && !m.filter[0]);
+}
+
+static void test_confirm_then_text_changed_is_not_a_hand_edit(void)
+{
+    PrefsModel m; Fake f; static PrefsModelCache cache;
+    setup(&m, &f, &cache, "");
+    prefs_model_begin(&m);
+    complete(&m, kPopular);
+    prefs_model_confirm(&m, 1);
+    assert(!prefs_model_text_changed(&m, f.model_text) && !m.edited);
+}
+
+static void test_is_confirmed_matches_the_confirmed_id_exactly(void)
+{
+    PrefsModel m; Fake f; static PrefsModelCache cache;
+    setup(&m, &f, &cache, "");
+    assert(!prefs_model_is_confirmed(&m, ""));
+    prefs_model_begin(&m);
+    complete(&m, kPopular);
+    assert(!prefs_model_is_confirmed(&m, "openai/gpt-4o"));
+    prefs_model_confirm(&m, 0);
+    assert(prefs_model_is_confirmed(&m, "openai/gpt-4o"));
+    assert(!prefs_model_is_confirmed(&m, "openai/gpt-4o-mini"));
+    assert(!prefs_model_is_confirmed(&m, "OPENAI/GPT-4O"));
+    assert(!prefs_model_is_confirmed(&m, ""));
+}
+
+static void test_step_is_a_no_op_when_idle(void)
+{
+    PrefsModel m; Fake f; static PrefsModelCache cache;
+    setup(&m, &f, &cache, "");
+    prefs_model_step(&m);
+    assert(f.polls == 0 && f.closes == 0 && f.hints == 0);
+}
+
+static void test_step_pending_keeps_the_exchange_in_flight(void)
+{
+    PrefsModel m; Fake f; static PrefsModelCache cache;
+    setup(&m, &f, &cache, "");
+    prefs_model_begin(&m);
+    f.poll_result = PREFS_POLL_PENDING;
+    f.tick = 10;
+    prefs_model_step(&m);
+    assert(f.polls == 1 && f.closes == 0);
+    assert(m.fetch == PREFS_FETCH_POPULAR && !m.draining);
+}
+
+static void test_step_done_closes_and_completes_the_page(void)
+{
+    PrefsModel m; Fake f; static PrefsModelCache cache;
+    setup(&m, &f, &cache, "z-ai/glm");
+    prefs_model_begin(&m);
+    f.poll_result = PREFS_POLL_DONE;
+    f.poll_body = kPopular;
+    prefs_model_step(&m);
+    assert(f.closes == 1 && m.fetch == PREFS_FETCH_NONE && m.count == 3);
+    assert(cache.popular_loaded && !strcmp(m.confirmed_id, "z-ai/glm"));
+}
+
+static void test_step_error_closes_and_fails_without_a_timeout(void)
+{
+    PrefsModel m; Fake f; static PrefsModelCache cache;
+    setup(&m, &f, &cache, "");
+    prefs_model_begin(&m);
+    f.poll_result = PREFS_POLL_ERROR;
+    prefs_model_step(&m);
+    assert(f.closes == 1 && m.fetch == PREFS_FETCH_NONE && !m.draining);
+    assert(!strcmp(f.hint, "Could not load the catalog. Try Find again."));
+}
+
+static void test_step_deadline_moves_to_draining_and_waits_for_the_drain(void)
+{
+    PrefsModel m; Fake f; static PrefsModelCache cache;
+    setup(&m, &f, &cache, "");
+    f.tick = 100;
+    prefs_model_begin(&m);
+    assert(m.fetch_start == 100);
+    f.poll_result = PREFS_POLL_PENDING;
+    f.tick = 100 + PREFS_FETCH_DEADLINE;   /* not yet past the deadline */
+    prefs_model_step(&m);
+    assert(!m.draining && m.fetch == PREFS_FETCH_POPULAR);
+    f.tick = 100 + PREFS_FETCH_DEADLINE + 1;
+    prefs_model_step(&m);
+    assert(m.draining && m.fetch == PREFS_FETCH_POPULAR && f.closes == 0);
+    assert(m.fetch_start == f.tick);
+    f.tick += PREFS_FETCH_DEADLINE;        /* the drain gets its own window */
+    prefs_model_step(&m);
+    assert(m.draining && f.closes == 0);
+    f.tick += 1;
+    prefs_model_step(&m);
+    assert(f.closes == 1 && m.fetch == PREFS_FETCH_NONE && !m.draining);
+    assert(!strcmp(f.hint, "The catalog fetch timed out. Try Find again."));
+}
+
+static void test_step_draining_exchange_that_ends_is_a_timeout_not_a_page(void)
+{
+    PrefsModel m; Fake f; static PrefsModelCache cache;
+    setup(&m, &f, &cache, "");
+    prefs_model_begin(&m);
+    f.tick = PREFS_FETCH_DEADLINE + 1;
+    f.poll_result = PREFS_POLL_DONE;
+    f.poll_body = kPopular;
+    prefs_model_step(&m);
+    assert(f.closes == 1 && m.fetch == PREFS_FETCH_NONE && !m.draining);
+    assert(m.count == 0 && !cache.popular_loaded);
+    assert(!strcmp(f.hint, "The catalog fetch timed out. Try Find again."));
+}
+
+static void test_resume_restarts_the_deadline_only_while_busy(void)
+{
+    PrefsModel m; Fake f; static PrefsModelCache cache;
+    setup(&m, &f, &cache, "");
+    f.tick = 5;
+    prefs_model_resume(&m);
+    assert(m.fetch_start == 0);
+    prefs_model_begin(&m);
+    f.tick = PREFS_FETCH_DEADLINE;   /* a long modal wait */
+    prefs_model_resume(&m);
+    assert(m.fetch_start == PREFS_FETCH_DEADLINE);
+    f.poll_result = PREFS_POLL_PENDING;
+    f.tick += PREFS_FETCH_DEADLINE;
+    prefs_model_step(&m);
+    assert(!m.draining);
+    m.draining = 1;
+    f.tick += 50;
+    prefs_model_resume(&m);
+    assert(m.fetch_start == f.tick);
+}
+
 int main(void)
 {
     test_init_is_empty();
@@ -513,6 +676,16 @@ int main(void)
     test_stray_completion_leaves_the_list_alone();
     test_failed_popular_page_keeps_rows_and_selection();
     test_saved_fetch_after_the_field_changed_caches_but_does_not_show();
+    test_text_changed_reports_only_hand_edits();
+    test_confirm_then_text_changed_is_not_a_hand_edit();
+    test_is_confirmed_matches_the_confirmed_id_exactly();
+    test_step_is_a_no_op_when_idle();
+    test_step_pending_keeps_the_exchange_in_flight();
+    test_step_done_closes_and_completes_the_page();
+    test_step_error_closes_and_fails_without_a_timeout();
+    test_step_deadline_moves_to_draining_and_waits_for_the_drain();
+    test_step_draining_exchange_that_ends_is_a_timeout_not_a_page();
+    test_resume_restarts_the_deadline_only_while_busy();
     puts("prefs model checks passed");
     return 0;
 }

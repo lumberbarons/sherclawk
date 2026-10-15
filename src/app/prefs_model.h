@@ -31,6 +31,14 @@ typedef struct {
     int saved_loaded;
 } PrefsModelCache;
 
+/* The catalog fetch shares the send-time lookup's 30-second deadline (ticks):
+ * how long an exchange may run before it is abandoned, and again how long the
+ * abandoned one may keep closing before it is torn down. */
+#define PREFS_FETCH_DEADLINE (30UL * 60UL)
+
+/* PrefsModelHost.poll results. */
+enum { PREFS_POLL_PENDING = 0, PREFS_POLL_DONE = 1, PREFS_POLL_ERROR = -1 };
+
 /* Effects the picker cannot perform itself. `context` is passed back. */
 typedef struct {
     void (*hint)(void *context, const char *text);
@@ -44,6 +52,12 @@ typedef struct {
     /* Current time in ticks; read after a send succeeds, so the fetch
      * deadline excludes the send's own setup. */
     uint32_t (*now)(void *context);
+    /* Advance the exchange one step. PREFS_POLL_DONE means a 200 response and
+     * sets `body` and `len`; PREFS_POLL_ERROR covers transport failures and
+     * any other status. */
+    int (*poll)(void *context, const char **body, size_t *len);
+    /* Close the exchange's connection after a terminal poll or a teardown. */
+    void (*close)(void *context);
 } PrefsModelHost;
 
 typedef struct {
@@ -93,6 +107,25 @@ void prefs_model_fetch_failed(PrefsModel *m, int timed_out);
 /* The exchange ended with a 200 response `body`. Ignored when no exchange is
  * in flight, so a stray completion cannot replace a confirmed list. */
 void prefs_model_fetch_complete(PrefsModel *m, const char *body, size_t len);
+
+/* The model field read `text`. Returns 0 when it still equals the last text
+ * the picker saw; otherwise records it, makes it the row filter, marks the
+ * field hand-edited and returns 1. Programmatic sets keep last_text in sync,
+ * so only hand edits report a change. */
+int prefs_model_text_changed(PrefsModel *m, const char *text);
+
+/* Whether `text` names the confirmed row. */
+int prefs_model_is_confirmed(const PrefsModel *m, const char *text);
+
+/* One network step per pass while an exchange is in flight or draining: the
+ * deadline moves an overdue exchange to draining, a timed-out connect is not
+ * torn down until the drain deadline passes, and a terminal poll completes or
+ * fails the fetch. A no-op when idle. */
+void prefs_model_step(PrefsModel *m);
+
+/* The dialog was blocked (window drag, popup tracking) while no step could
+ * run: restart the deadline so the wait does not count against it. */
+void prefs_model_resume(PrefsModel *m);
 
 /* After a successful save of a confirmed row: keep it as the saved model's
  * row for later opens this launch. */
