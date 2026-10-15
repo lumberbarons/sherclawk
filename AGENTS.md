@@ -83,7 +83,9 @@ cp config.example.h config.local.h  # optional local config; gitignored
   and the `tools/check.sh` / `tools/lint.sh` source lists.
 - `src/app/main.c` Toolbox UI/event loop and run state (`RunState`); `src/app/display.c` pure
   formatting, validation and scroll/layout math; `src/app/chat.c` bounded transcript
-  capping and tool-line folding; `src/app/session.c` journal and
+  capping and tool-line folding; `src/app/prefs_model.c` the Preferences model
+  picker (rows, filter, fetch transitions, confirm) behind a `PrefsModelHost`
+  callback struct (host-testable); `src/app/session.c` journal and
   handoff persistence (host-testable); `src/agent/agent.c` provider loop; `src/tools/tools.c` +
   `src/tools/inspect.c` tool executors (shared with host tests via `TOOLS_SRC` in
   CMakeLists.txt); `src/tools/fsutil.c` shared catalog identity, revisions and the verified staged-body write (create,

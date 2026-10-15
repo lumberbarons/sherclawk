@@ -39,6 +39,7 @@
 #include "agent/text.h"
 #include "config.h"
 #include "app/preferences.h"
+#include "app/prefs_model.h"
 #include "app/display.h"
 #include "mcp/editor.h"
 #include "mcp/store.h"
@@ -556,21 +557,15 @@ enum {
  * popup on the guest. */
 enum {
     kPrefsEffortMenuID = 1001,
-    kPrefsFetchNone = 0,   /* no exchange in flight */
-    kPrefsFetchPopular,    /* the one auto-load per launch */
-    kPrefsFetchSearch,     /* Find: list the matches for the typed text */
-    kPrefsFetchValidate,   /* OK: the typed id must resolve exactly */
-    kPrefsFetchSaved,      /* the saved model's own row, when the popular page lacks it */
-    kPrefsRowHeight = 15,
-    kPrefsRowsMax = AGENT_MODEL_ROWS_MAX
+    kPrefsRowHeight = 15
 };
 
 /* The catalog fetch shares the send-time lookup's 30-second deadline. */
 #define kPrefsFetchDeadline (30UL * 60UL)
 
-/* State carried between events of the modal Preferences loop. `rows` is the
- * last fetched page, `filter` the local substring the user typed, and
- * `confirmed_id` the field text that has resolved to a catalog row. */
+/* State carried between events of the modal Preferences loop. The model
+ * picker's rows, filter and confirmed row live in `model`
+ * (src/app/prefs_model.c); the rest is Toolbox state. */
 typedef struct {
     DialogPtr     dlg;
     Rect          popup;             /* Effort popup user item rectangle */
@@ -586,27 +581,11 @@ typedef struct {
                                       * default effort, the rest store their
                                       * own name */
     Rect          results;           /* results userItem rectangle */
-    AgentModelRow rows[AGENT_MODEL_ROWS_MAX];
-    int           count;
-    int           selected;          /* index into rows, -1 when none */
-    int           visible[AGENT_MODEL_ROWS_MAX];
-    int           visible_count;
-    int           edited;            /* the model field changed by hand */
-    char          filter[CHAT_MODEL_CAP];
-    char          last_text[CHAT_MODEL_CAP];
-    char          confirmed_id[CHAT_MODEL_CAP];
-    AgentModelInfo confirmed_info;   /* metadata behind confirmed_id */
-    int           fetch;             /* kPrefsFetch* */
-    int           draining;          /* timed-out exchange still closing */
-    uint32_t      fetch_start;
+    PrefsModel    model;
 } PrefsDialog;
 
-static PrefsDialog   gPrefsDlg;
-static AgentModelRow gPopularRows[AGENT_MODEL_ROWS_MAX];
-static int           gPopularCount;
-static int           gPopularLoaded;   /* popular page fetched once per launch */
-static AgentModelRow gSavedRow;        /* the saved model's catalog row, once known */
-static int           gSavedRowLoaded;
+static PrefsDialog     gPrefsDlg;
+static PrefsModelCache gPrefsCache;    /* popular page and saved row, once per launch */
 
 static Handle PrefsItem(DialogPtr dlg, short item)
 {
@@ -820,16 +799,6 @@ static void PrefsEffortClick(PrefsDialog *d)
     PrefsEffortDraw(d);
 }
 
-/* Typing filters the fetched page locally; the empty filter shows all rows. */
-static void PrefsFilterRows(PrefsDialog *d)
-{
-    int i;
-    d->visible_count = 0;
-    for (i = 0; i < d->count; i++)
-        if (agent_model_row_match(&d->rows[i], d->filter))
-            d->visible[d->visible_count++] = i;
-}
-
 static Rect PrefsRowRect(const Rect *box, int index)
 {
     Rect r;
@@ -843,232 +812,112 @@ static Rect PrefsRowRect(const Rect *box, int index)
 /* Hand-drawn result rows on the user item; the picked row is inverted. */
 static void PrefsDrawRows(PrefsDialog *d)
 {
+    PrefsModel *m = &d->model;
     Rect box = d->results;
     int i;
     EraseRect(&box);
     FrameRect(&box);
-    PrefsFilterRows(d);
-    for (i = 0; i < d->visible_count; i++) {
-        const AgentModelRow *row = &d->rows[d->visible[i]];
+    prefs_model_filter(m);
+    for (i = 0; i < m->visible_count; i++) {
+        const AgentModelRow *row = &m->rows[m->visible[i]];
         Rect r = PrefsRowRect(&box, i);
         DrawFittedLabel(&r, row->id, truncMiddle);
-        if (d->visible[i] == d->selected) InvertRect(&r);
+        if (m->visible[i] == m->selected) InvertRect(&r);
     }
 }
 
 static int PrefsRowHit(PrefsDialog *d, Point local)
 {
     int index;
-    PrefsFilterRows(d);
+    prefs_model_filter(&d->model);
     if (local.h < d->results.left + 2 || local.h >= d->results.right - 2) return -1;
     if (local.v < d->results.top + 2) return -1;
     index = (local.v - (d->results.top + 2)) / kPrefsRowHeight;
-    if (index < 0 || index >= d->visible_count) return -1;
-    return d->visible[index];
+    if (index < 0 || index >= d->model.visible_count) return -1;
+    return d->model.visible[index];
 }
 
-/* A picked row confirms the model: the exact id lands in the editable field,
- * its effort choices load with the default preselected, and its metadata is
- * kept for the save. */
-static void PrefsConfirm(PrefsDialog *d, int index)
+/* The picker's Toolbox effects; `context` is the PrefsDialog. */
+static void PrefsHostHint(void *context, const char *text)
 {
-    d->selected = index;
-    d->edited = 0;
-    d->confirmed_info = d->rows[index].info;
-    strcpy(d->confirmed_id, d->rows[index].id);
-    SetPrefsText(d->dlg, kPrefsModelItem, d->rows[index].id);
-    strcpy(d->last_text, d->rows[index].id);
-    d->filter[0] = 0;
-    PrefsEffortShow(d, &d->confirmed_info, d->confirmed_id);
-    PrefsHint(d, "Model confirmed. Press OK to save.");
-    PrefsDrawRows(d);
+    PrefsHint((PrefsDialog *)context, text);
 }
 
-/* Put the saved model's row first in the list and confirm it, so its efforts
- * are choosable without a search. The page holds at most one row per model, so
- * the last row makes room when the list is full. */
-static void PrefsSavedShow(PrefsDialog *d, const AgentModelRow *row)
+static void PrefsHostGetModel(void *context, char *out, size_t cap)
 {
-    int keep = d->count < kPrefsRowsMax ? d->count : kPrefsRowsMax - 1;
-    memmove(&d->rows[1], &d->rows[0], (size_t)keep * sizeof(AgentModelRow));
-    d->rows[0] = *row;
-    d->count = keep + 1;
-    d->selected = 0;
-    d->confirmed_info = row->info;
-    strcpy(d->confirmed_id, row->id);
-    PrefsEffortShow(d, &d->confirmed_info, d->confirmed_id);
+    GetPrefsText(((PrefsDialog *)context)->dlg, kPrefsModelItem, out, cap);
 }
 
-static int PrefsFetchStart(PrefsDialog *d, int kind, const char *query);
-
-/* The saved model is not in the list: show its row from this launch's cache,
- * or fetch it. Skipped once the field names another model or a row is
- * already confirmed. Returns 1 when a fetch was started. */
-static int PrefsSavedModel(PrefsDialog *d)
+static void PrefsHostSetModel(void *context, const char *text)
 {
-    char text[CHAT_MODEL_CAP];
-    GetPrefsText(d->dlg, kPrefsModelItem, text, sizeof(text));
-    if (d->confirmed_id[0] || strcmp(text, gPrefs.model)) return 0;
-    if (gSavedRowLoaded && !strcmp(gSavedRow.id, gPrefs.model)) {
-        PrefsSavedShow(d, &gSavedRow);
-        return 0;
-    }
-    return PrefsFetchStart(d, kPrefsFetchSaved, gPrefs.model) == 0;
+    SetPrefsText(((PrefsDialog *)context)->dlg, kPrefsModelItem, text);
 }
 
-/* Start one catalog exchange; no other fetch may start until this one reaches
- * a terminal state. */
-static int PrefsFetchStart(PrefsDialog *d, int kind, const char *query)
+static void PrefsHostDrawRows(void *context)
 {
-    char path[CHAT_MODEL_CAP * 3 + 48];
-    int length;
-    if (kind == kPrefsFetchPopular) length = agent_popular_query(path, sizeof(path));
-    else length = agent_model_query(path, sizeof(path), query);
-    if (length < 0) { PrefsHint(d, "That model name is too long for a catalog search."); return -1; }
-    length = http_build_get("openrouter.ai", path, gNet.request, sizeof(gNet.request));
-    if (length < 0) { PrefsHint(d, "The catalog request is too large."); return -1; }
+    PrefsDrawRows((PrefsDialog *)context);
+}
+
+static void PrefsHostShowEffort(void *context, const AgentModelInfo *info, const char *model)
+{
+    PrefsEffortShow((PrefsDialog *)context, info, model);
+}
+
+static int PrefsHostSend(void *context, const char *path)
+{
+    int length = http_build_get("openrouter.ai", path, gNet.request, sizeof(gNet.request));
+    (void)context;
+    if (length < 0) return PREFS_SEND_TOO_LARGE;
     EnsureOpenTransport();
     gStartTicks = (uint32_t)TickCount();
     if (network_start(&gNet, gNet.request, (size_t)length) < 0) {
         CloseChatContext();
-        PrefsHint(d, "Could not start the catalog fetch.");
-        return -1;
+        return PREFS_SEND_FAILED;
     }
-    d->fetch = kind;
-    d->fetch_start = (uint32_t)TickCount();
-    PrefsHint(d, kind == kPrefsFetchPopular ? "Loading the popular models..." :
-                 kind == kPrefsFetchSaved ? "Loading the saved model..." :
-                 kind == kPrefsFetchValidate ? "Checking that model against the catalog..." :
-                 "Searching the catalog...");
-    return 0;
+    return PREFS_SEND_OK;
 }
 
-static void PrefsFetchFailed(PrefsDialog *d, int timed_out)
+static uint32_t PrefsHostNow(void *context)
 {
-    d->fetch = kPrefsFetchNone;
-    d->draining = 0;
-    PrefsHint(d, timed_out ? "The catalog fetch timed out. Try Find again."
-                           : "Could not load the catalog. Try Find again.");
+    (void)context;
+    return (uint32_t)TickCount();
 }
 
-/* A completed exchange: the page replaces the rows. Validate confirms only an
- * exact id and always lists the candidates; the one popular load is cached for
- * later opens, where a saved model still in the page resolves at once. */
-static void PrefsFetchComplete(PrefsDialog *d)
-{
-    static AgentModelRow page[kPrefsRowsMax];
-    char text[CHAT_MODEL_CAP], hint[128];
-    int kind = d->fetch, at, count;
-    if (kind == kPrefsFetchSaved) {
-        /* The saved model's row joins the list it is not part of; the
-         * rows already shown stay as they are. */
-        count = agent_model_page(gNet.body, gNet.body_len, page, kPrefsRowsMax);
-        at = agent_model_row_find(page, count, gPrefs.model);
-        d->fetch = kPrefsFetchNone;
-        if (at >= 0) {
-            gSavedRow = page[at];
-            gSavedRowLoaded = 1;
-            PrefsSavedModel(d);
-        }
-        PrefsHint(d, "Type to filter, or press Find to search.");
-        PrefsDrawRows(d);
-        return;
-    }
-    count = agent_model_page(gNet.body, gNet.body_len, d->rows, kPrefsRowsMax);
-    /* An empty popular page is a failure, not a list to cache for the launch:
-     * a malformed or oversized page parses to zero rows. A search or validate
-     * page with no rows is the catalog's answer for a typo. */
-    if (count == 0 && kind == kPrefsFetchPopular) { PrefsFetchFailed(d, 0); return; }
-    d->fetch = kPrefsFetchNone;
-    d->count = count;
-    d->selected = -1;
-    GetPrefsText(d->dlg, kPrefsModelItem, text, sizeof(text));
-    strcpy(d->last_text, text);
-    /* Text typed while the popular page loaded filters it. Search and validate
-     * pages were already matched by the server, so they list unfiltered and the
-     * hint's count is what the user sees. */
-    d->filter[0] = 0;
-    if (kind == kPrefsFetchPopular && d->edited) strcpy(d->filter, text);
-    if (kind == kPrefsFetchValidate) {
-        at = agent_model_row_find(d->rows, d->count, text);
-        if (at >= 0) {
-            d->selected = at;
-            d->confirmed_info = d->rows[at].info;
-            strcpy(d->confirmed_id, d->rows[at].id);
-            PrefsEffortShow(d, &d->confirmed_info, d->confirmed_id);
-            PrefsHint(d, "Model confirmed. Press OK again to save.");
-        } else PrefsHint(d, "No exact match. Pick a candidate or press Find.");
-    } else if (kind == kPrefsFetchPopular) {
-        memcpy(gPopularRows, d->rows, (size_t)d->count * sizeof(AgentModelRow));
-        gPopularCount = d->count;
-        gPopularLoaded = 1;
-        at = agent_model_row_find(d->rows, d->count, text);
-        if (at >= 0) {
-            d->selected = at;
-            d->confirmed_info = d->rows[at].info;
-            strcpy(d->confirmed_id, d->rows[at].id);
-            PrefsEffortShow(d, &d->confirmed_info, d->confirmed_id);
-        }
-        PrefsHint(d, "Popular models loaded. Type to filter or Find.");
-        if (at < 0) PrefsSavedModel(d);
-    } else {
-        snprintf(hint, sizeof(hint), "%d match%s. Click a row to pick it.",
-                 d->count, d->count == 1 ? "" : "es");
-        PrefsHint(d, hint);
-    }
-    d->edited = 0;
-    PrefsDrawRows(d);
-}
+static const PrefsModelHost kPrefsHost = {
+    PrefsHostHint, PrefsHostGetModel, PrefsHostSetModel,
+    PrefsHostDrawRows, PrefsHostShowEffort, PrefsHostSend, PrefsHostNow
+};
 
 /* One network step per pass, with the send-time lookup's deadline and drain
  * rules: a timed-out connect is not torn down mid-flight. */
 static void PrefsFetchStep(PrefsDialog *d)
 {
+    PrefsModel *m = &d->model;
     int result;
     uint32_t now = (uint32_t)TickCount();
-    if (!d->draining && now - d->fetch_start > kPrefsFetchDeadline) {
-        d->draining = 1;
-        d->fetch_start = now;
+    if (!m->draining && now - m->fetch_start > kPrefsFetchDeadline) {
+        m->draining = 1;
+        m->fetch_start = now;
     }
     result = network_step(&gNet);
     if (result == 0) {
-        if (d->draining && (uint32_t)TickCount() - d->fetch_start > kPrefsFetchDeadline) {
+        if (m->draining && (uint32_t)TickCount() - m->fetch_start > kPrefsFetchDeadline) {
             CloseChatContext();
-            PrefsFetchFailed(d, 1);
+            prefs_model_fetch_failed(m, 1);
         }
         return;
     }
     CloseChatContext();
-    if (d->draining) { PrefsFetchFailed(d, 1); return; }
-    if (result < 0 || gNet.status != 200) { PrefsFetchFailed(d, 0); return; }
-    PrefsFetchComplete(d);
+    if (m->draining) { prefs_model_fetch_failed(m, 1); return; }
+    if (result < 0 || gNet.status != 200) { prefs_model_fetch_failed(m, 0); return; }
+    prefs_model_fetch_complete(m, gNet.body, gNet.body_len);
 }
 
 /* DragWindow and TrackControl block until the mouse is released and no network
  * step runs meanwhile, so the wait does not count against the deadline. */
 static void PrefsFetchResume(PrefsDialog *d)
 {
-    if (d->fetch || d->draining) d->fetch_start = (uint32_t)TickCount();
-}
-
-/* Find: fetch the matches for the typed text, or show the popular page when
- * the box is empty and nothing has been fetched yet. */
-static void PrefsFind(PrefsDialog *d)
-{
-    char text[CHAT_MODEL_CAP];
-    if (d->fetch || d->draining) return;
-    GetPrefsText(d->dlg, kPrefsModelItem, text, sizeof(text));
-    strcpy(d->last_text, text);
-    if (!text[0]) {
-        d->filter[0] = 0;
-        if (d->count) {
-            PrefsHint(d, "Type to filter, or enter a model ID and press Find.");
-            PrefsDrawRows(d);
-        } else PrefsFetchStart(d, kPrefsFetchPopular, NULL);
-        return;
-    }
-    d->filter[0] = 0;
-    PrefsFetchStart(d, kPrefsFetchSearch, text);
+    if (d->model.fetch || d->model.draining) d->model.fetch_start = (uint32_t)TickCount();
 }
 
 static void ShowPreferences(void)
@@ -1084,7 +933,7 @@ static void ShowPreferences(void)
     char rounds_text[8], tools_text[8];
 
     memset(d, 0, sizeof(*d));
-    d->selected = -1;
+    prefs_model_init(&d->model, &kPrefsHost, d, &gPrefsCache, gPrefs.model);
     dlg = GetNewDialog(kPrefsDialogID, NULL, (WindowPtr)-1L);
     if (!dlg) { SetStatus("Could not open the Preferences dialog."); return; }
     d->dlg = dlg;
@@ -1111,30 +960,11 @@ static void ShowPreferences(void)
     SetDialogDefaultItem(dlg, kPrefsOKItem);
     SetDialogCancelItem(dlg, kPrefsCancelItem);
 
-    GetPrefsText(dlg, kPrefsModelItem, model, sizeof(model));
-    strcpy(d->last_text, model);
-    if (gPopularLoaded) {
-        /* Later opens reuse the page fetched earlier this launch, so the
-         * popular models appear without another fetch. */
-        d->count = gPopularCount;
-        memcpy(d->rows, gPopularRows, (size_t)gPopularCount * sizeof(AgentModelRow));
-        i = agent_model_row_find(d->rows, d->count, model);
-        if (i >= 0) {
-            d->selected = i;
-            d->confirmed_info = d->rows[i].info;
-            strcpy(d->confirmed_id, d->rows[i].id);
-            PrefsEffortShow(d, &d->confirmed_info, d->confirmed_id);
-        }
-        PrefsHint(d, "Type to filter, or press Find to search.");
-        if (i < 0) PrefsSavedModel(d);
-        PrefsDrawRows(d);
-    } else if (PrefsFetchStart(d, kPrefsFetchPopular, NULL) == 0) {
-        PrefsDrawRows(d);
-    }
+    prefs_model_begin(&d->model);
 
     while (!done) {
         EventRecord event;
-        int busy = d->fetch || d->draining;
+        int busy = d->model.fetch || d->model.draining;
         int hit = 0;
         WaitNextEvent(everyEvent, &event, busy ? 1 : 10, NULL);
         SetPort(dlg);
@@ -1178,10 +1008,10 @@ static void ShowPreferences(void)
                  * classic OT can fault when a connect is torn down mid-flight.
                  * The main loop owns the exchange from here, so this pass must
                  * not step it again. */
-                if (d->fetch || d->draining) BeginExchangeDrain();
+                if (d->model.fetch || d->model.draining) BeginExchangeDrain();
                 done = 1;
             } else if (item == kPrefsFindItem) {
-                PrefsFind(d);
+                prefs_model_find(&d->model);
             } else if (item == kPrefsEffortItem) {
                 PrefsEffortClick(d);
                 PrefsFetchResume(d);
@@ -1189,7 +1019,7 @@ static void ShowPreferences(void)
                 Point local = event.where;
                 GlobalToLocal(&local);
                 i = PrefsRowHit(d, local);
-                if (i >= 0) PrefsConfirm(d, i);
+                if (i >= 0) prefs_model_confirm(&d->model, i);
             } else if (item == kPrefsDebugItem) {
                 /* DialogSelect reports the checkbox hit but does not toggle it. */
                 ControlHandle ctl = PrefsCheckbox(dlg);
@@ -1197,7 +1027,7 @@ static void ShowPreferences(void)
                 SetControlValue(ctl, debug ? 1 : 0);
                 Draw1Control(ctl);
             } else if (item == kPrefsOKItem) {
-                if (d->fetch || d->draining) {
+                if (d->model.fetch || d->model.draining) {
                     PrefsHint(d, "Still checking; press OK again in a moment.");
                 } else {
                     int confirmed;
@@ -1208,7 +1038,7 @@ static void ShowPreferences(void)
                     GetPrefsText(dlg, kPrefsToolsItem, tools_text, sizeof(tools_text));
                     rounds = prefs_limit_value(rounds_text);
                     tools = prefs_limit_value(tools_text);
-                    confirmed = d->confirmed_id[0] && !strcmp(d->confirmed_id, model);
+                    confirmed = d->model.confirmed_id[0] && !strcmp(d->model.confirmed_id, model);
                     if (!prefs_model_ok(model)) {
                         PrefsProblem(dlg, "Enter a model ID: printable characters, no spaces.");
                         SelectDialogItemText(dlg, kPrefsModelItem, 0, 32767);
@@ -1230,7 +1060,7 @@ static void ShowPreferences(void)
                          * row first. The saved id is already trusted, so the
                          * other fields stay editable while the catalog is
                          * unreachable. */
-                        PrefsFetchStart(d, kPrefsFetchValidate, model);
+                        prefs_model_start(&d->model, PREFS_FETCH_VALIDATE, model);
                     } else {
                         const char *effort;
                         candidate = gPrefs;
@@ -1251,7 +1081,7 @@ static void ShowPreferences(void)
                          * effort are stored with the model they belong to; an
                          * unchanged, unconfirmed model keeps what it had. */
                         if (confirmed) {
-                            prefs_store_row(&candidate, model, &d->confirmed_info);
+                            prefs_store_row(&candidate, model, &d->model.confirmed_info);
                         }
                         if (PrefsSave(&candidate)) {
                             PrefsProblem(dlg, "Could not save the preferences file. Nothing was changed.");
@@ -1261,12 +1091,10 @@ static void ShowPreferences(void)
                             if (confirmed) {
                                 /* The confirmed row is this model's context
                                  * source until a send-time lookup replaces it. */
-                                gModelInfo = d->confirmed_info;
+                                gModelInfo = d->model.confirmed_info;
                                 strcpy(gModelInfoModel, gPrefs.model);
                                 gModelInfoAttempted = 1;
-                                gSavedRow.info = d->confirmed_info;
-                                strcpy(gSavedRow.id, gPrefs.model);
-                                gSavedRowLoaded = 1;
+                                prefs_model_remember_saved(&d->model, gPrefs.model);
                             }
                             saved = 1;
                             done = 1;
@@ -1279,21 +1107,21 @@ static void ShowPreferences(void)
         /* Typing filters the fetched rows locally; programmatic sets keep
          * last_text in sync so only hand edits land here. */
         GetPrefsText(dlg, kPrefsModelItem, model, sizeof(model));
-        if (strcmp(model, d->last_text)) {
-            strcpy(d->last_text, model);
-            strcpy(d->filter, model);
-            d->edited = 1;
+        if (strcmp(model, d->model.last_text)) {
+            strcpy(d->model.last_text, model);
+            strcpy(d->model.filter, model);
+            d->model.edited = 1;
             /* The popup describes the confirmed row only while the text
              * still names it. */
-            if (d->confirmed_id[0] && !strcmp(model, d->confirmed_id)) {
-                if (!d->effort_shown) PrefsEffortShow(d, &d->confirmed_info, d->confirmed_id);
+            if (d->model.confirmed_id[0] && !strcmp(model, d->model.confirmed_id)) {
+                if (!d->effort_shown) PrefsEffortShow(d, &d->model.confirmed_info, d->model.confirmed_id);
             } else if (d->effort_shown ||
                        d->effort_saved_label != (!strcmp(model, gPrefs.model) && gPrefs.effort[0])) {
                 PrefsEffortShow(d, NULL, model);
             }
             PrefsDrawRows(d);
         }
-        if (d->fetch || d->draining) PrefsFetchStep(d);
+        if (d->model.fetch || d->model.draining) PrefsFetchStep(d);
     }
 
     CloseDialog(dlg);

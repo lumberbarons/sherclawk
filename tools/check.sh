@@ -74,6 +74,13 @@ build_test test-preferences -Wall -Wextra -Werror -DSHERCLAWK_APP=1 -I"$HERE" -I
     "$HERE/tests/test_preferences.c" "$HERE/src/app/preferences.c"
 run_test test-preferences
 
+# Preferences model picker: filtering, fetch transitions and confirm against a
+# fake host, with the real catalog page parser.
+build_test test-prefs-model "${WARN[@]}" -I"$HERE" -I"$HERE/src" -I"$HERE/tests/toolbox" \
+    "$HERE/tests/test_prefs_model.c" "$HERE/src/app/prefs_model.c" "$HERE/src/agent/agent.c" "$HERE/src/agent/registry.c" \
+    "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" "$HERE/src/agent/text.c"
+run_test test-prefs-model
+
 # MCP pure configuration/protocol/streaming fixtures, independent of keys.
 build_test test-mcp "${WARN[@]}" -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" \
     "$HERE/tests/test_mcp.c" "$HERE/src/mcp/config.c" "$HERE/src/mcp/protocol.c" \

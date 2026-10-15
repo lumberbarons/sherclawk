@@ -16,6 +16,12 @@ scroll calculations and layout rectangles. Its inputs and outputs use ordinary
 C values; the UI adapts the rectangles to QuickDraw and applies scroll offsets.
 The transcript and MCP editor share the same scroll calculations.
 
+The Preferences model picker follows the same split. `src/app/prefs_model.c` holds the
+fetched catalog page, the local filter, the confirmed row and the fetch-complete
+transitions; Dialog Manager, Menu Manager and network effects reach it only through
+the `PrefsModelHost` callbacks that `main.c` supplies, so a fake host exercises it on
+the host. Loading and saving the preferences file stays in `main.c`.
+
 `chat_append_message()` in `src/app/chat.c` converts UTF-8 to bounded MacRoman/CR display
 text, substitutes session-file notices for oversized entries, and caps accumulated
 transcript bytes and separators. When the next entry does not fit, it drops the
