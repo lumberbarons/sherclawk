@@ -14,13 +14,14 @@ static void Check(const char *name, int ok)
 }
 static int CommitHandoff(void)
 {
-    return session_commit_handoff(&gSession, &gAgent, gHandoffSummary, gHandoffPath, sizeof(gHandoffPath));
+    return session_commit_handoff(&gSession, &gAgent, gRunCtl.handoff_summary, gRunCtl.handoff_path, sizeof(gRunCtl.handoff_path));
 }
 int main(void)
 {
     char error[256], old_path[256];
     InitGraf(&qd.thePort); InitFonts(); InitWindows(); InitMenus();
     TEInit(); InitDialogs(NULL); InitCursor();
+    RunInit();
     UIInit();
     check_log = fopen("Retro68:SherclawkHandoffCheck.log", "w");
     if (!check_log) return 1;
@@ -31,24 +32,24 @@ int main(void)
     Check("stop before handoff", !agent_stop(&gAgent, "diagnostic"));
     original = gAgent; strcpy(old_path, gSession.path);
 
-    strcpy(gHandoffSummary, "Unsupported emoji: \xf0\x9f\xa6\x80");
+    strcpy(gRunCtl.handoff_summary, "Unsupported emoji: \xf0\x9f\xa6\x80");
     Check("unsupported encoding refused", CommitHandoff() == -1);
     Check("encoding failure retains history and journal", !memcmp(&original, &gAgent, sizeof(gAgent)) && !strcmp(old_path, gSession.path) && gSession.open);
-    memset(gHandoffSummary, 'x', 5000); gHandoffSummary[5000] = 0;
+    memset(gRunCtl.handoff_summary, 'x', 5000); gRunCtl.handoff_summary[5000] = 0;
     Check("oversize Markdown refused", CommitHandoff() == -1);
     Check("size failure retains history", !memcmp(&original, &gAgent, sizeof(gAgent)));
 
-    strcpy(gHandoffSummary, "## Goal\nBuild a synthetic prototype.\n\n## Completed\nNo files changed.\n\n## Verification\nNot built.\n\n## Next steps\nInspect sources before editing.\n");
+    strcpy(gRunCtl.handoff_summary, "## Goal\nBuild a synthetic prototype.\n\n## Completed\nNo files changed.\n\n## Verification\nNot built.\n\n## Next steps\nInspect sources before editing.\n");
     Check("save verify and seed new journal", !CommitHandoff());
-    Check("new history is inactive and seeded", gAgent.messages == 1 && !gAgent.active && strstr(gAgent.history, "synthetic prototype") && strstr(gAgent.history, old_path) && strstr(gAgent.history, gHandoffPath));
+    Check("new history is inactive and seeded", gAgent.messages == 1 && !gAgent.active && strstr(gAgent.history, "synthetic prototype") && strstr(gAgent.history, old_path) && strstr(gAgent.history, gRunCtl.handoff_path));
     Check("journal switched", strcmp(old_path, gSession.path) && gSession.open);
-    fprintf(check_log, "original=%s\nhandoff=%s\nnew=%s\n", old_path, gHandoffPath, gSession.path);
+    fprintf(check_log, "original=%s\nhandoff=%s\nnew=%s\n", old_path, gRunCtl.handoff_path, gSession.path);
     {
         char first[256];
-        strcpy(first, gHandoffPath);
-        Check("second handoff saves a distinct file", !CommitHandoff() && strcmp(first, gHandoffPath));
+        strcpy(first, gRunCtl.handoff_path);
+        Check("second handoff saves a distinct file", !CommitHandoff() && strcmp(first, gRunCtl.handoff_path));
     }
-    Check("continue from seed", !agent_begin(&gAgent, "Continue", error, sizeof(error)) && agent_request(&gAgent, "model", "", gJSON, sizeof(gJSON)) > 0 && strstr(gJSON, "Inspect sources"));
+    Check("continue from seed", !agent_begin(&gAgent, "Continue", error, sizeof(error)) && agent_request(&gAgent, "model", "", gRunCtl.json, sizeof(gRunCtl.json)) > 0 && strstr(gRunCtl.json, "Inspect sources"));
     agent_stop(&gAgent, "diagnostic ended");
     session_close(&gSession);
     fprintf(check_log, "RESULT failures=%d\n", failures);

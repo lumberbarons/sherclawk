@@ -81,6 +81,15 @@ build_test test-prefs-model "${WARN[@]}" -I"$HERE" -I"$HERE/src" -I"$HERE/tests/
     "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" "$HERE/src/agent/text.c"
 run_test test-prefs-model
 
+# Application run controller: production protocol with fake platform effects.
+build_test test-run-ctl "${WARN[@]}" -DSHERCLAWK_HOST=1 \
+    -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" -I"$HERE/tests/run_ctl" -I"$HERE/tests/toolbox" \
+    "$HERE/tests/test_run_ctl.c" "$HERE/src/app/run_ctl.c" "$HERE/src/app/display.c" \
+    "$HERE/src/app/preferences.c" "$HERE/src/app/timing.c" "$HERE/src/agent/agent.c" \
+    "$HERE/src/agent/registry.c" "$HERE/src/agent/json.c" "$HERE/src/agent/jsonargs.c" \
+    "$HERE/src/agent/text.c" "$HERE/vendor/http.c"
+run_test test-run-ctl
+
 # MCP pure configuration/protocol/streaming fixtures, independent of keys.
 build_test test-mcp "${WARN[@]}" -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" \
     "$HERE/tests/test_mcp.c" "$HERE/src/mcp/config.c" "$HERE/src/mcp/protocol.c" \

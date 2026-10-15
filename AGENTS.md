@@ -81,7 +81,9 @@ cp config.example.h config.local.h  # optional local config; gitignored
   "agent/json.h"`); builds pass `-I . -I src -I vendor`, so a new directory or
   file needs no include-path change but does need adding to `CMakeLists.txt`
   and the `tools/check.sh` / `tools/lint.sh` source lists.
-- `src/app/main.c` Toolbox UI/event loop and run state (`RunState`); `src/app/display.c` pure
+- `src/app/main.c` Toolbox UI/event loop and `RunHost` effects; `src/app/run_ctl.c`
+  owns send/tool/handoff transitions, limits, Stop and transport drains in
+  `RunCtl` (host-testable with a fake network); `src/app/display.c` pure
   formatting, validation and scroll/layout math; `src/app/chat.c` bounded transcript
   capping and tool-line folding; `src/app/prefs_model.c` the Preferences model
   picker (rows, filter, fetch transitions, confirm) behind a `PrefsModelHost`

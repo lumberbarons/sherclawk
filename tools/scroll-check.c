@@ -25,6 +25,7 @@ int main(void)
     int i;
     InitGraf(&qd.thePort); InitFonts(); InitWindows(); InitMenus();
     TEInit(); InitDialogs(NULL); InitCursor();
+    RunInit();
     UIInit();
     check_log = fopen("Retro68:SherclawkScrollCheck.log", "w");
     if (!check_log || !gResponseTE || !gResponseScroll) return 1;

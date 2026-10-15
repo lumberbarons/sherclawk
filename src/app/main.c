@@ -25,6 +25,7 @@
 #include "http.h"
 #include "agent/network.h"
 #include "app/timing.h"
+#include "app/run_ctl.h"
 #include "agent/agent.h"
 #include "app/session.h"
 #include "agent/json.h"
@@ -82,9 +83,6 @@ static Rect gModelRect, gSendRect;
 static Rect gInfoRect, gStatusRect, gHistoryRect, gMeterRect;
 static size_t gDisplayedHistory = (size_t)-1;
 static Rect gUsageRect, gContextRect, gCostRect, gPromptHintRect;
-static char gModelInfoModel[CHAT_MODEL_CAP];
-static AgentModelInfo gModelInfo;   /* Row behind gModelInfoModel; cleared per lookup. */
-static int  gModelInfoAttempted = 0;
 static long long gDisplayedCost = -1;
 static long gDisplayedTokens = -1;
 static long gDisplayedLimit = -1;
@@ -106,47 +104,25 @@ static int   gPrefsUnreadable = 0;   /* existing file could not be read */
 
 /* ── Request state ──────────────────────────────────────────────── */
 static Agent gAgent;
-static char gRunModel[CHAT_MODEL_CAP];
 static GWorldPtr gArt = NULL;
 static Session gSession;
 static ChatNetwork gNet;
-static char gPending[CHAT_PROMPT_CAP * 3];
-static char gJSON[CHAT_REQUEST_CAP];
-static char gToolResult[AGENT_RESULT_CAP];
-/* What the run loop is waiting on. Everything but RUN_IDLE counts as busy. */
-typedef enum {
-    RUN_IDLE,
-    RUN_MODEL_REQUEST,   /* model HTTPS exchange in flight */
-    RUN_TOOLS,           /* executing the model's tool calls in order */
-    RUN_NEXT_REQUEST,    /* tools done; the next model request starts */
-    RUN_READ_TEXT,
-    RUN_EDIT_TEXT,
-    RUN_BUILD,           /* build_project pending */
-    RUN_QUIT,           /* quit_application pending */
-    RUN_LAUNCH,          /* run_application pending */
-    RUN_VIEW_IMAGE,      /* view_image reading a PNG */
-    RUN_COPY_FILE,      /* copy_file streaming and verifying both forks */
-    RUN_HANDOFF,          /* handoff summary HTTPS exchange in flight */
-    RUN_CONTEXT_LOOKUP,   /* model context-window lookup in flight */
-    RUN_MCP               /* remote MCP discovery, call or retention (mcp_run_phase) */
-} RunState;
-static RunState gRun = RUN_IDLE;
-static int RunBusy(void) { return gRun != RUN_IDLE; }
-static int gOTClosePending;   /* OT teardown deferred behind the MCP client's drain */
-static int gOTOpen = 0;
-static int gExchangeDrain = 0;
-static char gHandoffSummary[8192], gHandoffPath[256];
-static uint32_t gStartTicks;
-static uint32_t gDrainStartTicks;  /* separate from the run timer, which aborts leave alone */
-static RoundTiming gRoundTiming;
-static uint32_t gToolStart;
+static RunCtl gRunCtl;
+static int RunBusy(void) { return run_ctl_busy(&gRunCtl); }
+static void RunInit(void);
+static void CloseChatContext(void) { run_ctl_close_context(&gRunCtl); }
+static void AbandonChatContext(void) { run_ctl_abandon_context(&gRunCtl); }
+static void EnsureOpenTransport(void) { run_ctl_open_transport(&gRunCtl); }
+static void DrainAbandonedExchange(void) { run_ctl_drain_exchange(&gRunCtl); }
+static void DrainMcpClient(void) { run_ctl_drain_mcp(&gRunCtl); }
+static void DriveChatStep(void) { run_ctl_step(&gRunCtl); }
+static void LogRoundTiming(const char *outcome) { run_ctl_log_round(&gRunCtl, outcome); }
+static void AbortChat(const char *reason) { run_ctl_abort(&gRunCtl, reason); }
+static void SendChat(void) { run_ctl_send(&gRunCtl); }
+static void StartHandoff(void) { run_ctl_handoff(&gRunCtl); }
 static void FocusSet(TEHandle te);
 static void DrawChrome(void);
-static void SendChat(void);
-static void AbortChat(const char *reason);
 static void NewChat(void);
-static void StartHandoff(void);
-static int StartModelRequest(void);
 
 /* ── Small helpers ────────────────────────────────────────────────── */
 
@@ -192,18 +168,9 @@ static void SetStatus(const char *fmt, ...)
     if (gWindow) InvalRect(&gStatusRect);
 }
 
-static const char *TLSVersionLabel(MacTLS_Version v)
-{
-    switch (v) {
-    case kMacTLS_Version13: return "TLS 1.3";
-    case kMacTLS_Version12: return "TLS 1.2";
-    default:                return "TLS ?";
-    }
-}
-
 static void UpdateHandoffControls(void)
 {
-    int enabled = !RunBusy() && !gExchangeDrain && gSession.open && gAgent.messages &&
+    int enabled = !RunBusy() && !gRunCtl.exchange_drain && gSession.open && gAgent.messages &&
         !gAgent.active && gAgent.next >= gAgent.count;
     if (enabled == gHandoffEnabled) return;
     gHandoffEnabled = enabled;
@@ -283,9 +250,9 @@ static void PrefsLoad(void)
  * send needs no catalog request. Without one the lookup runs as before. */
 static void ModelInfoSeedFromPrefs(void)
 {
-    if (!prefs_row_for(&gPrefs, gPrefs.model, &gModelInfo)) return;
-    strcpy(gModelInfoModel, gPrefs.model);
-    gModelInfoAttempted = 1;
+    if (!prefs_row_for(&gPrefs, gPrefs.model, &gRunCtl.model_info)) return;
+    strcpy(gRunCtl.model_info_model, gPrefs.model);
+    gRunCtl.model_info_attempted = 1;
 }
 
 /* Write, flush and read back the whole file; a save that cannot be verified
@@ -350,87 +317,6 @@ static void YieldTicks(uint32_t ticks)
 }
 
 /*
- * Tear down the TLS context and give Open Transport a clean slate.
- *
- * Mac OS 9's OT can wedge when a connection fails mid-flight; after
- * that, every later attempt fails too. Certainly's own simple_get
- * example works around this by fully cycling InitOpenTransport /
- * CloseOpenTransport around every test, so we do the same around every
- * request (the Postman example, which inits OT once, shows the wedge).
- *
- * The yield on each side of CloseOpenTransport is SHERCLAWK_OT_YIELD_TICKS
- * (config.h). It was 60, which made teardown about 122 ticks of a ~246-tick
- * round; at 10 it is about 22 ticks. Guest soak (issue #25, 73 rounds): Stop
- * mid-response, connection resets, a refused connect and a dropped-packet
- * stall all aborted cleanly and the next request succeeded each time, with no
- * wedge. Faults did not land mid-download on a large response.
- */
-static void CloseChatContext(void)
-{
-    network_close(&gNet);
-    YieldTicks(SHERCLAWK_OT_YIELD_TICKS);
-    if (gOTOpen) {
-        /* The MCP client's endpoints live in the same OT instance: tearing
-         * it down while one is still connecting is the classic wedge. The
-         * drain in the event loop finishes the teardown once the client is
-         * terminal (DrainMcpClient). */
-        if (mcp_run_draining()) gOTClosePending = 1;
-        else { CloseOpenTransport(); gOTOpen = 0; gOTClosePending = 0; }
-    }
-    YieldTicks(SHERCLAWK_OT_YIELD_TICKS);
-}
-
-/*
- * Abort teardown. A live exchange is never torn down mid-connect: classic OT
- * can fault when an async connect is outstanding (type-3 failures on Stop a
- * fraction of a second after Send). While the connect or handshake is still
- * pending, mark the exchange for the loop's bounded drain, which only lets it
- * settle: it never writes the request or reads a response, so Stop does not
- * finish sending the prompt. An exchange that is already connected or
- * terminal has nothing outstanding and closes at once. One path for the
- * lookup, send and handoff aborts.
- */
-static int ExchangeConnecting(void)
-{
-    MacTLS_State state;
-    if (!gNet.ctx || gNet.result) return 0;
-    state = MacTLS_GetState(gNet.ctx);
-    return state == kMacTLS_Idle || state == kMacTLS_Connecting ||
-           state == kMacTLS_Handshaking;
-}
-
-static void BeginExchangeDrain(void)
-{
-    if (gExchangeDrain) return;
-    gExchangeDrain = 1;
-    gDrainStartTicks = (uint32_t)TickCount();
-}
-
-static void AbandonChatContext(void)
-{
-    if (ExchangeConnecting()) { BeginExchangeDrain(); return; }
-    if (gNet.ctx || gOTOpen) CloseChatContext();
-}
-
-/* Teardown after a cleanly completed model round. Only this path may leave OT
- * open for the next round (SHERCLAWK_OT_KEEP_OPEN_AFTER_CLEAN); aborts and
- * quit abandon a live exchange to the drain above. */
-static void FinishChatContext(void)
-{
-#if SHERCLAWK_OT_KEEP_OPEN_AFTER_CLEAN
-    network_close(&gNet);
-    YieldTicks(SHERCLAWK_OT_YIELD_TICKS);
-#else
-    CloseChatContext();
-#endif
-}
-
-static void EnsureOpenTransport(void)
-{
-    if (!gOTOpen) { InitOpenTransport(); gOTOpen = 1; }
-}
-
-/*
  * Optional log on the deployment share: when the "Retro68" volume is
  * mounted, fetch results are appended to Retro68:Sherclawk.log so a
  * failed run can be inspected from the host without screenshots.
@@ -481,43 +367,6 @@ static void LogLine(const char *text)
     len = 2;
     FSWrite(gLogRefNum, &len, crlf);
     FlushVol(NULL, 0);   /* flush every line so the host can tail it */
-}
-
-/* One credential-free line per network round (phase offsets in ticks since the
- * request began) and per tool call, so tuning can see where a round goes. */
-static void LogRoundTiming(const char *outcome)
-{
-    char line[256];
-    if (!gRoundTiming.active) return;
-    timing_mark(&gRoundTiming, TIMING_CLOSE, (uint32_t)TickCount());
-    timing_set_bytes(&gRoundTiming, (unsigned long)gNet.sent, (unsigned long)gNet.received);
-    if (timing_round_format(&gRoundTiming, outcome, line, sizeof(line)) > 0) LogLine(line);
-    gRoundTiming.active = 0;
-}
-static void LogToolTiming(int index, const char *name)
-{
-    char line[96];
-    if (timing_tool_format(index, name, gToolStart, (uint32_t)TickCount(), line, sizeof(line)) > 0) LogLine(line);
-}
-/* Completion tokens against the request cap, from the provider's own usage,
- * for every completed exchange (including ones agent_response will reject). */
-static void ObserveCompletionTokens(void)
-{
-    long completion, reasoning;
-    if (!gRoundTiming.active || agent_usage_completion(gNet.body, gNet.body_len, &completion, &reasoning)) return;
-    timing_set_tokens(&gRoundTiming, completion, reasoning, gRun == RUN_HANDOFF ? AGENT_HANDOFF_MAX_TOKENS : AGENT_MAX_TOKENS);
-}
-static void ObserveRound(void)
-{
-    uint32_t now = (uint32_t)TickCount();
-    MacTLS_State state;
-    if (!gNet.ctx || !gRoundTiming.active) return;
-    state = MacTLS_GetState(gNet.ctx);
-    if (state == kMacTLS_Handshaking || state == kMacTLS_Connected) timing_mark(&gRoundTiming, TIMING_CONNECT, now);
-    if (state == kMacTLS_Connected) timing_mark(&gRoundTiming, TIMING_HANDSHAKE, now);
-    if (gNet.request_len && gNet.sent == gNet.request_len) timing_mark(&gRoundTiming, TIMING_SENT, now);
-    if (gNet.received) timing_mark(&gRoundTiming, TIMING_FIRST_BYTE, now);
-    if (gNet.result) timing_mark(&gRoundTiming, TIMING_DONE, now);
 }
 
 static void LogClose(void)
@@ -869,7 +718,7 @@ static int PrefsHostSend(void *context, const char *path)
     (void)context;
     if (length < 0) return PREFS_SEND_TOO_LARGE;
     EnsureOpenTransport();
-    gStartTicks = (uint32_t)TickCount();
+    gRunCtl.start_ticks = (uint32_t)TickCount();
     if (network_start(&gNet, gNet.request, (size_t)length) < 0) {
         CloseChatContext();
         return PREFS_SEND_FAILED;
@@ -1008,7 +857,7 @@ static void ShowPreferences(void)
                  * classic OT can fault when a connect is torn down mid-flight.
                  * The main loop owns the exchange from here, so this pass must
                  * not step it again. */
-                if (d->model.fetch || d->model.draining) BeginExchangeDrain();
+                if (d->model.fetch || d->model.draining) run_ctl_begin_drain(&gRunCtl);
                 done = 1;
             } else if (item == kPrefsFindItem) {
                 prefs_model_find(&d->model);
@@ -1091,9 +940,9 @@ static void ShowPreferences(void)
                             if (confirmed) {
                                 /* The confirmed row is this model's context
                                  * source until a send-time lookup replaces it. */
-                                gModelInfo = d->model.confirmed_info;
-                                strcpy(gModelInfoModel, gPrefs.model);
-                                gModelInfoAttempted = 1;
+                                gRunCtl.model_info = d->model.confirmed_info;
+                                strcpy(gRunCtl.model_info_model, gPrefs.model);
+                                gRunCtl.model_info_attempted = 1;
                                 prefs_model_remember_saved(&d->model, gPrefs.model);
                             }
                             saved = 1;
@@ -1561,14 +1410,14 @@ static int HandleMenu(long menuChoice)
     case kEditMenuID:
         if (item == kEditPrefsItem) {
             if (RunBusy()) SetStatus("Finish the current run before changing Preferences.");
-            else if (gExchangeDrain) SetStatus("The stopped request is still closing; try again in a moment.");
+            else if (gRunCtl.exchange_drain) SetStatus("The stopped request is still closing; try again in a moment.");
             else ShowPreferences();
             break;
         }
         if (item == kEditMcpItem) {
             if (RunBusy()) SetStatus("Finish the current run before changing MCP Servers.");
             else if (mcp_run_draining()) SetStatus("The stopped MCP connection is still closing; try again in a moment.");
-            else if (gExchangeDrain) SetStatus("The stopped request is still closing; try again in a moment.");
+            else if (gRunCtl.exchange_drain) SetStatus("The stopped request is still closing; try again in a moment.");
             else ShowMcpServers();
             break;
         }
@@ -1689,7 +1538,7 @@ static void DrawChrome(void)
      * default is in effect, which describes the configured model only while
      * the info row belongs to it. */
     FormatModelLabel(gPrefs.model, gPrefs.effort,
-                     !strcmp(gModelInfoModel, gPrefs.model) ? gModelInfo.default_effort : "",
+                     !strcmp(gRunCtl.model_info_model, gPrefs.model) ? gRunCtl.model_info.default_effort : "",
                      line, sizeof(line));
     DrawFittedLabel(&gModelRect, line, truncMiddle);
     {
@@ -1720,8 +1569,8 @@ static void DrawChrome(void)
     gDisplayedHistory = gAgent.used;
     if (gAgent.context_seen) FormatTokens(gAgent.context_tokens, count, sizeof(count));
     else strcpy(count, "-");
-    if (gAgent.context_seen && gModelInfo.context_length > 0 && !strcmp(gModelInfoModel, gRunModel)) {
-        long long contextPercent = ((long long)gAgent.context_tokens * 100 + gModelInfo.context_length / 2) / gModelInfo.context_length;
+    if (gAgent.context_seen && gRunCtl.model_info.context_length > 0 && !strcmp(gRunCtl.model_info_model, gRunCtl.model)) {
+        long long contextPercent = ((long long)gAgent.context_tokens * 100 + gRunCtl.model_info.context_length / 2) / gRunCtl.model_info.context_length;
         if (contextPercent > 100) contextPercent = 100;
         snprintf(line, sizeof(line), "Context: %s tokens (%ld%%)", count, (long)contextPercent);
     } else if (gAgent.context_seen) snprintf(line, sizeof(line), "Context: %s tokens", count);
@@ -1735,7 +1584,7 @@ static void DrawChrome(void)
     }
     gDisplayedCost = gAgent.cost_micros;
     gDisplayedTokens = gAgent.context_seen ? gAgent.context_tokens : -1;
-    gDisplayedLimit = gModelInfo.context_length;
+    gDisplayedLimit = gRunCtl.model_info.context_length;
     TextSize(10);
     DrawControls(gWindow);
 }
@@ -2045,11 +1894,10 @@ static int NoteProjectInstructions(void)
 
 /* ── Tool debug view (display only; the session file is unaffected) ─ */
 /* Journal event names emitted for the tool call being executed. */
-static char gToolEvents[192];
 static int ToolEventJournal(void *context, const char *event, const char *json)
 {
-    ToolEventsAppend(gToolEvents, sizeof(gToolEvents), event);
-    return session_journal(context, event, json);
+    (void)context;
+    return run_ctl_tool_journal(&gRunCtl, event, json);
 }
 
 /* One tool message: the compact call line always; with the display toggle on,
@@ -2072,7 +1920,7 @@ static void ShowToolResult(const AgentCall *call, const char *label, const char 
         return;
     }
     snprintf(block, sizeof(block), "%s\r  \xC2\xBB %s\r  journal: %s",
-        header, text, gToolEvents[0] ? gToolEvents : "(none)");
+        header, text, gRunCtl.tool_events[0] ? gRunCtl.tool_events : "(none)");
     ShowMessage(NULL, block);
 }
 static void NewChat(void)
@@ -2089,7 +1937,7 @@ static void NewChat(void)
 /* ── Remote MCP tools in the run loop ───────────────────────────────
  * The controller (discovery, freeze, calls, retention, Stop, drain) is
  * mcp/run.c, built and tested on the host; this is its Toolbox glue and the
- * run-state transitions around it. */
+ * controller transitions live in run_ctl.c. */
 static McpRunLoad McpHostLoad(char *bytes, size_t cap, size_t *len)
 {
     FSSpec spec;
@@ -2108,527 +1956,43 @@ static const McpRunHost kMcpHost = {
     McpHostLoad, tools_workspace, McpHostOpenTransport, McpHostTicks, ToolEventJournal, &gSession
 };
 
-/* Step a stopped or finished client until its connects have drained, then
- * finish any OT teardown the drain was holding back. */
-static void DrainMcpClient(void)
+/* RunHost: Toolbox and live network effects for the cooperative controller. */
+static void RunStatus(void *c, const char *text) { (void)c; SetStatus("%s", text); }
+static void RunEnabled(void *c, int on) { (void)c; SetSendEnabled(on); }
+static void RunMessage(void *c, const char *label, const char *text) { (void)c; ShowMessage(label, text); }
+static void RunToolMessage(void *c, const AgentCall *call, const char *label, const char *text)
 {
-    if (!mcp_run_drain_pending()) return;
-    mcp_run_drain_step();
-    if (!mcp_run_drain_pending() && gOTClosePending && !gNet.ctx) {
-        CloseOpenTransport();
-        gOTOpen = 0; gOTClosePending = 0;
-    }
+    (void)c; ShowToolResult(call, label, text);
 }
-
-/* Record the finished remote tool result and return to the tool queue. */
-static void McpToolDone(void)
+static void RunLog(void *c, const char *text) { (void)c; LogLine(text); }
+static uint32_t RunTicks(void *c) { (void)c; return (uint32_t)TickCount(); }
+static int RunPrompt(void *c, char *out, size_t cap) { (void)c; return TEGetTextInto(gPromptTE, out, cap); }
+static void RunClearPrompt(void *c) { (void)c; TESetText("", 0, gPromptTE); InvalRect(&gPromptRect); }
+static void RunFocus(void *c) { (void)c; FocusSet(gPromptTE); }
+static void RunModelChanged(void *c) { (void)c; if (gWindow) InvalRect(&gModelRect); }
+static void RunWorkspaceInstructions(void *c) { (void)c; LoadWorkspaceInstructions(); }
+static int RunProjectInstructions(void *c) { (void)c; return NoteProjectInstructions(); }
+static int RunNetworkStart(void *c, ChatNetwork *n, const char *request, size_t len)
 {
-    char error[256];
-    const AgentCall *call = &gAgent.calls[gAgent.next];
-    gRun = RUN_TOOLS;
-    LogToolTiming(gAgent.next + 1, call->name);
-    if (agent_tool_result(&gAgent, gToolResult, error, sizeof(error))) { AbortChat(error); return; }
-    ShowToolResult(call, call->name, gToolResult);
+    (void)c; return network_start(n, request, len);
 }
-
-/* Discovery ends in the model request, natively when nothing was admitted. */
-static void StepMcpDiscovery(void)
-{
-    McpDiscovery found = mcp_run_discover_step();
-    if (found == MCP_DISCOVERY_PENDING) return;
-    if (found == MCP_DISCOVERY_ADMITTED)
-        SetStatus("%d remote MCP tool(s) available; contacting the model...", mcp_run_admitted());
-    else if (*mcp_run_alert()) ShowMessage("Notice", mcp_run_alert());
-    /* Discovery is over: an early abort in StartModelRequest is not MCP work. */
-    gRun = RUN_NEXT_REQUEST;
-    StartModelRequest();
-}
-
-static void StartMcpCall(AgentCall *call)
-{
-    if (mcp_run_call(call, gToolResult, sizeof(gToolResult))) {
-        gRun = RUN_MCP;
-        SetStatus("Calling remote tool %s (%d/%d)...", call->name, gAgent.next + 1, gAgent.count);
-        return;
-    }
-    McpToolDone();
-}
-
-static void StepMcp(void)
-{
-    McpRunPhase before = mcp_run_phase();
-    if (before == MCP_RUN_DISCOVERING) { StepMcpDiscovery(); return; }
-    if (mcp_run_call_step(gToolResult, sizeof(gToolResult))) { McpToolDone(); return; }
-    if (before == MCP_RUN_CALLING && mcp_run_phase() == MCP_RUN_RETAINING)
-        SetStatus("Retaining remote result...");
-}
-
-/* Long-running tools finish over many event-loop steps. A row here pairs a
- * registry row with its run state, start and step functions and messages;
- * Stop and normal completion both finish it through PendingToolStep. A new
- * one is a registry row plus a RunState value plus a row here. */
-typedef struct {
-    RunState state;
-    const ToolDef *def;   /* registry row that names the tool */
-    /* NULL delegates to tools_execute_checked, which reuses preflight tokens. */
-    int (*begin)(const AgentCall *, char *, size_t, AgentJournal, void *, uint32_t);
-    int (*step)(char *, size_t, uint32_t, int stop);
-    const char *status;  /* shown while it is pending */
-    const char *failure; /* stop reason when the step reports failure */
-} PendingState;
-static const PendingState kPendingStates[] = {
-    { RUN_READ_TEXT, &kToolDefs[TOOL_read_text], NULL, read_text_step,
-      "Reading and verifying text...", "Text read stopped; no revision supplied." },
-    { RUN_EDIT_TEXT, &kToolDefs[TOOL_edit_text], NULL, edit_text_step,
-      "Staging and verifying exact edit...", "Edit stopped. Inspect retained recovery paths before continuing." },
-    { RUN_BUILD, &kToolDefs[TOOL_build_project], build_project_begin, build_project_step,
-      "Building snapshot with MPW ToolServer...",
-      "Build observation stopped. Inspect retained snapshot and logs before another build." },
-    { RUN_LAUNCH, &kToolDefs[TOOL_run_application], run_application_begin, run_application_step,
-      "Verifying built application before launch...",
-      "Launch outcome uncertain. Inspect the run journal; do not retry automatically." },
-    { RUN_QUIT, &kToolDefs[TOOL_quit_application], quit_application_begin, quit_application_step,
-      "Requesting graceful quit; observing owned process...",
-      "Quit outcome uncertain. The request may still take effect; do not retry." },
-    { RUN_VIEW_IMAGE, &kToolDefs[TOOL_view_image], view_image_begin, view_image_step,
-      "Reading image...",
-      "Image read stopped. Nothing was attached." },
-    { RUN_COPY_FILE, &kToolDefs[TOOL_copy_file], NULL, copy_file_step,
-      "Copying and verifying both forks...",
-      "Copy stopped. Inspect the retained stage and session recovery records before continuing." }
+static int RunNetworkStep(void *c, ChatNetwork *n) { (void)c; return network_step(n); }
+static MacTLS_State RunNetworkState(void *c, ChatNetwork *n) { (void)c; return MacTLS_GetState(n->ctx); }
+static void RunNetworkPump(void *c, ChatNetwork *n) { (void)c; MacTLS_Pump(n->ctx); }
+static void RunCloseContext(void *c, ChatNetwork *n) { (void)c; network_close(n); }
+static void RunOpenTransport(void *c) { (void)c; InitOpenTransport(); }
+static void RunCloseTransport(void *c) { (void)c; CloseOpenTransport(); }
+static void RunYieldTransport(void *c) { (void)c; YieldTicks(SHERCLAWK_OT_YIELD_TICKS); }
+static const RunHost kRunHost = {
+    RunStatus, RunEnabled, RunMessage, RunToolMessage, RunLog, RunTicks,
+    RunPrompt, RunClearPrompt, RunFocus, RunModelChanged,
+    RunWorkspaceInstructions, RunProjectInstructions,
+    RunNetworkStart, RunNetworkStep, RunNetworkState, RunNetworkPump,
+    RunCloseContext, RunOpenTransport, RunCloseTransport, RunYieldTransport
 };
-static const PendingState *PendingStateForDef(const ToolDef *def)
+static void RunInit(void)
 {
-    size_t i;
-    for (i = 0; i < sizeof(kPendingStates) / sizeof(kPendingStates[0]); i++)
-        if (kPendingStates[i].def == def) return &kPendingStates[i];
-    return NULL;
-}
-static const PendingState *PendingStateForRun(RunState state)
-{
-    size_t i;
-    for (i = 0; i < sizeof(kPendingStates) / sizeof(kPendingStates[0]); i++)
-        if (kPendingStates[i].state == state) return &kPendingStates[i];
-    return NULL;
-}
-/* Advance the pending tool; `stop` makes it conclude now. Returns 2 while it
- * is still running. Otherwise the run returns to RUN_TOOLS (before recording,
- * so a recording failure that aborts cannot finish the tool twice), the result
- * is recorded and shown, and 0 comes back with the tool's own status in
- * *result, or -1 with `error` if the result could not be recorded. */
-static int PendingToolStep(const PendingState *tool, int stop, int *result, char *error, size_t cap)
-{
-    const AgentCall *call = gAgent.next < gAgent.count ? &gAgent.calls[gAgent.next] : NULL;
-    *result = tool->step(gToolResult, sizeof(gToolResult), (uint32_t)TickCount(), stop);
-    if (!stop && *result == 2) return 2;
-    gRun = RUN_TOOLS;
-    if (!stop) LogToolTiming(gAgent.next + 1, tool->def->name);
-    if (agent_tool_result(&gAgent, gToolResult, error, cap)) return -1;
-    ShowToolResult(call, tool->def->name, gToolResult);
-    return 0;
-}
-static void StartHandoff(void)
-{
-    int length;
-    char attribution[256];
-    if (RunBusy()) return;
-    if (gExchangeDrain) { SetStatus("The stopped request is still closing; try again in a moment."); return; }
-    if (mcp_run_draining()) { SetStatus("The stopped MCP connection is still closing; try again in a moment."); return; }
-    if (!gSession.open || !gAgent.messages || gAgent.active || gAgent.next < gAgent.count) {
-        SetStatus("Finish or stop the current run before saving a handoff."); return;
-    }
-    strcpy(gRunModel, gPrefs.model);
-    if (!gPrefs.api_key[0] || !*gRunModel) {
-        SetStatus("A model and API key are needed for a handoff."); return;
-    }
-    if (*gRunModel && !model_id_valid(gRunModel)) {
-        SetStatus("Use an OpenRouter model ID without spaces."); return;
-    }
-    length = agent_handoff_request(&gAgent, gRunModel, gPrefs.effort, gJSON, sizeof(gJSON));
-    if (length < 0) { SetStatus("Could not prepare handoff; conversation retained."); return; }
-    if (sherclawk_attribution(SHERCLAWK_APP_URL, attribution, sizeof(attribution)) < 0) {
-        SetStatus("Attribution URL is too long; conversation retained."); return;
-    }
-    length = http_build_post_with_headers("openrouter.ai", "/api/v1/chat/completions", gPrefs.api_key,
-        attribution, gJSON, (size_t)length, gNet.request, sizeof(gNet.request));
-    if (length < 0) { SetStatus("Could not prepare handoff request; conversation retained."); return; }
-    gHandoffPath[0] = 0; gRun = RUN_HANDOFF;
-    timing_round_begin(&gRoundTiming, 0, (uint32_t)TickCount());
-    EnsureOpenTransport(); gStartTicks = (uint32_t)TickCount();
-    timing_mark(&gRoundTiming, TIMING_INIT, gStartTicks);
-    SetSendEnabled(0);
-    if (network_start(&gNet, gNet.request, (size_t)length) < 0) { AbortChat(gNet.error); return; }
-    SetStatus("Summarizing for handoff; current conversation retained...");
-}
-/* Abort reasons otherwise survive only in the on-screen transcript; keep a
- * stable marker plus the actual reason in the share lifecycle log. */
-static void LogAbort(const char *prefix, const char *reason)
-{
-    char line[320];
-    snprintf(line, sizeof(line), "%s: %s", prefix, reason);
-    LogLine(line);
-}
-static void AbortChat(const char *reason)
-{
-    const PendingState *pending = PendingStateForRun(gRun);
-    if (gRun == RUN_HANDOFF) {
-        AbandonChatContext();
-        LogRoundTiming("abort");
-        gRun = RUN_IDLE; SetSendEnabled(1); FocusSet(gPromptTE);
-        ShowMessage("Handoff stopped; conversation retained", reason);
-        if (*gHandoffPath) ShowMessage("Retained handoff file (may be incomplete)", gHandoffPath);
-        SetStatus("Handoff stopped; conversation retained. %s", reason);
-        LogAbort("Handoff stopped; conversation retained. Reason", reason);
-        return;
-    }
-    if (gRun == RUN_CONTEXT_LOOKUP) {
-        AbandonChatContext();
-        gRun = RUN_IDLE; SetSendEnabled(1); FocusSet(gPromptTE);
-        SetStatus("Model context lookup stopped. Send again shortly.");
-        LogAbort("Model context lookup stopped. Reason", reason);
-        return;
-    }
-    if (gRun == RUN_MCP) {
-        char error[256];
-        /* The in-flight remote work concludes first, exactly like a pending
-         * native tool: its result is recorded before agent_stop fills the
-         * unstarted calls. */
-        if (mcp_run_stop(gToolResult, sizeof(gToolResult))) {
-            LogToolTiming(gAgent.next + 1, gAgent.calls[gAgent.next].name);
-            if (agent_tool_result(&gAgent, gToolResult, error, sizeof(error))) {
-                SetStatus("Session recording failed. Start a new session before continuing.");
-                session_close(&gSession);
-            }
-        }
-    }
-    if (pending) {
-        char error[256];
-        int result;
-        PendingToolStep(pending, 1, &result, error, sizeof(error));
-    }
-    /* Every run abort ends the run's remote state, whatever stopped it (a
-     * model error, the time or round limit, Stop between calls, quit): the
-     * client's endpoints close before Open Transport can be torn down and its
-     * credentials are wiped now, not at the next run. A no-op when no MCP
-     * client is open. */
-    mcp_run_end();
-    AbandonChatContext();
-    LogRoundTiming("abort");
-    if (agent_stop(&gAgent, reason)) {
-        SetStatus("Session recording failed. Start a new session before continuing.");
-        session_close(&gSession);
-    } else SetStatus("%s", reason);
-    gRun = RUN_IDLE; SetSendEnabled(1); FocusSet(gPromptTE);
-    ShowMessage("Stopped", reason);
-    LogAbort("Agent stopped; completed records retained. Reason", reason);
-}
-static void PauseRunAtLimit(void)
-{
-    char reason[256];
-    FormatPauseReason(gAgent.rounds, gAgent.tool_count, gPrefs.max_rounds,
-                      gPrefs.max_tools, gAgent.used, reason, sizeof(reason));
-    AbortChat(reason);
-}
-/* agent_response rejects a bad body before recording it, so the history and
- * session journal would keep no trace of the failed request. Journal its HTTP
- * status, received body size and reason instead. */
-static void JournalModelError(const char *reason)
-{
-    static char quoted[1600], detail[1700];
-    if (!gSession.open || json_quote(reason, quoted, sizeof(quoted)) < 0) return;
-    snprintf(detail, sizeof(detail), "{\"http_status\":%d,\"received_bytes\":%lu,\"error\":%s}",
-        gNet.status, (unsigned long)gNet.body_len, quoted);
-    session_journal(&gSession, "model_error", detail);
-}
-static int StartModelRequest(void)
-{
-    int length;
-    char attribution[256];
-    if (gAgent.rounds >= gPrefs.max_rounds || gAgent.tool_count >= gPrefs.max_tools) {
-        PauseRunAtLimit(); return -1;
-    }
-    length = agent_request_image(&gAgent, gRunModel, gPrefs.effort, view_image_held(), gJSON, sizeof(gJSON));
-    if (length < 0) { AbortChat("Request limit reached. Start a new session."); return -1; }
-    if (sherclawk_attribution(SHERCLAWK_APP_URL, attribution, sizeof(attribution)) < 0) {
-        AbortChat("Attribution URL is too long."); return -1;
-    }
-    length = http_build_post_with_headers("openrouter.ai", "/api/v1/chat/completions", gPrefs.api_key,
-        attribution, gJSON, (size_t)length, gNet.request, sizeof(gNet.request));
-    if (length < 0) { AbortChat("Request or API key is too long or invalid."); return -1; }
-    timing_round_begin(&gRoundTiming, gAgent.rounds + 1, (uint32_t)TickCount());
-    EnsureOpenTransport();
-    gStartTicks = (uint32_t)TickCount(); gRun = RUN_MODEL_REQUEST;
-    timing_mark(&gRoundTiming, TIMING_INIT, gStartTicks);
-    if (network_start(&gNet, gNet.request, (size_t)length) < 0) { AbortChat(gNet.error); return -1; }
-    SetStatus("Connecting to OpenRouter (round %d)...", gAgent.rounds + 1);
-    LogLine("Agent model request started."); return 0;
-}
-/* The session and agent state are touched only after the optional
- * context-window lookup, so Stop during it keeps the typed prompt and leaves
- * no session record. */
-static void SendBegin(void)
-{
-    char error[256];
-    gRun = RUN_IDLE;
-    if (!gSession.open && (gAgent.messages || session_open(&gSession, tools_workspace()))) {
-        SetStatus("Session file unavailable. Check %s or start a new session.", tools_workspace()); return;
-    }
-    if (!gAgent.messages) LoadWorkspaceInstructions();
-    if (agent_begin(&gAgent, gPending, error, sizeof(error))) { SetStatus("%s", error); return; }
-    view_image_reset();
-    ShowMessage("You", gPending);
-    TESetText("", 0, gPromptTE); InvalRect(&gPromptRect);
-    SetSendEnabled(0);
-    /* Remote MCP discovery runs before the first model request; everything
-     * else continues into the request, natively when no tools were admitted. */
-    if (mcp_run_start()) {
-        gRun = RUN_MCP;
-        SetStatus("Discovering remote MCP tools...");
-        return;
-    }
-    StartModelRequest();
-}
-static void StartContextLookup(void)
-{
-    char path[CHAT_MODEL_CAP * 3 + 32];
-    int length;
-    length = agent_model_query(path, sizeof(path), gRunModel);
-    if (length < 0) { SendBegin(); return; }
-    length = http_build_get("openrouter.ai", path, gNet.request, sizeof(gNet.request));
-    if (length < 0) { SendBegin(); return; }
-    /* Remember the attempt before the network: at most one lookup per model
-     * per launch, whatever the outcome. */
-    strcpy(gModelInfoModel, gRunModel); memset(&gModelInfo, 0, sizeof(gModelInfo));
-    gModelInfo.context_length = -1; gModelInfoAttempted = 1;
-    EnsureOpenTransport();
-    gStartTicks = (uint32_t)TickCount();
-    if (network_start(&gNet, gNet.request, (size_t)length) < 0) {
-        CloseChatContext(); SendBegin(); return;
-    }
-    gRun = RUN_CONTEXT_LOOKUP;
-    SetSendEnabled(0);
-    SetStatus("Checking context window for %s...", gRunModel);
-}
-static void SendAdvance(void)
-{
-    if (!(gModelInfoAttempted && !strcmp(gModelInfoModel, gRunModel)) && ModelLookupAllowed(gRunModel)) {
-        StartContextLookup(); return;
-    }
-    SendBegin();
-}
-static void FinishContextLookup(int completed)
-{
-    AgentModelInfo info;
-    if (completed && gNet.status == 200 && !agent_model_info(gNet.body, gNet.body_len, gRunModel, &info))
-        gModelInfo = info;
-    if (gWindow) InvalRect(&gModelRect);
-    if (gNet.ctx || gOTOpen) CloseChatContext();
-    {
-        if (strcmp(gPrefs.model, gRunModel)) {
-            gRun = RUN_IDLE; SetSendEnabled(1); FocusSet(gPromptTE);
-            SetStatus("Model changed during the context lookup. Send again to continue.");
-            return;
-        }
-    }
-    gRun = RUN_IDLE;
-    SendAdvance();
-}
-static void SendChat(void)
-{
-    static char prompt[CHAT_PROMPT_CAP]; /* static: the application stack is small */
-    if (RunBusy()) return;
-    if (gExchangeDrain) { SetStatus("The stopped request is still closing; send again in a moment."); return; }
-    if (mcp_run_draining()) { SetStatus("The stopped MCP connection is still closing; send again in a moment."); return; }
-    if (!gPrefs.api_key[0]) { SetStatus("No API key: choose Preferences from the Edit menu."); return; }
-    strcpy(gRunModel, gPrefs.model);
-    if (TEGetTextInto(gPromptTE, prompt, sizeof(prompt)) < 0) { SetStatus("Message is too long."); return; }
-    if (*gRunModel && !model_id_valid(gRunModel)) {
-        SetStatus("Use an OpenRouter model ID without spaces."); return;
-    }
-    if (!*gRunModel || prompt_is_blank(prompt)) { SetStatus("Enter a model and message first."); return; }
-    if (text_to_utf8(prompt, strlen(prompt), gPending, sizeof(gPending)) < 0) { SetStatus("Could not convert message to UTF-8."); return; }
-    SendAdvance();
-}
-static void StepContextLookup(void)
-{
-    int lookup;
-    if ((uint32_t)TickCount() - gStartTicks > 30UL * 60UL) { FinishContextLookup(0); return; }
-    lookup = network_step(&gNet);
-    if (lookup < 0) { FinishContextLookup(0); return; }
-    if (lookup == 0) {
-        MacTLS_State state = MacTLS_GetState(gNet.ctx);
-        if (state == kMacTLS_Handshaking) SetStatus("TLS handshake...");
-        else if (state == kMacTLS_Connected) SetStatus("Checking context window for %s...", gRunModel);
-        return;
-    }
-    FinishContextLookup(1);
-}
-static void StepPendingTool(void)
-{
-    const PendingState *tool = PendingStateForRun(gRun);
-    char error[256];
-    int result;
-    int status = PendingToolStep(tool, 0, &result, error, sizeof(error));
-    if (status == 2) return;
-    if (status) { AbortChat(error); return; }
-    if (result) AbortChat(tool->failure);
-}
-static void StepTools(void)
-{
-    char error[256];
-    JsonToken tokens[128];
-    int result;
-    AgentCall *call;
-    const ToolDef *def;
-    const PendingState *pending;
-    if (gAgent.next == gAgent.count) {
-        /* Tool messages cannot carry pixels: an image from this round follows
-         * the last tool result, as a user message for the next request. */
-        if (NoteProjectInstructions()) { AbortChat("Could not record project instructions. Stop and inspect the session."); return; }
-        const AgentImage *shot = view_image_take();
-        if (shot && agent_attach_image(&gAgent, shot)) { AbortChat("Could not record the attached image. Stop and inspect the session."); return; }
-        gRun = RUN_NEXT_REQUEST; return;
-    }
-    if (gAgent.tool_count >= gPrefs.max_tools) { PauseRunAtLimit(); return; }
-    call = &gAgent.calls[gAgent.next];
-    gToolStart = (uint32_t)TickCount();
-    SetStatus("Running %s (%d/%d)...", call->name, gAgent.next + 1, gAgent.count);
-    ToolEventsReset(gToolEvents, sizeof(gToolEvents));
-    {
-        char id[800], name[400], started[1300];
-        if (json_quote(call->id, id, sizeof(id)) < 0 || json_quote(call->name, name, sizeof(name)) < 0) {
-            AbortChat("Could not encode tool start."); return;
-        }
-        snprintf(started, sizeof(started), "{\"call_id\":%s,\"name\":%s}", id, name);
-        if (session_journal(&gSession, "tool_started", started)) { AbortChat("Could not record tool start; no tool executed."); return; }
-        ToolEventsAppend(gToolEvents, sizeof(gToolEvents), "tool_started");
-    }
-    view_image_set_vision(gModelInfoAttempted && !strcmp(gModelInfoModel, gRunModel) ? gModelInfo.vision : AGENT_VISION_UNKNOWN);
-    def = tools_lookup(call->name);
-    /* A frozen remote MCP name dispatches to its own run state before the
-     * native preflight: that guard is registry-driven and remote tools are
-     * not in the registry, so it would refuse them as unknown. The server
-     * validates their arguments (ADR-0003 keeps them read-only). */
-    if (!def && mcp_run_owns(call->name)) { StartMcpCall(call); return; }
-    pending = def ? PendingStateForDef(def) : NULL;
-    /* One registry-driven preflight before either dispatch path. Pending rows
-     * inherit the guard even when their begin function belongs to a module. */
-    if (tools_check_arguments(def, call, tokens, gToolResult, sizeof(gToolResult))) result = 0;
-    else if (pending && pending->begin) {
-        result = pending->begin(call, gToolResult, sizeof(gToolResult), ToolEventJournal, &gSession, (uint32_t)TickCount());
-    } else if (def && def->id == TOOL_read_build_log) {
-        build_project_log(call, gToolResult, sizeof(gToolResult)); result = 0;
-    } else result = tools_execute_checked(call, tokens, gToolResult, sizeof(gToolResult), ToolEventJournal, &gSession, (uint32_t)TickCount());
-    if (pending && result == 2) { gRun = pending->state; SetStatus("%s", pending->status); return; }
-    LogToolTiming(gAgent.next + 1, call->name);
-    if (agent_tool_result(&gAgent, gToolResult, error, sizeof(error))) { AbortChat(error); return; }
-    ShowToolResult(call, call->name, gToolResult);
-    if (result) AbortChat("Mutation stopped. Inspect the result and session recovery records; do not retry automatically.");
-}
-/* The model request and the handoff summary share one HTTPS exchange; only
- * the completed response is handled differently. */
-static void StepModelExchange(void)
-{
-    char error[256];
-    int result;
-    if ((uint32_t)TickCount() - gStartTicks > 120UL * 60UL) { AbortChat("Request timed out. Completed results retained."); return; }
-    result = network_step(&gNet);
-    ObserveRound();
-    if (result < 0) { AbortChat(gNet.error); return; }
-    if (!result) {
-        MacTLS_State state = MacTLS_GetState(gNet.ctx);
-        if (state == kMacTLS_Handshaking) SetStatus("TLS handshake...");
-        else if (state == kMacTLS_Connected) SetStatus("Waiting for model (%s, %lu bytes)...", TLSVersionLabel(gNet.version), (unsigned long)gNet.received);
-        return;
-    }
-    if (gRun == RUN_HANDOFF) {
-        ObserveCompletionTokens();
-        if (agent_handoff_response(gNet.body, gNet.body_len, gNet.status, gHandoffSummary,
-            sizeof(gHandoffSummary), error, sizeof(error))) { JournalModelError(error); AbortChat(error); return; }
-        FinishChatContext();
-        /* The summary completion is provider-billed like any other round. */
-        agent_usage_absorb(&gAgent, gNet.body, gNet.body_len);
-        LogRoundTiming("ok");
-        if (session_commit_handoff(&gSession, &gAgent, gHandoffSummary, gHandoffPath, sizeof(gHandoffPath))) {
-            AbortChat("Could not save/verify handoff and new journal. History was not cleared."); return;
-        }
-        gRun = RUN_IDLE; SetSendEnabled(1); FocusSet(gPromptTE);
-        ShowMessage("Saved handoff", gHandoffPath);
-        ShowMessage("Handoff summary", gHandoffSummary);
-        SetStatus("Handoff saved; fresh history is ready. Send a message to continue.");
-        return;
-    }
-    ObserveCompletionTokens();
-    if (agent_response(&gAgent, gNet.body, gNet.body_len, gNet.status, error, sizeof(error))) { JournalModelError(error); AbortChat(error); return; }
-    FinishChatContext();
-    LogRoundTiming(gAgent.truncated ? "truncated" : gAgent.discarded ? "discarded" : "ok");
-    if (gAgent.discarded) {
-        char note[160];
-        gRun = RUN_NEXT_REQUEST;
-        snprintf(note, sizeof(note), "Reply discarded: %s. Nothing in it ran. Asking the model to retry.", gAgent.discarded);
-        ShowMessage("Notice", note);
-        SetStatus("Reply discarded; asking the model to retry smaller.");
-        snprintf(note, sizeof(note), "Reply discarded (%s); model told to retry.", gAgent.discarded);
-        LogLine(note);
-        return;
-    }
-    if (gAgent.truncated) {
-        gRun = RUN_NEXT_REQUEST;
-        ShowMessage("Notice", "Reply cut off at the output token limit; nothing in it ran. Asking the model to retry.");
-        SetStatus("Output token limit reached; asking the model to retry.");
-        LogLine("Reply truncated at the output token limit; model told to retry.");
-        return;
-    }
-    if (*gAgent.text) ShowMessage("Sherclawk", gAgent.text);
-    if (gAgent.count) {
-        gRun = RUN_TOOLS; SetStatus("Model requested %d tool(s).", gAgent.count);
-    } else {
-        mcp_run_end(); /* the run is over: wipe the client and its credentials */
-        gRun = RUN_IDLE; SetSendEnabled(1); FocusSet(gPromptTE);
-        if (gAgent.limited) ShowMessage("Notice", "Reply incomplete: output token limit reached.");
-        if (gAgent.used >= AGENT_HISTORY_CAP * 3 / 4)
-            SetStatus("History nearly full. Save Handoff (Command-H) to free history.");
-        else SetStatus("Done - %d model rounds, %d tools. Session saved.", gAgent.rounds, gAgent.tool_count);
-        LogLine("Agent run completed.");
-    }
-}
-static void DriveChatStep(void)
-{
-    switch (gRun) {
-    case RUN_IDLE: break;
-    case RUN_CONTEXT_LOOKUP: StepContextLookup(); break;
-    case RUN_NEXT_REQUEST: StartModelRequest(); break;
-    case RUN_READ_TEXT:
-    case RUN_EDIT_TEXT:
-    case RUN_BUILD:
-    case RUN_QUIT:
-    case RUN_LAUNCH:
-    case RUN_VIEW_IMAGE:
-    case RUN_COPY_FILE: StepPendingTool(); break;
-    case RUN_MCP: StepMcp(); break;
-    case RUN_TOOLS: StepTools(); break;
-    case RUN_MODEL_REQUEST:
-    case RUN_HANDOFF: StepModelExchange(); break;
-    }
-}
-/* An abandoned exchange keeps its context alive until its connect settles
- * (connected, errored or closed); closing it here avoids tearing OT down
- * mid-connect. It only pumps: no request is written and nothing is read. The
- * deadline is the backstop for a connect that never settles; Certainly owns
- * the connect timeout, so reaching it is logged as a forced close. */
-static void DrainAbandonedExchange(void)
-{
-    int expired;
-    if (!gExchangeDrain) return;
-    expired = (uint32_t)TickCount() - gDrainStartTicks > 30UL * 60UL;
-    if (ExchangeConnecting() && !expired) {
-        MacTLS_Pump(gNet.ctx);
-        return;
-    }
-    if (expired && ExchangeConnecting())
-        LogLine("Abandoned exchange still connecting after 30 s; forcing close.");
-    CloseChatContext();
-    gExchangeDrain = 0;
+    run_ctl_init(&gRunCtl, &kRunHost, NULL, &gAgent, &gSession, &gPrefs, &gNet);
 }
 
 int main(void)
@@ -2639,6 +2003,7 @@ int main(void)
      * headroom get_environment reports adds the ungrown gap instead. */
     InitGraf(&qd.thePort); InitFonts(); InitWindows(); InitMenus();
     TEInit(); InitDialogs(NULL); InitCursor(); MacTLS_Init();
+    RunInit();
     PrefsLoad();
     ModelInfoSeedFromPrefs();
     tools_set_workspace(gPrefs.workspace);
@@ -2666,16 +2031,16 @@ int main(void)
         if (gDisplayedHistory != gAgent.used) InvalRect(&gHistoryRect);
         if (gDisplayedCost != gAgent.cost_micros ||
             gDisplayedTokens != (gAgent.context_seen ? gAgent.context_tokens : -1) ||
-            gDisplayedLimit != gModelInfo.context_length) InvalRect(&gUsageRect);
+            gDisplayedLimit != gRunCtl.model_info.context_length) InvalRect(&gUsageRect);
     }
     LogRoundTiming("abort");
     if (gAgent.active) AbortChat("Application quit.");
     else AbandonChatContext();  /* a stopped lookup/handoff, or a pending drain */
-    if (gExchangeDrain) {
+    if (gRunCtl.exchange_drain) {
         /* The window would go stale while the loop ignores events, so hide it;
          * the drain is bounded by its own 30 s backstop. */
         HideWindow(gWindow);
-        while (gExchangeDrain) {
+        while (gRunCtl.exchange_drain) {
             WaitNextEvent(everyEvent, &event, 1, NULL);
             DrainAbandonedExchange();
         }
@@ -2689,7 +2054,7 @@ int main(void)
             DrainMcpClient();
         }
     }
-    if (gNet.ctx || gOTOpen) CloseChatContext();
+    if (gNet.ctx || gRunCtl.ot_open) CloseChatContext();
     selfbuild_close();
     session_close(&gSession);
     LogLine("Sherclawk session ended."); LogClose(); UIDispose();
