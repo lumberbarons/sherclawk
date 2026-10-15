@@ -128,7 +128,9 @@ static void test_confirm_sets_field_filter_hint_and_effort(void)
     assert(m.selected == 1 && !m.edited && !m.filter[0]);
     assert(!strcmp(m.confirmed_id, "openai/gpt-4o-mini") && m.confirmed_info.context_length == 65536);
     assert(!strcmp(f.set_text, "openai/gpt-4o-mini") && !strcmp(m.last_text, "openai/gpt-4o-mini"));
-    assert(f.efforts == 1 && f.effort_has_info && !strcmp(f.effort_model, "openai/gpt-4o-mini"));
+    assert(f.sets == 1);
+    assert(f.efforts == 1 && f.effort_has_info && f.effort_context == 65536 &&
+           !strcmp(f.effort_model, "openai/gpt-4o-mini"));
     assert(!strcmp(f.hint, "Model confirmed. Press OK to save."));
     assert(f.draws == 1);
 }
@@ -194,7 +196,8 @@ static void test_popular_complete_caches_and_confirms_the_saved_model(void)
     complete(&m, kPopular);
     assert(m.fetch == PREFS_FETCH_NONE && m.count == 3 && m.selected == 0);
     assert(!strcmp(m.confirmed_id, "openai/gpt-4o") && m.confirmed_info.context_length == 131072);
-    assert(f.efforts == 1 && f.effort_has_info);
+    assert(f.efforts == 1 && f.effort_has_info && f.effort_context == 131072 &&
+           !strcmp(f.effort_model, "openai/gpt-4o"));
     assert(cache.popular_loaded && cache.popular_count == 3 && !strcmp(cache.popular[2].id, "z-ai/glm"));
     assert(!strcmp(f.hint, "Popular models loaded. Type to filter or Find."));
     assert(f.draws == 1 && !m.edited && f.sends == 1);
