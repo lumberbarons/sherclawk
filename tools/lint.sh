@@ -35,10 +35,10 @@ if command -v cppcheck >/dev/null 2>&1; then
         src/mcp/config.c src/mcp/protocol.c src/mcp/stream.c src/mcp/client.c src/mcp/editor.c src/mcp/store.c tests/test_mcp.c tests/test_mcp_client.c \
         tests/test_mcp_editor.c tests/test_mcp_store.c \
         src/tools/tools.c src/tools/fsutil.c src/agent/jsonargs.c src/tools/inspect.c src/mcp/guard.c src/tools/view_image.c src/agent/json.c src/agent/text.c src/app/chat.c src/app/display.c src/agent/agent.c src/agent/network.c src/native/jobs.c \
-        src/native/selfbuild.c src/native/build_project.c src/native/run_application.c src/native/application_process.c src/native/ae_dispatch.c src/native/toolserver.c src/app/session.c vendor/http.c \
+        src/native/selfbuild.c src/native/build_project.c src/native/run_application.c src/native/application_process.c src/native/ae_dispatch.c src/native/toolserver.c src/app/session.c src/app/prefs_model.c vendor/http.c \
         tests/test_core.c tests/test_display.c tests/test_chat_display.c tests/test_tools.c tests/test_agent.c tests/test_base64.c \
         tests/test_jobs.c tests/test_build_project.c tests/test_selfbuild.c \
-        tests/test_session.c tests/test_quit_application.c tests/test_fsutil.c tests/test_jsonargs.c \
+        tests/test_prefs_model.c tests/test_session.c tests/test_quit_application.c tests/test_fsutil.c tests/test_jsonargs.c \
         || status=1
     # The starter compiles against its own Toolbox model, not tests/toolbox.
     cppcheck --enable=warning,performance,portability --error-exitcode=1 \
