@@ -103,7 +103,7 @@ void prefs_model_begin(PrefsModel *m)
 void prefs_model_find(PrefsModel *m)
 {
     char text[CHAT_MODEL_CAP];
-    if (m->fetch || m->draining) return;
+    if (prefs_model_busy(m)) return;
     m->host.get_model_text(m->context, text, sizeof(text));
     strcpy(m->last_text, text);
     m->filter[0] = 0;
@@ -222,13 +222,18 @@ int prefs_model_is_confirmed(const PrefsModel *m, const char *text)
     return m->confirmed_id[0] && !strcmp(m->confirmed_id, text);
 }
 
+int prefs_model_busy(const PrefsModel *m)
+{
+    return m->fetch || m->draining;
+}
+
 void prefs_model_step(PrefsModel *m)
 {
     const char *body = NULL;
     size_t len = 0;
     int result;
     uint32_t now;
-    if (!m->fetch && !m->draining) return;
+    if (!prefs_model_busy(m)) return;
     now = m->host.now(m->context);
     if (!m->draining && now - m->fetch_start > PREFS_FETCH_DEADLINE) {
         m->draining = 1;
@@ -250,7 +255,7 @@ void prefs_model_step(PrefsModel *m)
 
 void prefs_model_resume(PrefsModel *m)
 {
-    if (m->fetch || m->draining) m->fetch_start = m->host.now(m->context);
+    if (prefs_model_busy(m)) m->fetch_start = m->host.now(m->context);
 }
 
 void prefs_model_remember_saved(PrefsModel *m, const char *model)

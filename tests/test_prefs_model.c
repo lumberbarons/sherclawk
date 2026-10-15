@@ -22,7 +22,7 @@ typedef struct {
     int poll_result;           /* PREFS_POLL_* the next poll returns */
     const char *poll_body;
     int polls, closes;
-    uint32_t poll_tick_step;   /* a poll that stays pending takes this long */
+    uint32_t poll_tick_step;   /* each poll takes this long */
 } Fake;
 
 static void fake_hint(void *c, const char *text)
@@ -627,6 +627,46 @@ static void test_step_draining_exchange_that_ends_is_a_timeout_not_a_page(void)
     assert(!strcmp(f.hint, "The catalog fetch timed out. Try Find again."));
 }
 
+static void test_step_slow_pending_poll_that_crosses_the_drain_deadline_tears_down(void)
+{
+    PrefsModel m; Fake f; static PrefsModelCache cache;
+    setup(&m, &f, &cache, "");
+    prefs_model_begin(&m);
+    f.poll_result = PREFS_POLL_PENDING;
+    f.tick = PREFS_FETCH_DEADLINE + 1;
+    prefs_model_step(&m);                  /* overdue: now draining */
+    assert(m.draining && f.closes == 0);
+    f.poll_tick_step = PREFS_FETCH_DEADLINE + 1;   /* this poll itself blocks past the drain deadline */
+    prefs_model_step(&m);
+    assert(f.closes == 1 && m.fetch == PREFS_FETCH_NONE && !m.draining);
+    assert(!strcmp(f.hint, "The catalog fetch timed out. Try Find again."));
+}
+
+static void test_step_error_while_draining_reports_a_timeout(void)
+{
+    PrefsModel m; Fake f; static PrefsModelCache cache;
+    setup(&m, &f, &cache, "");
+    prefs_model_begin(&m);
+    f.tick = PREFS_FETCH_DEADLINE + 1;
+    f.poll_result = PREFS_POLL_ERROR;
+    prefs_model_step(&m);
+    assert(f.closes == 1 && m.fetch == PREFS_FETCH_NONE && !m.draining);
+    assert(!strcmp(f.hint, "The catalog fetch timed out. Try Find again."));
+}
+
+static void test_busy_covers_in_flight_and_draining(void)
+{
+    PrefsModel m; Fake f; static PrefsModelCache cache;
+    setup(&m, &f, &cache, "");
+    assert(!prefs_model_busy(&m));
+    prefs_model_begin(&m);
+    assert(prefs_model_busy(&m));
+    m.draining = 1;
+    assert(prefs_model_busy(&m));
+    prefs_model_fetch_failed(&m, 1);
+    assert(!prefs_model_busy(&m));
+}
+
 static void test_resume_restarts_the_deadline_only_while_busy(void)
 {
     PrefsModel m; Fake f; static PrefsModelCache cache;
@@ -685,6 +725,9 @@ int main(void)
     test_step_error_closes_and_fails_without_a_timeout();
     test_step_deadline_moves_to_draining_and_waits_for_the_drain();
     test_step_draining_exchange_that_ends_is_a_timeout_not_a_page();
+    test_step_slow_pending_poll_that_crosses_the_drain_deadline_tears_down();
+    test_step_error_while_draining_reports_a_timeout();
+    test_busy_covers_in_flight_and_draining();
     test_resume_restarts_the_deadline_only_while_busy();
     puts("prefs model checks passed");
     return 0;

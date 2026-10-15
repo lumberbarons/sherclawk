@@ -54,7 +54,8 @@ typedef struct {
     uint32_t (*now)(void *context);
     /* Advance the exchange one step. PREFS_POLL_DONE means a 200 response and
      * sets `body` and `len`; PREFS_POLL_ERROR covers transport failures and
-     * any other status. */
+     * any other status. The body must stay valid until fetch_complete returns,
+     * which is after `close`. */
     int (*poll)(void *context, const char **body, size_t *len);
     /* Close the exchange's connection after a terminal poll or a teardown. */
     void (*close)(void *context);
@@ -108,7 +109,7 @@ void prefs_model_fetch_failed(PrefsModel *m, int timed_out);
  * in flight, so a stray completion cannot replace a confirmed list. */
 void prefs_model_fetch_complete(PrefsModel *m, const char *body, size_t len);
 
-/* The model field read `text`. Returns 0 when it still equals the last text
+/* The model field read `text`, at most CHAT_MODEL_CAP bytes with its NUL. Returns 0 when it still equals the last text
  * the picker saw; otherwise records it, makes it the row filter, marks the
  * field hand-edited and returns 1. Programmatic sets keep last_text in sync,
  * so only hand edits report a change. */
@@ -122,6 +123,9 @@ int prefs_model_is_confirmed(const PrefsModel *m, const char *text);
  * torn down until the drain deadline passes, and a terminal poll completes or
  * fails the fetch. A no-op when idle. */
 void prefs_model_step(PrefsModel *m);
+
+/* An exchange is in flight or still draining. */
+int prefs_model_busy(const PrefsModel *m);
 
 /* The dialog was blocked (window drag, popup tracking) while no step could
  * run: restart the deadline so the wait does not count against it. */

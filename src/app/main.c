@@ -796,7 +796,7 @@ static void ShowPreferences(void)
 
     while (!done) {
         EventRecord event;
-        int busy = d->model.fetch || d->model.draining;
+        int busy = prefs_model_busy(&d->model);
         int hit = 0;
         WaitNextEvent(everyEvent, &event, busy ? 1 : 10, NULL);
         SetPort(dlg);
@@ -840,7 +840,7 @@ static void ShowPreferences(void)
                  * classic OT can fault when a connect is torn down mid-flight.
                  * The main loop owns the exchange from here, so this pass must
                  * not step it again. */
-                if (d->model.fetch || d->model.draining) run_ctl_begin_drain(&gRunCtl);
+                if (prefs_model_busy(&d->model)) run_ctl_begin_drain(&gRunCtl);
                 done = 1;
             } else if (item == kPrefsFindItem) {
                 prefs_model_find(&d->model);
@@ -859,7 +859,7 @@ static void ShowPreferences(void)
                 SetControlValue(ctl, debug ? 1 : 0);
                 Draw1Control(ctl);
             } else if (item == kPrefsOKItem) {
-                if (d->model.fetch || d->model.draining) {
+                if (prefs_model_busy(&d->model)) {
                     PrefsHint(d, "Still checking; press OK again in a moment.");
                 } else {
                     int confirmed;
