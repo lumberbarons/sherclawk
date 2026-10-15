@@ -2182,6 +2182,19 @@ static void manifest_matches_read_text(const char *manifest)
 }
 #endif
 
+/* A result buffer below the result cap is a caller capacity shortfall: it is
+ * reported as such, never as the step-stop 1 that the app aborts the run on. */
+static void capacity_checks(void)
+{
+    char small[AGENT_RESULT_CAP-1]; JsonToken tokens[128];
+    memset(small,'x',sizeof(small));
+    strcpy(call.name,"get_environment");strcpy(call.arguments,"{}");
+    assert(tools_execute_recorded(&call,small,sizeof(small),NULL,NULL)==TOOLS_CAPACITY && !small[0]);
+    assert(TOOLS_CAPACITY!=1 && TOOLS_CAPACITY!=2 && TOOLS_CAPACITY!=0);
+    assert(!tools_check_arguments(tools_lookup("get_environment"),&call,tokens,result,sizeof(result)));
+    assert(tools_execute_checked(&call,tokens,small,sizeof(small),NULL,NULL,1)==TOOLS_CAPACITY);
+    assert(tools_execute_recorded(&call,result,sizeof(result),NULL,NULL)==0 && strstr(result,"tools"));
+}
 int main(void)
 {
     queue_guard_checks();
@@ -2189,6 +2202,7 @@ int main(void)
     return 0;
 #endif
     registry_checks();
+    capacity_checks();
     mcp_result_checks();
     project_checks();
     search_checks();

@@ -1934,7 +1934,7 @@ int tools_execute_recorded(const AgentCall *call, char *out, size_t cap, AgentJo
 {
     JsonToken tokens[128];
     const ToolDef *def = tools_lookup(call->name);
-    if (cap < AGENT_RESULT_CAP) { if (cap) out[0] = 0; return 1; }
+    if (cap < AGENT_RESULT_CAP) { if (cap) out[0] = 0; return TOOLS_CAPACITY; }
     if (tools_check_arguments(def, call, tokens, out, cap)) return 0;
     return tools_execute_checked(call, tokens, out, cap, journal, context, (uint32_t)TickCount());
 }
@@ -1942,7 +1942,7 @@ int tools_execute_checked(const AgentCall *call, const JsonToken *tokens, char *
                           AgentJournal journal, void *context, uint32_t now)
 {
     const ToolDef *def = tools_lookup(call->name);
-    if (cap < AGENT_RESULT_CAP) { if (cap) out[0] = 0; return 1; }
+    if (cap < AGENT_RESULT_CAP) { if (cap) out[0] = 0; return TOOLS_CAPACITY; }
     cap = AGENT_RESULT_CAP;
     if (!def) { fail(out, cap, "UNKNOWN_TOOL", "This tool is not installed.", 0); return 0; }
     switch (def->id) {

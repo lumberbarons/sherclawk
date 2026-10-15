@@ -5,7 +5,8 @@
 #include "native/jobs.h"
 #include "native/build_plan.h"
 int build_project_begin(const AgentCall *, char *, size_t, AgentJournal, void *, uint32_t);
-/* 2 pending, 0 terminal, 1 terminal requiring the agent to stop. */
+/* 2 pending, 0 terminal, 1 terminal requiring the agent to stop. A Stop during
+ * artifact authorization ends as ARTIFACT_AUTHORIZATION_STOPPED, not FAILED. */
 int build_project_step(char *, size_t, uint32_t, int stop);
 void build_project_log(const AgentCall *, char *, size_t);
 /* Pure descriptor/recipe validation, also used by host checks. */
