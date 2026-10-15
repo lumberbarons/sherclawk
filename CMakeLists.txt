@@ -49,7 +49,7 @@ set(MCP_RUN_SRC src/mcp/run.c src/mcp/protocol.c src/mcp/stream.c src/mcp/client
 set(CHAT_CORE src/app/display.c src/app/chat.c src/agent/json.c src/agent/text.c src/agent/network.c src/app/timing.c)
 # The shipping app and the diagnostics that #include src/app/main.c themselves.
 # Add a module here once and every one of those targets gets it.
-set(APP_SRC src/agent/agent.c src/app/session.c src/app/preferences.c src/app/prefs_model.c ${MCP_EDITOR_SRC} ${MCP_RUN_SRC} ${TOOLS_SRC}
+set(APP_SRC src/app/run_ctl.c src/agent/agent.c src/app/session.c src/app/preferences.c src/app/prefs_model.c ${MCP_EDITOR_SRC} ${MCP_RUN_SRC} ${TOOLS_SRC}
     src/tools/view_image.c src/native/build_project.c src/native/selfbuild.c src/native/toolserver.c src/native/ae_dispatch.c
     src/native/run_application.c src/native/application_process.c src/native/jobs.c ${CHAT_CORE} hello.r
     build/art.r CREATOR ShCk)

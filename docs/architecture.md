@@ -79,6 +79,17 @@ persistence or protect against server-side writes.
 
 ## Cooperative work and persistence
 
+`src/app/run_ctl.c` owns the send, context lookup, tool, next-request and handoff
+state machine. `RunCtl` holds the run state, request/result buffers, selected
+model and catalog row, timing and Open Transport/drain flags, plus references to
+`Agent`, `Session`, `Prefs` and `ChatNetwork`. `RunHost` supplies status and
+transcript updates, prompt access/focus, instruction-loading notifications, the
+clock and network/transport effects. `src/app/main.c` supplies those callbacks
+and calls one controller step per active event turn, preserving the one-tick
+cadence. `tests/test_run_ctl.c` drives the real agent protocol and controller
+with fake network, native operations and journal sink; session durability is
+covered separately by the File Manager fault suite.
+
 Runtime work advances from the event loop in bounded steps and honors Stop.
 Execute tools sequentially, journal assistant responses and starts before
 execution, and retain completed results when a run stops. A recording failure
@@ -124,7 +135,7 @@ and leave these alone unless the contract and its tests change with it.
   settle first (pumped without sending the request, bounded at 30 seconds and
   logged if forced), because an outstanding async connect can fault the
   classic OT stack. A connected or finished exchange closes at once. The yields around that cycle are
-  tunable and soaked; see the comment on `CloseChatContext` in `src/app/main.c` and
+  tunable and soaked; see `run_ctl_close_context` in `src/app/run_ctl.c` and
   [development](development.md).
 
 ## Preferences implementation notes
@@ -167,8 +178,8 @@ never cost the previous version.
 Remote MCP tools are driven by a controller (`src/mcp/run.c`) that owns the
 client, the retention folder and the deferred close, and reaches the
 application only through a small host callback struct: configuration loading,
-the workspace path, Open Transport, the tick clock and the journal. `src/app/main.c`
-keeps the run state and the Toolbox presentation around it, so the whole
+the workspace path, Open Transport, the tick clock and the journal. `src/app/run_ctl.c`
+keeps the surrounding run state and `main.c` supplies Toolbox effects, so the whole
 sequence — load, discover, freeze, call, retain, Stop, drain — runs on the
 host against a fake network (`tests/test_mcp_run.c`).
 
@@ -176,7 +187,7 @@ The advertisement is frozen per run: discovery happens once before the first
 model request, and every request of that run carries the same schemas, so
 the model never sees a tool set change mid-run. Open Transport must not be
 torn down while a remote endpoint is still connecting, so a stopped client
-drains cooperatively from the event loop and `CloseChatContext` defers its
+drains cooperatively from the event loop and `run_ctl_close_context` defers its
 teardown behind that drain. Remote calls are dispatched by exact frozen name
 before the native argument preflight: the preflight is registry-driven and
 remote tools are not in the registry, so their arguments are bounded by the

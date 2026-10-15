@@ -105,20 +105,20 @@ static void Pump(void)
     if (!schemas_checked && mcp_run_admitted()) {
         Check("frozen schema credential oracle", Clean(client.registry.schemas)); schemas_checked = 1;
     }
-    if (gRun == RUN_TOOLS && gAgent.next < gAgent.count) {
+    if (gRunCtl.state == RUN_TOOLS && gAgent.next < gAgent.count) {
         const char *name = gAgent.calls[gAgent.next].name;
         if (!strcmp(name, "mcp_tavily_tavily_search")) search_calls++;
         if (!strcmp(name, "mcp_tavily_tavily_extract")) extract_calls++;
         if (!strcmp(name, "read_mcp_result")) pages++;
     }
-    if ((gRun == RUN_TOOLS || gRun == RUN_MCP) && next < gAgent.count) {
+    if ((gRunCtl.state == RUN_TOOLS || gRunCtl.state == RUN_MCP) && next < gAgent.count) {
         strcpy(executed, gAgent.calls[next].name); strcpy(arguments, gAgent.calls[next].arguments);
     }
     start = TickCount();
     if (RunBusy()) DriveChatStep();
-    if (*executed && gAgent.next == next + 1 && strstr(gToolResult, "\"status\":\"ok\"")) {
-        if (!strcmp(executed, "mcp_tavily_tavily_search") && strstr(gToolResult, "\"is_error\":false")) search_ok++;
-        if (!strcmp(executed, "mcp_tavily_tavily_extract") && strstr(gToolResult, "\"is_error\":false")) extract_ok++;
+    if (*executed && gAgent.next == next + 1 && strstr(gRunCtl.tool_result, "\"status\":\"ok\"")) {
+        if (!strcmp(executed, "mcp_tavily_tavily_search") && strstr(gRunCtl.tool_result, "\"is_error\":false")) search_ok++;
+        if (!strcmp(executed, "mcp_tavily_tavily_extract") && strstr(gRunCtl.tool_result, "\"is_error\":false")) extract_ok++;
         if (!strcmp(executed, "read_mcp_result")) {
             JsonToken t[32]; char id[64]; long offset = 0; int i;
             if (json_parse(arguments, strlen(arguments), t, 32) > 0 &&
@@ -142,17 +142,19 @@ static int Settle(unsigned long seconds)
 {
     unsigned long start = TickCount();
     int timed_out;
-    while (!gQuit && (RunBusy() || mcp_run_drain_pending() || gExchangeDrain) &&
+    while (!gQuit && (RunBusy() || mcp_run_drain_pending() || gRunCtl.exchange_drain) &&
            (unsigned long)TickCount() - start < seconds * 60) Pump();
-    timed_out = RunBusy() || mcp_run_drain_pending() || gExchangeDrain;
+    timed_out = RunBusy() || mcp_run_drain_pending() || gRunCtl.exchange_drain;
     if (RunBusy()) AbortChat("Acceptance deadline; no replay.");
     return !timed_out && !gQuit;
 }
 static void Begin(const char *prompt)
 {
     NewChat();
-    strcpy(gRunModel, gPrefs.model); strcpy(gPending, prompt);
-    SendBegin();
+    /* This rig isolates MCP traffic, as the old direct SendBegin did. */
+    strcpy(gRunCtl.model_info_model, gPrefs.model); gRunCtl.model_info_attempted = 1;
+    TESetText(prompt, (long)strlen(prompt), gPromptTE);
+    SendChat();
     if (gSession.open && journal_count < 16) strcpy(journals[journal_count++], gSession.path);
 }
 static void ScanFile(const char *path)
@@ -186,7 +188,7 @@ static void StopAt(int target)
               target == 1 ? phase == MCP_RUN_CALLING && client.exchange.ctx != NULL :
               target == 2 ? phase == MCP_RUN_CALLING && client.working :
               target == 3 ? phase == MCP_RUN_RETAINING :
-              gRun == RUN_TOOLS && gAgent.next < gAgent.count &&
+              gRunCtl.state == RUN_TOOLS && gAgent.next < gAgent.count &&
                   !strcmp(gAgent.calls[gAgent.next].name, "read_mcp_result");
         if (hit) break;
         Pump();
@@ -224,7 +226,7 @@ int main(void)
     unsigned long preferred = 0, minimum = 1;
     InitGraf(&qd.thePort); InitFonts(); InitWindows(); InitMenus();
     TEInit(); InitDialogs(NULL); InitCursor(); MacTLS_Init();
-    PrefsLoad(); tools_set_workspace(gPrefs.workspace); UIInit();
+    RunInit(); PrefsLoad(); tools_set_workspace(gPrefs.workspace); UIInit();
     accept_log = fopen("Retro68:SherclawkMCPAgentCheck.log", "w");
     if (!accept_log || !gWindow) return 1;
     memset(&info, 0, sizeof(info)); info.processInfoLength = sizeof(info);
@@ -260,11 +262,11 @@ int main(void)
     links = strstr(gAgent.text, "https://") != NULL;
     Check("model final answer has source link", links);
     Check("history and final answer credential oracle", Clean(gAgent.history) && Clean(gAgent.text));
-    Check("model request credential oracle", Clean(gJSON));
+    Check("model request credential oracle", Clean(gRunCtl.json));
     for (i = 0; i < artifact_count; i++) ScanFile(artifacts[i]);
-    StartHandoff(); Check("real handoff completes", Settle(180) && *gHandoffPath);
+    StartHandoff(); Check("real handoff completes", Settle(180) && *gRunCtl.handoff_path);
     if (gQuit) goto done;
-    if (*gHandoffPath) ScanFile(gHandoffPath);
+    if (*gRunCtl.handoff_path) ScanFile(gRunCtl.handoff_path);
     if (gSession.open && journal_count < 16) strcpy(journals[journal_count++], gSession.path);
     before = opens;
     Begin("Call get_environment once, then report the available free heap. Do not use remote tools.");
