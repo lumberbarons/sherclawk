@@ -182,9 +182,11 @@ static void test_start_hints_name_each_kind(void)
     assert(m.fetch == PREFS_FETCH_SEARCH && !strcmp(f.hint, "Searching the catalog..."));
     assert(!strcmp(f.sent_path, "/api/v1/models?q=gpt&limit=10"));
     assert(prefs_model_start(&m, PREFS_FETCH_VALIDATE, "gpt") == 0);
-    assert(!strcmp(f.hint, "Checking that model against the catalog..."));
+    assert(m.fetch == PREFS_FETCH_VALIDATE && !strcmp(f.hint, "Checking that model against the catalog..."));
+    assert(!strcmp(f.sent_path, "/api/v1/models?q=gpt&limit=10"));
     assert(prefs_model_start(&m, PREFS_FETCH_SAVED, "gpt") == 0);
-    assert(!strcmp(f.hint, "Loading the saved model..."));
+    assert(m.fetch == PREFS_FETCH_SAVED && !strcmp(f.hint, "Loading the saved model..."));
+    assert(!strcmp(f.sent_path, "/api/v1/models?q=gpt&limit=10"));
 }
 
 static void test_popular_complete_caches_and_confirms_the_saved_model(void)
@@ -281,8 +283,7 @@ static void test_saved_model_missing_from_popular_is_fetched_then_listed_first(v
     complete(&m, kPopular);
     /* The popular page lacks the saved id: its own row is requested. */
     assert(m.fetch == PREFS_FETCH_SAVED && m.fetch_start == 500 && f.sends == 2);
-    assert(!strcmp(f.sent_path, "/api/v1/models?q=old%2Fmodel&limit=10") ||
-           !strcmp(f.sent_path, "/api/v1/models?q=old/model&limit=10"));
+    assert(!strcmp(f.sent_path, "/api/v1/models?q=old%2Fmodel&limit=10"));
     assert(m.count == 3 && m.selected == -1);
     f.efforts = 0;
     prefs_model_fetch_complete(&m, saved_page, strlen(saved_page));
@@ -453,7 +454,7 @@ static void test_stray_completion_leaves_the_list_alone(void)
     assert(m.count == 3 && m.selected == 2);
 }
 
-static void test_rejected_popular_page_keeps_the_shown_rows(void)
+static void test_failed_popular_page_keeps_rows_and_selection(void)
 {
     PrefsModel m; Fake f; static PrefsModelCache cache;
     static const char truncated[] =
@@ -461,16 +462,27 @@ static void test_rejected_popular_page_keeps_the_shown_rows(void)
     setup(&m, &f, &cache, "z-ai/glm");
     prefs_model_begin(&m);
     complete(&m, kPopular);
-    assert(m.count == 3);
-    prefs_model_find(&m);   /* empty box with rows: no fetch */
-    strcpy(f.model_text, "gpt");
-    prefs_model_find(&m);
-    assert(m.fetch == PREFS_FETCH_SEARCH);
-    m.fetch = PREFS_FETCH_POPULAR;   /* a popular exchange completing with a bad page */
+    assert(m.count == 3 && m.selected == 2);
+    assert(prefs_model_start(&m, PREFS_FETCH_POPULAR, NULL) == 0);
     complete(&m, truncated);
     assert(m.fetch == PREFS_FETCH_NONE && m.count == 3);
     assert(!strcmp(m.rows[0].id, "openai/gpt-4o") && !strcmp(m.rows[2].id, "z-ai/glm"));
     assert(m.selected == 2 && !strcmp(f.hint, "Could not load the catalog. Try Find again."));
+}
+
+static void test_saved_fetch_after_the_field_changed_caches_but_does_not_show(void)
+{
+    PrefsModel m; Fake f; static PrefsModelCache cache;
+    setup(&m, &f, &cache, "old/model");
+    prefs_model_begin(&m);
+    complete(&m, kPopular);
+    assert(m.fetch == PREFS_FETCH_SAVED);
+    strcpy(f.model_text, "typed/other");
+    f.efforts = 0;
+    complete(&m, "{\"data\":[{\"id\":\"old/model\",\"context_length\":4096}]}");
+    assert(m.fetch == PREFS_FETCH_NONE && m.count == 3 && m.selected == -1);
+    assert(!m.confirmed_id[0] && f.efforts == 0);
+    assert(cache.saved_loaded && !strcmp(cache.saved_row.id, "old/model"));
 }
 
 int main(void)
@@ -499,7 +511,8 @@ int main(void)
     test_fetch_failed_resets_state_and_names_the_cause();
     test_remember_saved_records_the_confirmed_row_for_later_opens();
     test_stray_completion_leaves_the_list_alone();
-    test_rejected_popular_page_keeps_the_shown_rows();
+    test_failed_popular_page_keeps_rows_and_selection();
+    test_saved_fetch_after_the_field_changed_caches_but_does_not_show();
     puts("prefs model checks passed");
     return 0;
 }
