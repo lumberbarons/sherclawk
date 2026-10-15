@@ -877,9 +877,15 @@ static int PrefsHostSend(void *context, const char *path)
     return PREFS_SEND_OK;
 }
 
+static uint32_t PrefsHostNow(void *context)
+{
+    (void)context;
+    return (uint32_t)TickCount();
+}
+
 static const PrefsModelHost kPrefsHost = {
     PrefsHostHint, PrefsHostGetModel, PrefsHostSetModel,
-    PrefsHostDrawRows, PrefsHostShowEffort, PrefsHostSend
+    PrefsHostDrawRows, PrefsHostShowEffort, PrefsHostSend, PrefsHostNow
 };
 
 /* One network step per pass, with the send-time lookup's deadline and drain
@@ -904,7 +910,7 @@ static void PrefsFetchStep(PrefsDialog *d)
     CloseChatContext();
     if (m->draining) { prefs_model_fetch_failed(m, 1); return; }
     if (result < 0 || gNet.status != 200) { prefs_model_fetch_failed(m, 0); return; }
-    prefs_model_fetch_complete(m, gNet.body, gNet.body_len, (uint32_t)TickCount());
+    prefs_model_fetch_complete(m, gNet.body, gNet.body_len);
 }
 
 /* DragWindow and TrackControl block until the mouse is released and no network
@@ -954,7 +960,7 @@ static void ShowPreferences(void)
     SetDialogDefaultItem(dlg, kPrefsOKItem);
     SetDialogCancelItem(dlg, kPrefsCancelItem);
 
-    prefs_model_begin(&d->model, (uint32_t)TickCount());
+    prefs_model_begin(&d->model);
 
     while (!done) {
         EventRecord event;
@@ -1005,7 +1011,7 @@ static void ShowPreferences(void)
                 if (d->model.fetch || d->model.draining) BeginExchangeDrain();
                 done = 1;
             } else if (item == kPrefsFindItem) {
-                prefs_model_find(&d->model, (uint32_t)TickCount());
+                prefs_model_find(&d->model);
             } else if (item == kPrefsEffortItem) {
                 PrefsEffortClick(d);
                 PrefsFetchResume(d);
@@ -1054,7 +1060,7 @@ static void ShowPreferences(void)
                          * row first. The saved id is already trusted, so the
                          * other fields stay editable while the catalog is
                          * unreachable. */
-                        prefs_model_start(&d->model, PREFS_FETCH_VALIDATE, model, (uint32_t)TickCount());
+                        prefs_model_start(&d->model, PREFS_FETCH_VALIDATE, model);
                     } else {
                         const char *effort;
                         candidate = gPrefs;

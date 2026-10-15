@@ -67,7 +67,7 @@ static void saved_show(PrefsModel *m, const AgentModelRow *row)
 /* The saved model is not in the list: show its row from this launch's cache,
  * or fetch it. Skipped once the field names another model or a row is
  * already confirmed. Returns 1 when a fetch was started. */
-static int show_saved_model(PrefsModel *m, uint32_t now)
+static int show_saved_model(PrefsModel *m)
 {
     char text[CHAT_MODEL_CAP];
     m->host.get_model_text(m->context, text, sizeof(text));
@@ -76,10 +76,10 @@ static int show_saved_model(PrefsModel *m, uint32_t now)
         saved_show(m, &m->cache->saved_row);
         return 0;
     }
-    return prefs_model_start(m, PREFS_FETCH_SAVED, m->saved_model, now) == 0;
+    return prefs_model_start(m, PREFS_FETCH_SAVED, m->saved_model) == 0;
 }
 
-void prefs_model_begin(PrefsModel *m, uint32_t now)
+void prefs_model_begin(PrefsModel *m)
 {
     char model[CHAT_MODEL_CAP];
     m->host.get_model_text(m->context, model, sizeof(model));
@@ -93,14 +93,14 @@ void prefs_model_begin(PrefsModel *m, uint32_t now)
         at = agent_model_row_find(m->rows, m->count, model);
         if (at >= 0) adopt_row(m, at);
         hint(m, "Type to filter, or press Find to search.");
-        if (at < 0) show_saved_model(m, now);
+        if (at < 0) show_saved_model(m);
         m->host.draw_rows(m->context);
-    } else if (prefs_model_start(m, PREFS_FETCH_POPULAR, NULL, now) == 0) {
+    } else if (prefs_model_start(m, PREFS_FETCH_POPULAR, NULL) == 0) {
         m->host.draw_rows(m->context);
     }
 }
 
-void prefs_model_find(PrefsModel *m, uint32_t now)
+void prefs_model_find(PrefsModel *m)
 {
     char text[CHAT_MODEL_CAP];
     if (m->fetch || m->draining) return;
@@ -111,13 +111,13 @@ void prefs_model_find(PrefsModel *m, uint32_t now)
         if (m->count) {
             hint(m, "Type to filter, or enter a model ID and press Find.");
             m->host.draw_rows(m->context);
-        } else prefs_model_start(m, PREFS_FETCH_POPULAR, NULL, now);
+        } else prefs_model_start(m, PREFS_FETCH_POPULAR, NULL);
         return;
     }
-    prefs_model_start(m, PREFS_FETCH_SEARCH, text, now);
+    prefs_model_start(m, PREFS_FETCH_SEARCH, text);
 }
 
-int prefs_model_start(PrefsModel *m, int kind, const char *query, uint32_t now)
+int prefs_model_start(PrefsModel *m, int kind, const char *query)
 {
     char path[CHAT_MODEL_CAP * 3 + 48];
     int length, sent;
@@ -128,7 +128,7 @@ int prefs_model_start(PrefsModel *m, int kind, const char *query, uint32_t now)
     if (sent == PREFS_SEND_TOO_LARGE) { hint(m, "The catalog request is too large."); return -1; }
     if (sent != PREFS_SEND_OK) { hint(m, "Could not start the catalog fetch."); return -1; }
     m->fetch = kind;
-    m->fetch_start = now;
+    m->fetch_start = m->host.now(m->context);
     hint(m, kind == PREFS_FETCH_POPULAR ? "Loading the popular models..." :
             kind == PREFS_FETCH_SAVED ? "Loading the saved model..." :
             kind == PREFS_FETCH_VALIDATE ? "Checking that model against the catalog..." :
@@ -147,11 +147,12 @@ void prefs_model_fetch_failed(PrefsModel *m, int timed_out)
 /* A completed exchange: the page replaces the rows. Validate confirms only an
  * exact id and always lists the candidates; the one popular load is cached for
  * later opens, where a saved model still in the page resolves at once. */
-void prefs_model_fetch_complete(PrefsModel *m, const char *body, size_t len, uint32_t now)
+void prefs_model_fetch_complete(PrefsModel *m, const char *body, size_t len)
 {
     static AgentModelRow page[AGENT_MODEL_ROWS_MAX];
     char text[CHAT_MODEL_CAP], line[128];
     int kind = m->fetch, at, count;
+    if (kind == PREFS_FETCH_NONE) return;
     if (kind == PREFS_FETCH_SAVED) {
         /* The saved model's row joins the list it is not part of; the
          * rows already shown stay as they are. */
@@ -161,17 +162,19 @@ void prefs_model_fetch_complete(PrefsModel *m, const char *body, size_t len, uin
         if (at >= 0) {
             m->cache->saved_row = page[at];
             m->cache->saved_loaded = 1;
-            show_saved_model(m, now);
+            show_saved_model(m);
         }
         hint(m, "Type to filter, or press Find to search.");
         m->host.draw_rows(m->context);
         return;
     }
-    count = agent_model_page(body, len, m->rows, AGENT_MODEL_ROWS_MAX);
+    /* Parse aside: a rejected page must leave the shown rows untouched. */
+    count = agent_model_page(body, len, page, AGENT_MODEL_ROWS_MAX);
     /* An empty popular page is a failure, not a list to cache for the launch:
      * a malformed or oversized page parses to zero rows. A search or validate
      * page with no rows is the catalog's answer for a typo. */
     if (count == 0 && kind == PREFS_FETCH_POPULAR) { prefs_model_fetch_failed(m, 0); return; }
+    memcpy(m->rows, page, (size_t)count * sizeof(AgentModelRow));
     m->fetch = PREFS_FETCH_NONE;
     m->count = count;
     m->selected = -1;
@@ -195,7 +198,7 @@ void prefs_model_fetch_complete(PrefsModel *m, const char *body, size_t len, uin
         at = agent_model_row_find(m->rows, m->count, text);
         if (at >= 0) adopt_row(m, at);
         hint(m, "Popular models loaded. Type to filter or Find.");
-        if (at < 0) show_saved_model(m, now);
+        if (at < 0) show_saved_model(m);
     } else {
         snprintf(line, sizeof(line), "%d match%s. Click a row to pick it.",
                  m->count, m->count == 1 ? "" : "es");

@@ -41,6 +41,9 @@ typedef struct {
     void (*show_effort)(void *context, const AgentModelInfo *info, const char *model);
     /* Begin one catalog GET of `path`. Returns a PREFS_SEND_* code. */
     int (*send)(void *context, const char *path);
+    /* Current time in ticks; read after a send succeeds, so the fetch
+     * deadline excludes the send's own setup. */
+    uint32_t (*now)(void *context);
 } PrefsModelHost;
 
 typedef struct {
@@ -67,9 +70,9 @@ typedef struct {
 void prefs_model_init(PrefsModel *m, const PrefsModelHost *host, void *context,
                       PrefsModelCache *cache, const char *saved_model);
 
-/* Dialog opened at `now` ticks: reuse the page cached earlier this launch, or
- * start the popular fetch. Reads the model field through the host. */
-void prefs_model_begin(PrefsModel *m, uint32_t now);
+/* Dialog opened: reuse the page cached earlier this launch, or start the
+ * popular fetch. Reads the model field through the host. */
+void prefs_model_begin(PrefsModel *m);
 
 /* Recompute `visible` from `filter`; the empty filter shows every row. */
 void prefs_model_filter(PrefsModel *m);
@@ -78,18 +81,18 @@ void prefs_model_filter(PrefsModel *m);
 void prefs_model_confirm(PrefsModel *m, int index);
 
 /* Find: search the typed text, or show the popular page for an empty box. */
-void prefs_model_find(PrefsModel *m, uint32_t now);
+void prefs_model_find(PrefsModel *m);
 
-/* Start one catalog exchange at `now` ticks; no other may start until it
- * reaches a terminal state. Returns 0, or -1 with a hint explaining why. */
-int prefs_model_start(PrefsModel *m, int kind, const char *query, uint32_t now);
+/* Start one catalog exchange; no other may start until it reaches a terminal
+ * state. Returns 0, or -1 with a hint explaining why. */
+int prefs_model_start(PrefsModel *m, int kind, const char *query);
 
 /* The exchange ended without a usable page. */
 void prefs_model_fetch_failed(PrefsModel *m, int timed_out);
 
-/* The exchange ended with a 200 response `body` at `now` ticks; `now` times
- * any follow-up fetch for the saved model. */
-void prefs_model_fetch_complete(PrefsModel *m, const char *body, size_t len, uint32_t now);
+/* The exchange ended with a 200 response `body`. Ignored when no exchange is
+ * in flight, so a stray completion cannot replace a confirmed list. */
+void prefs_model_fetch_complete(PrefsModel *m, const char *body, size_t len);
 
 /* After a successful save of a confirmed row: keep it as the saved model's
  * row for later opens this launch. */
