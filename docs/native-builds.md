@@ -254,10 +254,10 @@ submission cannot cancel Quit. See the [implementation spec](quit-application.md
 and [tool contract](tools.md#quit-an-owned-application).
 
 Large-input acceptance uses a 128 KiB immutable source arena, retaining offsets
-and lengths rather than allocating ten maximum-sized file buffers. Reads,
+and lengths rather than allocating a maximum-sized buffer per input. Reads,
 validation, hashing and exact second-pass comparison advance in 1 KiB chunks.
 The actual aggregate includes descriptor, all inputs, recipe and manifest and
 must stay within 128 KiB. `SNAPSHOT_SIZE_LIMIT` reports the limits; rejection
 precedes queue creation, snapshot journaling and job reservation. The descriptor
-remains 4 KiB and there are still ten declared inputs. See [large-text
+remains 4 KiB and declared inputs stay capped at `BUILD_INPUTS`. See [large-text
 acceptance](large-text.md) before enabling the shipping cap.

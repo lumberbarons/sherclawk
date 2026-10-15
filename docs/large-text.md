@@ -68,7 +68,7 @@ bypass File Manager sharing; this is not filesystem transactionality.
 ## Build snapshots and memory
 
 C, header and Rez inputs may each reach 64 KiB in acceptance builds; the
-4 KiB descriptor and ten-input limit remain. A 128 KiB immutable arena replaces
+4 KiB descriptor and `BUILD_INPUTS` input limit remain. A 128 KiB immutable arena replaces
 per-input arrays; recorded pointers/lengths are retained until jobs finish.
 Each first-pass chunk validates and hashes; the second pass compares bytes and
 catalog identity. Arena capacity and the actual aggregate (descriptor, inputs,

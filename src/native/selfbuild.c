@@ -132,7 +132,7 @@ SelfBuildStart selfbuild_begin(const NativeJob *j,const FSSpec *queue,const Buil
       size_t k; for(k=0;k<sizeof(names)/sizeof(*names);k++)if(!absent(j->directory,names[k]))goto fail; }
     /* Revalidate descriptor from the immutable published representation. All
      * inputs, including descriptor and script, are compared to disk below. */
-    if(j->count!=p->count+3 || strcmp(j->inputs[0].name,"project.json") ||
+    if(j->count!=p->count+JOB_FIXED_INPUTS || strcmp(j->inputs[0].name,"project.json") ||
         build_project_plan(j->inputs[0].bytes,&checked) || memcmp(&checked,p,sizeof(checked)))goto fail;
     for(int i=0;i<p->count;i++)if(strcmp(j->inputs[i+1].name,p->staged[i]))goto fail;
     leaf(j->directory,"ready",&s);

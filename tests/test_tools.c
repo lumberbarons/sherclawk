@@ -2,6 +2,7 @@
  * that journal barriers, short writes, corrupt reads and rename races cannot
  * silently overwrite an existing file or claim an uncertain create succeeded. */
 #include "tools/tools.h"
+#include "native/build_plan.h"
 #include "config.h"
 #include "tools/view_image.h"
 #include "mcp/result.h"
@@ -2080,6 +2081,8 @@ static void registry_checks(void)
     assert(atol(TOOLS_DESCRIPTOR_CAP_DESCRIPTION) == (long)TOOLS_DESCRIPTOR_CAP);
     assert(atol(TOOLS_SNAPSHOT_CAP_DESCRIPTION) == (long)TOOLS_SNAPSHOT_CAP);
     assert(atol(TOOLS_COPY_CAP_DESCRIPTION) == (long)TOOLS_COPY_CAP);
+    { const char *upto = strstr(tools_lookup("build_project")->schema_json, "Up to ");
+      assert(upto && atol(upto + 6) == (long)BUILD_INPUTS); }
     puts("PASS tool registry: schemas and get_environment agree with one contract table");
 }
 

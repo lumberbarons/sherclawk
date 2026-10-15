@@ -3,6 +3,8 @@
 #define SHERCLAWK_AGENT_H
 #include <stddef.h>
 #include "app/chat.h"
+/* Compile-time assert for size relations documented in docs/limits.md. */
+#define LIMIT_CHECK(name, cond) typedef char limit_check_##name[(cond) ? 1 : -1]
 #define AGENT_HISTORY_CAP 1048576
 #define AGENT_RESULT_CAP 4096
 #define AGENT_RESULT_WIRE_CAP (AGENT_RESULT_CAP * 6 + 256)

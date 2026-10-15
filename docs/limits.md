@@ -128,7 +128,10 @@ that renders at the minimum partition is still to be recorded (see the
 `BUILD_INPUTS` and `JOB_INPUT_MAX` rose together so the starter's inputs do
 not use up the projects' room: a build job carries every declared input plus
 `project.json`, the manifest and the recipe, so `JOB_INPUT_MAX` must stay at
-least three above `BUILD_INPUTS`. The Sherclawk executable grew by 31,040
+least `JOB_FIXED_INPUTS` above `BUILD_INPUTS`; a static assert in
+`src/native/jobs.h` fails the compile otherwise.
+
+The Sherclawk executable grew by 31,040
 bytes (3,068,448 to 3,099,488 bytes of text plus data plus bss, measured with
 `powerpc-apple-macos-size` on `build/Sherclawk.xcoff` at the same commit
 without and with the change): 22,816 bytes of build-plan and staging buffers

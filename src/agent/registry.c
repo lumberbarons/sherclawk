@@ -6,6 +6,7 @@
  * alone cannot link the tool executors or the File Manager model, so this
  * file must not grow code dependencies. */
 #include "tools/tools.h"
+#include "native/build_plan.h"
 #include <stddef.h>
 #include <string.h>
 
@@ -72,7 +73,7 @@ const ToolDef kToolDefs[] = {
         "\"required\":[\"path\"],\"additionalProperties\":false}}}",
         1, 0, NULL },
     { TOOL_build_project, "build_project",
-        "{\"type\":\"function\",\"function\":{\"name\":\"build_project\",\"description\":\"Compile a workspace project folder using project.json protocol 2 and toolchain mpw-ppc-v2. Descriptor requires protocol:2, toolchain:mpw-ppc-v2, sources:[C paths], output:lowercase filename; optional resources:[Rez paths], headers:[header paths], include_paths:[folder paths or .], settings:{warnings:off,libraries:[InterfaceLib,StdCLib],creator:4 alphanumeric characters}. Paths use lowercase ASCII letters, digits, dash, underscore, dot and colon separators. Up to ten total inputs of " TOOLS_FILE_CAP_DESCRIPTION " bytes each, a " TOOLS_DESCRIPTOR_CAP_DESCRIPTION "-byte descriptor and a " TOOLS_SNAPSHOT_CAP_DESCRIPTION "-byte total snapshot including recipe and manifest. Runs natively through MPW ToolServer. Returns revision-bound snapshot and build ID. Five-minute deadline; Stop ends observation, never cancels/replays. Never retry uncertain builds.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"],\"additionalProperties\":false}}}",
+        "{\"type\":\"function\",\"function\":{\"name\":\"build_project\",\"description\":\"Compile a workspace project folder using project.json protocol 2 and toolchain mpw-ppc-v2. Descriptor requires protocol:2, toolchain:mpw-ppc-v2, sources:[C paths], output:lowercase filename; optional resources:[Rez paths], headers:[header paths], include_paths:[folder paths or .], settings:{warnings:off,libraries:[InterfaceLib,StdCLib],creator:4 alphanumeric characters}. Paths use lowercase ASCII letters, digits, dash, underscore, dot and colon separators. Up to " TOOLS_LIMIT_STRINGIFY(BUILD_INPUTS) " total inputs of " TOOLS_FILE_CAP_DESCRIPTION " bytes each, a " TOOLS_DESCRIPTOR_CAP_DESCRIPTION "-byte descriptor and a " TOOLS_SNAPSHOT_CAP_DESCRIPTION "-byte total snapshot including recipe and manifest. Runs natively through MPW ToolServer. Returns revision-bound snapshot and build ID. Five-minute deadline; Stop ends observation, never cancels/replays. Never retry uncertain builds.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"],\"additionalProperties\":false}}}",
         1, 1, NULL },
     { TOOL_read_build_log, "read_build_log",
         "{\"type\":\"function\",\"function\":{\"name\":\"read_build_log\",\"description\":\"Read retained native build stdout/stderr (128 bytes). Follow next_byte until truncated is false. MacRoman; binary control bytes display as ?.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"build_id\":{\"type\":\"string\"},\"stream\":{\"type\":\"string\",\"enum\":[\"stdout\",\"stderr\"]},\"start_byte\":{\"type\":\"integer\",\"minimum\":0}},\"required\":[\"build_id\",\"stream\"],\"additionalProperties\":false}}}",
