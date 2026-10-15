@@ -172,8 +172,8 @@ static void terminal_check(const char *good,int artifact_ok)
 }
 /* Drive a successful build to the point where its result is journaled and
  * artifact authorization is the pending phase, then interrupt or break it.
- * mode 0: Stop; 1: the artifact changes under the fork scan. The step result
- * must name the cause; neither case may leave a launch record. */
+ * mode 0: Stop; 1: the artifact changes under the fork scan; 2: the
+ * verification deadline passes. The step result must name the cause; neither case may leave a launch record. */
 static void authorization_check(const char *good,int mode)
 {
     int i,r=2,turns;uint32_t now=2;
@@ -186,13 +186,14 @@ static void authorization_check(const char *good,int mode)
     ts_ready=1;
     for(turns=0;r==2 && !saw_build_result && turns<300;turns++,now+=60)r=build_project_step(result,sizeof(result),now,0);
     assert(r==2 && saw_build_result && entry("launch.rec")<0);
-    if(mode)files[i].resource=101;
+    if(mode==1)files[i].resource=101;
+    if(mode==2)now+=60UL*60UL;
     r=build_project_step(result,sizeof(result),now,mode==0);
     if(!mode) {
         /* An interrupted authorization is a Stop, not an authorization failure. */
         assert(r==1 && strstr(result,"ARTIFACT_AUTHORIZATION_STOPPED") && !strstr(result,"ARTIFACT_AUTHORIZATION_FAILED"));
     } else {
-        while(r==2)r=build_project_step(result,sizeof(result),now,0);
+        for(turns=0;r==2 && turns<300;turns++)r=build_project_step(result,sizeof(result),now,0);
         assert(r==1 && strstr(result,"ARTIFACT_AUTHORIZATION_FAILED") && !strstr(result,"ARTIFACT_AUTHORIZATION_STOPPED"));
     }
     assert(entry("launch.rec")<0);
@@ -277,8 +278,8 @@ int main(void)
     for(steps=0;r==2 && steps<100;steps++) r=build_project_step(result,sizeof(result),(uint32_t)(steps+2),0);
     assert(!r && strstr(result,"QUEUE_MISSING") && entry("buildjobs")<0 && !build_event_count && !build_journals);
     queue_mode=0;
-    authorization_check(good,0);authorization_check(good,1);
-    puts("PASS build authorization outcomes: Stop and artifact change are distinct failures");
+    authorization_check(good,0);authorization_check(good,1);authorization_check(good,2);
+    puts("PASS build authorization outcomes: Stop, artifact change and deadline are distinct outcomes");
     build_result_failure=1;terminal_check(good,1);build_result_failure=0;
     terminal_check(good,0);terminal_check(good,1);
     { char bid[25],runargs[128]; int r;

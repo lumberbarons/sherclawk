@@ -153,7 +153,8 @@ int run_application_step(char *out,size_t cap,uint32_t now,int stop)
     unsigned char page[1024]; uint32_t *h;
     if(!active)return fail(out,cap,"NO_ACTIVE_LAUNCH",1);
     if(stop || ((authorizing || fork_index<2) && (uint32_t)(now-started)>=60UL*60UL)) {
-        if(authorizing)authorization=AUTHORIZE_STOPPED;
+        /* Only a real Stop is a Stop; the deadline is a failed verification. */
+        if(authorizing && stop)authorization=AUTHORIZE_STOPPED;
         return fail(out,cap,"LAUNCH_VERIFICATION_STOPPED",0);
     }
     if(metadata(&current) || !same_metadata(&current,&observed))return fail(out,cap,"ARTIFACT_CHANGED",0);

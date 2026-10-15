@@ -4,9 +4,9 @@
 #include "tools/tools.h"
 #include <stdint.h>
 /* Typed outcome of launch authorization, so callers never read it back from
- * the run_application JSON. STOPPED: Stop or the deadline ended verification
- * before anything was persisted; FAILED: the artifact was refused or the
- * authority record could not be persisted. */
+ * the run_application JSON. STOPPED: the caller's Stop ended verification
+ * before anything was persisted; FAILED: the artifact was refused, the
+ * verification deadline passed, or the authority record could not be persisted. */
 typedef enum { AUTHORIZE_PENDING, AUTHORIZE_AUTHORIZED, AUTHORIZE_FAILED, AUTHORIZE_STOPPED } AuthorizeResult;
 int application_authorize_begin(const char *, const char *, AgentJournal, void *, uint32_t);
 /* One fork page or the persist per turn; fills the result buffer only for the

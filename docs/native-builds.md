@@ -146,7 +146,10 @@ raw logs remain on disk. Successful builds persist a private Finder `ShAR`/`ShCk
 snapshot folder after recording the successful build. This versioned native
 binary record seals the output name, file identity, modification date, creator,
 sizes and FNV hashes of both forks. Old builds without this record require a
-fresh build; IDs or artifact paths alone cannot authorize execution. The build
+fresh build; IDs or artifact paths alone cannot authorize execution. If Stop ends
+that authorization, `build_project` returns `ARTIFACT_AUTHORIZATION_STOPPED`; a changed
+artifact, an elapsed one-minute verification deadline or a record that cannot be
+persisted returns `ARTIFACT_AUTHORIZATION_FAILED`. Neither leaves a `launch.rec`. The build
 queue and its snapshots are read-only to model-facing source mutation tools.
 
 ## Native executor
