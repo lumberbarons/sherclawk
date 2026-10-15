@@ -19,7 +19,6 @@
 static JsonToken tokens[4096];
 
 /* Size relations documented in docs/limits.md; a build fails if one is broken. */
-#define LIMIT_CHECK(name, cond) typedef char limit_check_##name[(cond) ? 1 : -1]
 /* A worst-case reasoning-heavy completion is about 10 bytes per token. */
 LIMIT_CHECK(tokens_fit_response, AGENT_MAX_TOKENS * 10 <= CHAT_RESPONSE_CAP);
 LIMIT_CHECK(handoff_tokens_fit_response, AGENT_HANDOFF_MAX_TOKENS * 10 <= CHAT_RESPONSE_CAP);

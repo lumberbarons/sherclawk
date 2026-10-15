@@ -17,6 +17,8 @@
 #include <string.h>
 #include <stdarg.h>
 #define INPUTS BUILD_INPUTS
+/* build_project_step stages project.json, then appends manifest.json and script. */
+LIMIT_CHECK(fixed_inputs_filled, 1 + 2 == JOB_FIXED_INPUTS);
 #define FILE_BYTES TOOLS_ACCEPTED_FILE_CAP
 #define RECIPE_BYTES 12288
 #define QUEUE SHERCLAWK_BUILD_QUEUE

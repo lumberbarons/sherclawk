@@ -11,9 +11,9 @@
 #define JOB_INPUT_MAX 13
 /* A build job stages project.json, the plan's inputs, manifest.json and script. */
 #define JOB_FIXED_INPUTS 3
-/* C99 static assert: raising BUILD_INPUTS without JOB_INPUT_MAX fails to compile,
- * before build_project_step could write past its JobInput array. */
-typedef char build_inputs_fit[(BUILD_INPUTS + JOB_FIXED_INPUTS <= JOB_INPUT_MAX) ? 1 : -1];
+/* Raising BUILD_INPUTS without JOB_INPUT_MAX fails to compile, before
+ * build_project_step could write past its JobInput array. */
+LIMIT_CHECK(build_inputs_fit, BUILD_INPUTS + JOB_FIXED_INPUTS <= JOB_INPUT_MAX);
 #define JOB_FILE_MAX 65536
 #define JOB_TOTAL_MAX 131072
 #define JOB_RECORD_MAX 256
