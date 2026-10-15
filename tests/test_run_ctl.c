@@ -17,6 +17,8 @@ static Agent agent;
 static Session session;
 static Prefs prefs;
 static ChatNetwork net;
+enum { TEST_TOOL_COUNT = TOOL_read_mcp_result + 1 };
+static const char preflight_error[] = "{\"status\":\"error\",\"error\":\"ARGUMENTS\"}";
 static struct {
     uint32_t tick;
     MacTLS_State state;
@@ -28,6 +30,14 @@ static struct {
     const char *reply, *fail_event;
     int http_status, discovery, remote_pending, remote_stops, mcp_drain, mcp_end;
     McpRunPhase phase;
+    int preflight_calls, preflight_result;
+    const AgentCall *checked_call;
+    const JsonToken *checked_tokens;
+    int begins[TEST_TOOL_COUNT], advances[TEST_TOOL_COUNT], stops[TEST_TOOL_COUNT];
+    int assistant_messages;
+    char last_message_label[64], last_message_text[AGENT_REPLY_CAP];
+    char sent_request[sizeof(net.request)];
+    size_t sent_request_len;
 } fake;
 
 int session_open(Session *s, const char *workspace)
@@ -56,42 +66,66 @@ int session_commit_handoff(Session *s, Agent *a, const char *summary, char *path
 const char *tools_workspace(void) { return "Retro68:"; }
 int tools_check_arguments(const ToolDef *def, const AgentCall *call, JsonToken *tokens, char *out, size_t cap)
 {
-    (void)def; (void)out; (void)cap;
+    assert(def == tools_lookup(call->name));
+    fake.preflight_calls++; fake.checked_call = call; fake.checked_tokens = tokens;
+    if (fake.preflight_result) {
+        snprintf(out, cap, "%s", preflight_error);
+        return fake.preflight_result;
+    }
     assert(json_parse(call->arguments, strlen(call->arguments), tokens, 128) > 0);
     return 0;
+}
+static void check_dispatch(const AgentCall *call, char *out, size_t cap,
+                           AgentJournal journal, void *context, uint32_t tick)
+{
+    assert(call == &agent.calls[agent.next] && out == ctl.tool_result && cap == sizeof(ctl.tool_result));
+    assert(!strcmp(fake.events[fake.count - 1], "tool_started"));
+    assert(fake.preflight_calls && !fake.preflight_result && fake.checked_call == call);
+    assert(journal == run_ctl_tool_journal && context == &ctl && tick == fake.tick);
 }
 int tools_execute_checked(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap,
                           AgentJournal journal, void *context, uint32_t tick)
 {
-    (void)tokens; (void)tick;
-    assert(!strcmp(fake.events[fake.count - 1], "tool_started"));
-    assert(journal == run_ctl_tool_journal && context == &ctl);
+    check_dispatch(call, out, cap, journal, context, tick);
+    assert(tokens == fake.checked_tokens);
     fake.executed++;
-    if (!strcmp(call->name, "read_text")) return 2;
+    if (tools_lookup(call->name)->pending) return 2;
     snprintf(out, cap, "{\"status\":\"ok\",\"native\":true}");
     return 0;
 }
-static int pending_step(char *out, size_t cap, uint32_t tick, int stop)
+static int pending_step(enum ToolId id, char *out, size_t cap, uint32_t tick, int stop)
 {
-    (void)tick; fake.pending_steps++;
-    if (stop) { fake.stopped++; snprintf(out, cap, "{\"status\":\"stopped\"}"); return 1; }
+    assert(id == tools_lookup(agent.calls[agent.next].name)->id);
+    assert(out == ctl.tool_result && cap == sizeof(ctl.tool_result) && tick == fake.tick);
+    fake.pending_steps++; fake.advances[id]++;
+    if (stop) {
+        fake.stopped++; fake.stops[id]++;
+        snprintf(out, cap, "{\"status\":\"stopped\"}"); return 1;
+    }
     snprintf(out, cap, "{\"status\":\"ok\",\"text\":\"retained\"}");
     return fake.pending_result;
 }
-#define STEP_STUB(name) int name(char *out, size_t cap, uint32_t tick, int stop) { return pending_step(out, cap, tick, stop); }
-STEP_STUB(read_text_step)
-STEP_STUB(edit_text_step)
-STEP_STUB(copy_file_step)
-STEP_STUB(build_project_step)
-STEP_STUB(run_application_step)
-STEP_STUB(quit_application_step)
-STEP_STUB(view_image_step)
-#define BEGIN_STUB(name) int name(const AgentCall *call, char *out, size_t cap, AgentJournal journal, void *context, uint32_t tick) { \
-    (void)call; (void)out; (void)cap; (void)journal; (void)context; (void)tick; fake.executed++; return 2; }
-BEGIN_STUB(build_project_begin)
-BEGIN_STUB(run_application_begin)
-BEGIN_STUB(quit_application_begin)
-BEGIN_STUB(view_image_begin)
+#define STEP_STUB(name, id) int name(char *out, size_t cap, uint32_t tick, int stop) { return pending_step(id, out, cap, tick, stop); }
+STEP_STUB(read_text_step, TOOL_read_text)
+STEP_STUB(edit_text_step, TOOL_edit_text)
+STEP_STUB(copy_file_step, TOOL_copy_file)
+STEP_STUB(build_project_step, TOOL_build_project)
+STEP_STUB(run_application_step, TOOL_run_application)
+STEP_STUB(quit_application_step, TOOL_quit_application)
+STEP_STUB(view_image_step, TOOL_view_image)
+static int pending_begin(enum ToolId id, const AgentCall *call, char *out, size_t cap,
+                         AgentJournal journal, void *context, uint32_t tick)
+{
+    check_dispatch(call, out, cap, journal, context, tick);
+    assert(id == tools_lookup(call->name)->id);
+    fake.begins[id]++; fake.executed++; return 2;
+}
+#define BEGIN_STUB(name, id) int name(const AgentCall *call, char *out, size_t cap, AgentJournal journal, void *context, uint32_t tick) { \
+    return pending_begin(id, call, out, cap, journal, context, tick); }
+BEGIN_STUB(build_project_begin, TOOL_build_project)
+BEGIN_STUB(run_application_begin, TOOL_run_application)
+BEGIN_STUB(quit_application_begin, TOOL_quit_application)
+BEGIN_STUB(view_image_begin, TOOL_view_image)
 void build_project_log(const AgentCall *call, char *out, size_t cap)
 {
     (void)call; snprintf(out, cap, "{}");
@@ -129,7 +163,10 @@ static void status(void *context, const char *text) { (void)context; snprintf(fa
 static void enabled(void *context, int on) { (void)context; fake.enabled = on; }
 static void message(void *context, const char *label, const char *text)
 {
-    (void)context; (void)label; assert(text); fake.messages++;
+    (void)context; assert(text); fake.messages++;
+    snprintf(fake.last_message_label, sizeof(fake.last_message_label), "%s", label ? label : "");
+    snprintf(fake.last_message_text, sizeof(fake.last_message_text), "%s", text);
+    if (label && !strcmp(label, "Sherclawk")) fake.assistant_messages++;
 }
 static void tool_message(void *context, const AgentCall *call, const char *label, const char *text)
 {
@@ -149,6 +186,9 @@ static int start(void *context, ChatNetwork *n, const char *request, size_t len)
 {
     (void)context;
     assert(n == &net && len && request == n->request);
+    assert(len == strlen(request) && len < sizeof(fake.sent_request));
+    memcpy(fake.sent_request, request, len); fake.sent_request[len] = 0;
+    fake.sent_request_len = len;
     fake.starts++; n->ctx = (MacTLS_Context *)&fake;
     n->request_len = len; n->sent = n->received = n->body_len = 0; n->result = 0;
     return fake.start_failed ? -1 : 0;
@@ -194,7 +234,8 @@ static void setup(void)
 }
 static void respond(const char *reply)
 {
-    fake.reply = reply; fake.network_result = 1; run_ctl_step(&ctl); fake.network_result = 0;
+    fake.reply = reply; fake.network_result = 1; run_ctl_step(&ctl);
+    fake.network_result = 0; fake.reply = NULL;
 }
 static void tools_ready(void)
 {
@@ -206,7 +247,8 @@ static void test_send_tools_next_idle(void)
     setup(); run_ctl_send(&ctl);
     assert(ctl.state == RUN_MODEL_REQUEST && fake.starts == 1 && fake.count == 1);
     assert(!strcmp(fake.events[0], "user") && fake.cleared == 1 && !fake.enabled);
-    assert(strstr(net.request, "test/model") && strstr(net.request, "Inspect files"));
+    assert(fake.sent_request_len == strlen(fake.sent_request));
+    assert(strstr(fake.sent_request, "test/model") && strstr(fake.sent_request, "Inspect files"));
     respond(calls);
     assert(ctl.state == RUN_TOOLS && fake.executed == 0 && fake.closes == 1);
     run_ctl_step(&ctl);
@@ -221,11 +263,14 @@ static void test_send_tools_next_idle(void)
     run_ctl_step(&ctl);
     assert(ctl.state == RUN_NEXT_REQUEST && fake.starts == 1);
     run_ctl_step(&ctl);
-    assert(ctl.state == RUN_MODEL_REQUEST && fake.starts == 2 && strstr(net.request, "retained"));
+    assert(ctl.state == RUN_MODEL_REQUEST && fake.starts == 2 && strstr(fake.sent_request, "retained"));
     respond(done);
     assert(!run_ctl_busy(&ctl) && !agent.active && agent.rounds == 2 && agent.tool_count == 2);
     assert(fake.enabled && fake.focused == 1 && strstr(fake.status, "Session saved"));
     assert(!strcmp(fake.events[fake.count - 1], "assistant"));
+    assert(fake.messages == 2 && fake.assistant_messages == 1);
+    assert(!strcmp(fake.last_message_label, "Sherclawk") && !strcmp(fake.last_message_text, "Done"));
+    assert(fake.mcp_end == 1 && fake.phase == MCP_RUN_IDLE);
 }
 static void test_stop_retains_results_and_fills_unstarted(void)
 {
@@ -234,6 +279,7 @@ static void test_stop_retains_results_and_fills_unstarted(void)
     assert(!run_ctl_busy(&ctl) && !agent.active && agent.next == 2 && fake.executed == 1);
     assert(strstr(agent.history, "native") && strstr(agent.history, "User Stop"));
     assert(fake.enabled && fake.focused == 1 && !strcmp(fake.status, "User Stop"));
+    assert(fake.mcp_end == 1 && fake.phase == MCP_RUN_IDLE);
     setup(); tools_ready(); run_ctl_step(&ctl); run_ctl_step(&ctl);
     run_ctl_abort(&ctl, "Stop pending");
     assert(fake.stopped == 1 && fake.tool_messages == 2 && !run_ctl_busy(&ctl));
@@ -248,6 +294,7 @@ static void test_limits_pause_before_further_work(void)
     assert(!run_ctl_busy(&ctl) && fake.starts == 1 && strstr(fake.status, "round"));
     setup(); prefs.max_tools = 1; tools_ready(); run_ctl_step(&ctl); run_ctl_step(&ctl);
     assert(!run_ctl_busy(&ctl) && fake.executed == 1 && strstr(fake.status, "tool"));
+    assert(fake.mcp_end == 1 && fake.phase == MCP_RUN_IDLE);
 }
 static void test_model_error_and_journal_barrier(void)
 {
@@ -312,6 +359,7 @@ static void test_mcp_discovery_stop_and_deferred_transport_close(void)
     run_ctl_step(&ctl); assert(ctl.state == RUN_MCP && fake.phase == MCP_RUN_CALLING);
     run_ctl_abort(&ctl, "Stop remote");
     assert(!run_ctl_busy(&ctl) && fake.remote_stops == 1 && strstr(agent.history, "stopped"));
+    assert(fake.mcp_end == 1 && fake.phase == MCP_RUN_IDLE);
     setup(); run_ctl_open_transport(&ctl); fake.mcp_drain = 1;
     run_ctl_close_context(&ctl);
     assert(ctl.ot_open && ctl.ot_close_pending && !fake.transport_closes);
@@ -358,6 +406,87 @@ static void test_remote_completion_and_preferences_drain(void)
     fake.state = kMacTLS_Connected; run_ctl_drain_exchange(&ctl);
     assert(!ctl.exchange_drain && !ctl.ot_open && !fake.count);
 }
+/* These expected mappings are independent of the production dispatch table. */
+static const struct {
+    enum ToolId id;
+    const char *name, *arguments;
+    RunState state;
+    int dedicated_begin;
+} pending_cases[] = {
+    { TOOL_read_text, "read_text", "{\"path\":\"main.c\"}", RUN_READ_TEXT, 0 },
+    { TOOL_edit_text, "edit_text", "{\"path\":\"main.c\",\"expected_revision\":\"r\",\"old_text\":\"a\",\"new_text\":\"b\"}", RUN_EDIT_TEXT, 0 },
+    { TOOL_copy_file, "copy_file", "{\"path\":\"main.c\",\"revision\":\"r\",\"destination\":\"copy.c\"}", RUN_COPY_FILE, 0 },
+    { TOOL_build_project, "build_project", "{\"path\":\"project.json\"}", RUN_BUILD, 1 },
+    { TOOL_run_application, "run_application", "{\"build_id\":\"b\"}", RUN_LAUNCH, 1 },
+    { TOOL_quit_application, "quit_application", "{\"run_id\":\"r\"}", RUN_QUIT, 1 },
+    { TOOL_view_image, "view_image", "{\"path\":\"shot.png\"}", RUN_VIEW_IMAGE, 1 }
+};
+static void one_tool_ready(const char *name, const char *arguments)
+{
+    char quoted[1024], response[2048];
+    int length;
+    assert(json_quote(arguments, quoted, sizeof(quoted)) > 0);
+    length = snprintf(response, sizeof(response), "{\"choices\":[{\"finish_reason\":\"tool_calls\",\"message\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":["
+        "{\"id\":\"single\",\"type\":\"function\",\"function\":{\"name\":\"%s\",\"arguments\":%s}}]}}]}", name, quoted);
+    assert(length > 0 && (size_t)length < sizeof(response));
+    run_ctl_send(&ctl); respond(response);
+    assert(ctl.state == RUN_TOOLS && agent.count == 1 && !fake.executed);
+}
+static void expect_handlers(enum ToolId id, int begins, int advances, int stops)
+{
+    int i;
+    for (i = 0; i < TEST_TOOL_COUNT; i++) {
+        assert(fake.begins[i] == (i == (int)id ? begins : 0));
+        assert(fake.advances[i] == (i == (int)id ? advances : 0));
+        assert(fake.stops[i] == (i == (int)id ? stops : 0));
+    }
+}
+static void test_each_pending_tool_dispatches_its_own_begin_step_and_stop(void)
+{
+    size_t i;
+    for (i = 0; i < sizeof(pending_cases) / sizeof(pending_cases[0]); i++) {
+        setup(); fake.tick = 123;
+        one_tool_ready(pending_cases[i].name, pending_cases[i].arguments);
+        run_ctl_step(&ctl);
+        assert(ctl.state == pending_cases[i].state && fake.executed == 1 && !agent.next);
+        assert(fake.preflight_calls == 1);
+        expect_handlers(pending_cases[i].id, pending_cases[i].dedicated_begin, 0, 0);
+        fake.tick = 456; fake.pending_result = 2; run_ctl_step(&ctl);
+        assert(ctl.state == pending_cases[i].state && !agent.next);
+        expect_handlers(pending_cases[i].id, pending_cases[i].dedicated_begin, 1, 0);
+        fake.tick = 789; fake.pending_result = 0; run_ctl_step(&ctl);
+        assert(ctl.state == RUN_TOOLS && agent.next == 1 && fake.tool_messages == 1);
+        expect_handlers(pending_cases[i].id, pending_cases[i].dedicated_begin, 2, 0);
+
+        setup(); fake.tick = 123;
+        one_tool_ready(pending_cases[i].name, pending_cases[i].arguments);
+        run_ctl_step(&ctl); fake.tick = 456; run_ctl_abort(&ctl, "Stop native tool");
+        assert(!run_ctl_busy(&ctl) && agent.next == 1 && fake.executed == 1 && fake.stopped == 1);
+        assert(fake.mcp_end == 1 && fake.phase == MCP_RUN_IDLE);
+        expect_handlers(pending_cases[i].id, pending_cases[i].dedicated_begin, 1, 1);
+    }
+}
+static void test_preflight_refusal_records_error_without_dispatch(void)
+{
+    static const char *const names[] = { "get_environment", "read_text", "build_project" };
+    size_t i;
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        JsonToken tokens[32];
+        char content[128], call_id[128];
+        int at;
+        setup(); one_tool_ready(names[i], "{}"); fake.preflight_result = -1;
+        run_ctl_step(&ctl);
+        assert(fake.preflight_calls == 1 && !fake.executed && !fake.pending_steps);
+        expect_handlers(TOOL_get_environment, 0, 0, 0);
+        assert(ctl.state == RUN_TOOLS && agent.next == 1 && fake.tool_messages == 1);
+        at = fake.count - 1;
+        assert(!strcmp(fake.events[at], "tool"));
+        assert(json_parse(fake.records[at], strlen(fake.records[at]), tokens, 32) > 0);
+        assert(json_string(fake.records[at], tokens, json_member(fake.records[at], tokens, 0, "content"), content, sizeof(content)) > 0);
+        assert(json_string(fake.records[at], tokens, json_member(fake.records[at], tokens, 0, "tool_call_id"), call_id, sizeof(call_id)) > 0);
+        assert(!strcmp(content, preflight_error) && !strcmp(call_id, "single"));
+    }
+}
 int main(void)
 {
     test_send_tools_next_idle(); test_stop_retains_results_and_fills_unstarted();
@@ -366,5 +495,7 @@ int main(void)
     test_handoff_stop_retains_history_and_success_commits(); test_mcp_discovery_stop_and_deferred_transport_close();
     test_lookup_completion_and_model_change(); test_network_failure_and_pending_recording_failure();
     test_remote_completion_and_preferences_drain();
+    test_each_pending_tool_dispatches_its_own_begin_step_and_stop();
+    test_preflight_refusal_records_error_without_dispatch();
     puts("run controller checks passed"); return 0;
 }
