@@ -4,6 +4,39 @@ Dated acceptance evidence for the OS 9 guest, host checks and live model runs,
 retained from earlier development. Entries describe the state on their recorded
 dates. Use the [current guides](../../README.md#documentation) for present behavior.
 
+Recorded October 15, 2026 (model chooser and reasoning effort, issue #62
+follow-up): OS 9.2.2 running the main application built from main (`0f99919`
+was the head). With DHCP DNS in place, Edit > Preferences loaded the popular
+catalog, Cancel closed it and left the app usable, and a model request completed
+(`end=ok`, no `TLS error`). That is the successful baseline the October 14 entry
+lacked; the `OT=-3162` failures did not recur, so #234 is not reproduced on this
+build.
+
+The DNS-override fault injection was then repeated and did not produce a failed
+fetch. The guest's name server list was given `192.0.2.1` in Advanced mode
+(DHCP, IP address, subnet and router unchanged). Applying it closed the AFP
+connection and OS 9 quit the running Sherclawk, since the application runs from
+the share. After remounting `Retro68` from Recent Servers and relaunching,
+Preferences still loaded the catalog, and it did so again after a guest restart
+with a cold DNS cache. The override persisted across the restart in the TCP/IP
+panel, so it appears to be additive to the DHCP-supplied server (`10.0.2.3`)
+rather than a replacement; the cause was not isolated. This means the October 14
+"Could not load the catalog" observation is not explained by the override alone.
+DHCP DNS was restored afterwards (Basic mode, name server `10.0.2.3`, IP address
+`10.0.2.15` unchanged) and a prompt completed again.
+
+Host-side notes from the run: a dropped AFP connection leaves an `afpd` holding
+the application, its `._` sidecar and the session journal, and the next launch
+fails with "could not be opened, because it is in use". Only that stale session
+was ended; netatalk and the live mount were left alone. Special > Restart again
+stopped at a black firmware screen and the VM was power-cycled through UTM.
+
+Not verified: recovery after a failed or offline catalog fetch and Cancel of a
+fetch known to be in flight. The guest's workspace is on the network volume, so
+the network cannot be cut without losing the application, and the DNS override
+does not fail the fetch. The API key appears in clear text in Preferences
+screenshots; none were retained.
+
 Recorded October 14, 2026 (model chooser and reasoning effort, issue #62):
 the October 13 guest evidence on issues #62 and #57 covers popular-model loading,
 search, rejection of a nonexistent typed model ID, exact confirmation and saving
