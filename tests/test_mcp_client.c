@@ -18,6 +18,7 @@ static int connecting, stalled, bad_version, bad_status, tool_error, disconnect,
 static int big_reply, connect_aux, reflect, read_chunk = 3, processing_steps;
 static size_t max_work;
 static char error[256];
+static int total_pumps(void) { return contexts[0].pumps + contexts[1].pumps; }
 MacTLS_Context *MacTLS_Create(const char *host, uint16_t port)
 {
     int i;
@@ -159,8 +160,13 @@ int main(void)
     assert(client.state == MCP_COMPLETE && client.call_error && calls == 2);
     assert(mcp_client_response(&client)[0]);
     mcp_client_close(&client); assert(creates == closes && !client.session[0] && !mcp_client_response(&client)[0]);
+    /* Each step of a stalled handshake pumps its connection exactly once; the
+     * deadline check fails the client before any further pump. */
     reset(); stalled = 1; assert(!mcp_client_discover(&client, &config, 0));
-    expect_step(1799, 0); expect_step(1800, -1);
+    assert(total_pumps() == 0);
+    expect_step(1, 0); assert(total_pumps() == 1);
+    expect_step(1799, 0); assert(total_pumps() == 2);
+    expect_step(1800, -1); assert(total_pumps() == 2);
     assert(client.state == MCP_FAILED && !lists);
     n = creates; assert(mcp_client_call(&client, "mcp_tavily_tavily_search", "{}", 1801) < 0 && creates == n);
     reset(); bad_version = 1; assert(!mcp_client_discover(&client, &config, 0));
@@ -187,8 +193,9 @@ int main(void)
     reset(); connecting = 1;
     assert(!mcp_client_discover(&client, &config, 0));
     mcp_client_stop(&client, 1); expect_step(2, 0);
-    assert(!closes && client.state == MCP_STOPPING);
-    connecting = 0; expect_step(3, -1);
+    assert(!closes && client.state == MCP_STOPPING && total_pumps() == 1);
+    /* Draining pumps the connection once per step until it can be closed. */
+    connecting = 0; expect_step(3, -1); assert(total_pumps() == 2);
     assert(creates == closes && client.state == MCP_STOPPED && !calls);
     reset(); connecting = 1;
     assert(!mcp_client_discover(&client, &config, 0));
@@ -216,6 +223,12 @@ int main(void)
     assert(!mcp_client_discover(&client, &config, 0));
     for (i = 0; i < 1600 && !(client.working && client.work.steps >= 2); i++) { expect_step((unsigned long)i, 0); }
     assert(client.working && client.state == MCP_LIST && client.work.steps >= 2);
+    /* A step that only processes a received message does not pump any connection. */
+    {
+        int before = total_pumps();
+        assert(!client.auxiliary.ctx);
+        expect_step(1600, 0); assert(total_pumps() == before);
+    }
     mcp_client_stop(&client, 1700);
     assert(!client.working && !client.registry.count);
     for (i = 1700; i < 1900 && !step((unsigned long)i); i++) {}
