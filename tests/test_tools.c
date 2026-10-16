@@ -448,7 +448,52 @@ long FreeMem(void) { return 100000; }
 static char heap_arena[8192];
 Ptr LMGetHeapEnd(void) { return heap_arena + 1024; }
 Ptr GetApplLimit(void) { return heap_arena + 1024 + 4096; }
-short Gestalt(long selector, long *v) { (void)selector;*v=0x922;return 0; }
+/* Gestalt answers keyed by selector; a selector without a row is undefined,
+ * exactly how an absent optional extension answers. */
+static struct { long selector; long value; short error; } gestalt_rows[24];
+static int gestalt_row_count;
+static void gestalt_set(long selector, long value, short error)
+{
+    int i;
+    for(i=0;i<gestalt_row_count;i++)if(gestalt_rows[i].selector==selector)break;
+    assert(i<24); if(i==gestalt_row_count)gestalt_row_count++;
+    gestalt_rows[i].selector=selector; gestalt_rows[i].value=value; gestalt_rows[i].error=error;
+}
+static void gestalt_remove(long selector)
+{
+    int i;
+    for(i=0;i<gestalt_row_count;i++)if(gestalt_rows[i].selector==selector){gestalt_rows[i]=gestalt_rows[--gestalt_row_count];return;}
+}
+short Gestalt(long selector, long *v)
+{
+    int i;
+    *v=0;
+    if(selector==1){*v=0x922;return 0;}
+    for(i=0;i<gestalt_row_count;i++)if(gestalt_rows[i].selector==selector){
+        *v=gestalt_rows[i].error?0:gestalt_rows[i].value; return gestalt_rows[i].error;
+    }
+    return -5551;
+}
+/* Mounted volumes by index; the workspace lives on vref 1 like every file. */
+static struct TestVolume { const char *name; short vref; unsigned long long total, free_bytes; short attributes; } test_volumes[10];
+static int test_volume_count, volume_fault, volume_fault_index; /* fault: 1-based index to fail */
+static void be64_set(unsigned char out[8], unsigned long long v)
+{
+    int i; for(i=7;i>=0;i--){out[i]=(unsigned char)(v&0xff);v>>=8;}
+}
+OSErr PBXGetVolInfoSync(XVolumeParam *pb)
+{
+    int i=-1;
+    if(volume_fault && pb->ioVolIndex==volume_fault_index)return volume_fault;
+    if(pb->ioVolIndex>0){ if(pb->ioVolIndex<=test_volume_count)i=pb->ioVolIndex-1; }
+    else for(i=0;i<test_volume_count;i++)if(test_volumes[i].vref==pb->ioVRefNum)break;
+    if(i<0||i>=test_volume_count)return pb->ioVolIndex>0?nsvErr:-35-1;
+    pb->ioNamePtr[0]=(unsigned char)strlen(test_volumes[i].name);
+    memcpy(pb->ioNamePtr+1,test_volumes[i].name,pb->ioNamePtr[0]);
+    pb->ioVRefNum=test_volumes[i].vref; pb->ioVAtrb=test_volumes[i].attributes;
+    be64_set(pb->ioVTotalBytes,test_volumes[i].total); be64_set(pb->ioVFreeBytes,test_volumes[i].free_bytes);
+    return 0;
+}
 unsigned long TickCount(void) { return 42; }
 static int journal(void *ctx, const char *event, const char *json)
 {
@@ -2044,6 +2089,9 @@ static void registry_checks(void)
             quoted, sizeof(quoted)) > 0 && !strcmp(quoted, def->name));
     }
     assert(!tools_lookup("") && !tools_lookup("not_a_tool") && !tools_at(tools_count()));
+    /* The merged tools array holds the native rows beside a whole frozen MCP
+     * schema set (docs/limits.md). */
+    assert(strlen(schemas) + AGENT_MCP_SCHEMA_CAP <= AGENT_TOOL_SCHEMA_CAP);
     /* get_environment lists exactly the registry names, and nothing else. */
     strcpy(call.name, "get_environment"); strcpy(call.arguments, "{}");
     tools_execute(&call, env, sizeof(env));
@@ -2068,13 +2116,15 @@ static void registry_checks(void)
     assert(!tools_lookup("get_environment")->mutates && !tools_lookup("list_files")->mutates &&
            !tools_lookup("read_text")->mutates && !tools_lookup("search_text")->mutates &&
            !tools_lookup("read_build_log")->mutates && !tools_lookup("get_file_info")->mutates &&
-           !tools_lookup("view_image")->mutates && !tools_lookup("read_mcp_result")->mutates);
+           !tools_lookup("view_image")->mutates && !tools_lookup("read_mcp_result")->mutates &&
+           !tools_lookup("get_capabilities")->mutates && !tools_lookup("get_volume_info")->mutates);
     assert(tools_lookup("read_text")->pending && tools_lookup("edit_text")->pending &&
            tools_lookup("build_project")->pending && tools_lookup("run_application")->pending &&
            tools_lookup("quit_application")->pending && tools_lookup("view_image")->pending &&
            tools_lookup("copy_file")->pending);
     assert(!tools_lookup("write_text")->pending && !tools_lookup("read_build_log")->pending);
     assert(!tools_lookup("read_mcp_result")->pending);
+    assert(!tools_lookup("get_capabilities")->pending && !tools_lookup("get_volume_info")->pending);
     /* The model-facing cap descriptions never drift from the caps they name. */
     assert(atol(TOOLS_FILE_CAP_DESCRIPTION) == (long)TOOLS_ACCEPTED_FILE_CAP);
     assert(atol(TOOLS_STRING_CAP_DESCRIPTION) == (long)TOOLS_STRING_CAP);
@@ -2086,6 +2136,168 @@ static void registry_checks(void)
     puts("PASS tool registry: schemas and get_environment agree with one contract table");
 }
 
+/* Gestalt feature detection and mounted-volume space: absence is a flag, not
+ * an error; the byte counts are 64-bit; volumes page by a cursor that follows
+ * the mount list and the workspace is found by volume, not by position. */
+static void capability_checks(void)
+{
+    JsonToken tokens[128];
+    size_t used;
+    int i;
+    gestalt_row_count=0;
+    gestalt_set('cput',0x0108,0); gestalt_set('ram ',268435456L,0); gestalt_set('lram',536870912L,0);
+    gestalt_set('qd  ',0x0200,0); gestalt_set('qtim',0x06408000L,0);
+    gestalt_set('otan',1,0); gestalt_set('otvr',0x01108000L,0);
+    gestalt_set('snd ',0x20,0); gestalt_set('ttsc',1,0);
+    gestalt_set('ascr',1,0); gestalt_set('ascv',0x01100160L,0);
+    gestalt_set('appr',1,0); gestalt_set('apvr',0x0110,0);
+    gestalt_set('drag',1,0); gestalt_set('thds',1,0);
+    reset();
+    strcpy(call.name,"get_capabilities"); strcpy(call.arguments,"{}");
+    assert(!run());
+    used=strlen(result); assert(used>0 && used<AGENT_RESULT_CAP/2);
+    assert(json_parse(result,used,tokens,128)>0);
+    assert(strstr(result,"\"status\":\"ok\"") && strstr(result,"\"native_cpu_type\":\"0x0108\",\"name\":\"PowerPC 750 (G3)\""));
+    assert(strstr(result,"\"physical_bytes\":268435456,\"logical_bytes\":536870912"));
+    assert(strstr(result,"\"color_quickdraw\":{\"available\":true,\"value\":\"0x00000200\"}"));
+    assert(strstr(result,"\"quicktime\":{\"available\":true,\"value\":\"0x06408000\",\"version\":\"6.4.0\""));
+    assert(strstr(result,"\"open_transport\":{\"available\":true,\"value\":\"0x00000001\",\"version\":\"1.1.0\""));
+    assert(strstr(result,"\"sound\":{\"available\":true,\"value\":\"0x00000020\",\"sound_input\":true}"));
+    assert(strstr(result,"\"applescript\":{\"available\":true,\"value\":\"0x00000001\",\"version\":\"1.6.0\",\"version_value\":\"0x01100160\""));
+    /* Optional extensions this system lacks report as plain absences. */
+    assert(strstr(result,"\"speech_recognition\":{\"available\":false}") && strstr(result,"\"quickdraw_3d\":{\"available\":false}") &&
+           strstr(result,"\"quickdraw_gx\":{\"available\":false}") && !strstr(result,"\"error\""));
+    gestalt_set('srta',2,0); gestalt_set('srtb',0x0150,0); gestalt_set('qd3d',1,0); gestalt_set('qdgx',0x02008000L,0);
+    assert(!run());
+    assert(strstr(result,"\"speech_recognition\":{\"available\":true,\"value\":\"0x00000002\",\"version\":\"1.5.0\"") &&
+           strstr(result,"\"quickdraw_3d\":{\"available\":true,\"value\":\"0x00000001\"}") &&
+           strstr(result,"\"quickdraw_gx\":{\"available\":true,\"value\":\"0x02008000\",\"version\":\"2.0.0\""));
+    gestalt_remove('srta'); gestalt_remove('srtb'); gestalt_remove('qd3d'); gestalt_remove('qdgx');
+    assert(strstr(result,"\"appearance_manager\":{\"available\":true") && strstr(result,"\"thread_manager\":{\"available\":true,\"value\":\"0x00000001\"}"));
+    /* A missing optional extension is available:false with no error, and its
+     * siblings still report. */
+    gestalt_remove('ttsc'); gestalt_remove('qtim'); gestalt_remove('apvr');
+    assert(!run());
+    assert(strstr(result,"\"status\":\"ok\"") && !strstr(result,"\"error\""));
+    assert(strstr(result,"\"speech_manager\":{\"available\":false}"));
+    assert(strstr(result,"\"quicktime\":{\"available\":false}"));
+    assert(strstr(result,"\"appearance_manager\":{\"available\":true,\"value\":\"0x00000001\"}"));
+    assert(strstr(result,"\"drag_manager\":{\"available\":true"));
+    /* A defined attribute selector whose bit is clear is also absent, and a
+     * real Gestalt failure is reported beside available:false. */
+    gestalt_set('drag',0x2,0); gestalt_set('thds',0,-192); gestalt_set('snd ',0,0);
+    assert(!run());
+    assert(strstr(result,"\"drag_manager\":{\"available\":false,\"value\":\"0x00000002\"}"));
+    assert(strstr(result,"\"sound\":{\"available\":true,\"value\":\"0x00000000\",\"sound_input\":false}"));
+    gestalt_set('srta',4,0);
+    assert(!run() && strstr(result,"\"speech_recognition\":{\"available\":false,\"value\":\"0x00000004\"}"));
+    gestalt_remove('srta');
+    assert(strstr(result,"\"thread_manager\":{\"available\":false,\"error\":-192}"));
+    /* Original QuickDraw is not Color QuickDraw. */
+    gestalt_set('qd  ',0,0); gestalt_remove('cput'); gestalt_remove('ram ');
+    assert(!run());
+    assert(strstr(result,"\"color_quickdraw\":{\"available\":false,\"value\":\"0x00000000\"}"));
+    assert(strstr(result,"\"native_cpu_type\":null,\"name\":null}") && strstr(result,"\"physical_bytes\":null,"));
+    gestalt_set('cput',0x7777,0);
+    assert(!run() && strstr(result,"\"native_cpu_type\":\"0x7777\",\"name\":null}"));
+    strcpy(call.arguments,"{\"x\":1}");
+    assert(!run() && strstr(result,"ARGUMENTS"));
+
+    /* The workspace volume (vref 1) is deliberately not first, and a hardware
+     * lock, a software lock and an unlocked volume sit around it. */
+    test_volume_count=5; volume_fault=0;
+    test_volumes[0].name="Mac OS 9"; test_volumes[0].vref=-1; test_volumes[0].total=2000000000ULL;
+    test_volumes[0].free_bytes=0; test_volumes[0].attributes=(short)0x8000;
+    test_volumes[1].name="Retro68"; test_volumes[1].vref=1; test_volumes[1].total=6442450944ULL;
+    test_volumes[1].free_bytes=4294967297ULL; test_volumes[1].attributes=0;
+    test_volumes[2].name="CD \xd0 ROM"; test_volumes[2].vref=-5; test_volumes[2].total=650000000ULL; /* MacRoman en dash */
+    test_volumes[2].free_bytes=0; test_volumes[2].attributes=0x0080;
+    test_volumes[3].name="Scratch"; test_volumes[3].vref=-7; test_volumes[3].total=1000ULL;
+    test_volumes[3].free_bytes=999ULL; test_volumes[3].attributes=0;
+    test_volumes[4].name="Backup"; test_volumes[4].vref=-8; test_volumes[4].total=2000ULL;
+    test_volumes[4].free_bytes=1ULL; test_volumes[4].attributes=0;
+    strcpy(call.name,"get_volume_info"); strcpy(call.arguments,"{}");
+    /* The default page holds four, in mount order, with exact entries. */
+    assert(!run() && strstr(result,"\"status\":\"ok\""));
+    assert(strstr(result,"{\"name\":\"Mac OS 9\",\"vref\":-1,\"total_bytes\":2000000000,\"free_bytes\":0,\"read_only\":true,\"workspace\":false},"
+        "{\"name\":\"Retro68\",\"vref\":1,\"total_bytes\":6442450944,\"free_bytes\":4294967297,\"read_only\":false,\"workspace\":true},"
+        "{\"name\":\"CD \xe2\x80\x93 ROM\",\"vref\":-5,\"total_bytes\":650000000,\"free_bytes\":0,\"read_only\":true,\"workspace\":false},"
+        "{\"name\":\"Scratch\",\"vref\":-7,\"total_bytes\":1000,\"free_bytes\":999,\"read_only\":false,\"workspace\":false}]"));
+    assert(strstr(result,"\"truncated\":true,\"next_cursor\":4}") && !strstr(result,"Backup"));
+    strcpy(call.arguments,"{\"cursor\":4}");
+    assert(!run() && strstr(result,"\"name\":\"Backup\",\"vref\":-8") && !strstr(result,"Retro68") &&
+           strstr(result,"\"truncated\":false,\"next_cursor\":null}"));
+    /* A nonzero cursor that still truncates advances by the entries returned. */
+    strcpy(call.arguments,"{\"cursor\":1,\"limit\":1}");
+    assert(!run() && strstr(result,"\"name\":\"Retro68\"") && !strstr(result,"Mac OS 9") && !strstr(result,"CD ") &&
+           strstr(result,"\"truncated\":true,\"next_cursor\":2}"));
+    /* Following next_cursor visits every volume exactly once. */
+    {
+        static const char *const names[]={"Mac OS 9","Retro68","\xe2\x80\x93 ROM","Scratch","Backup"};
+        int seen[5]={0,0,0,0,0}, cursor=0, pages=0, k;
+        do {
+            const char *next;
+            snprintf(call.arguments,sizeof(call.arguments),"{\"cursor\":%d,\"limit\":2}",cursor);
+            assert(!run() && strstr(result,"\"status\":\"ok\""));
+            for(k=0;k<5;k++) if(strstr(result,names[k])) seen[k]++;
+            if(strstr(result,"\"truncated\":false")) break;
+            next=strstr(result,"\"next_cursor\":"); assert(next);
+            cursor=atoi(next+14);
+            assert(cursor>0 && ++pages<10);
+        } while(1);
+        for(k=0;k<5;k++) assert(seen[k]==1);
+        assert(pages==2);
+    }
+    strcpy(call.arguments,"{\"limit\":5}");
+    assert(!run() && strstr(result,"\"truncated\":false,\"next_cursor\":null"));
+    /* A cursor past the last volume is an empty final page. */
+    strcpy(call.arguments,"{\"cursor\":5}");
+    assert(!run() && strstr(result,"\"volumes\":[],\"truncated\":false,\"next_cursor\":null"));
+    strcpy(call.arguments,"{\"limit\":9}");
+    assert(!run() && strstr(result,"ARGUMENTS"));
+    strcpy(call.arguments,"{\"limit\":0}");
+    assert(!run() && strstr(result,"ARGUMENTS"));
+    strcpy(call.arguments,"{\"cursor\":1001}");
+    assert(!run() && strstr(result,"ARGUMENTS"));
+    /* Strict keys: the tool takes no path argument. */
+    strcpy(call.arguments,"{\"path\":\"\"}");
+    assert(!run() && strstr(result,"ARGUMENTS"));
+    /* One unreadable volume is reported in place; the others, including the
+     * workspace, stay visible and the page still advances past it. */
+    volume_fault=-36; volume_fault_index=3; strcpy(call.arguments,"{\"limit\":3}");
+    assert(!run() && strstr(result,"\"status\":\"ok\"") && strstr(result,"\"vref\":1,") && strstr(result,"\"workspace\":true") &&
+           strstr(result,"{\"index\":3,\"error\":-36}") && strstr(result,"\"truncated\":true,\"next_cursor\":3}"));
+    volume_fault=0; volume_fault_index=0; test_volume_count=0;
+    strcpy(call.arguments,"{}");
+    assert(!run() && strstr(result,"\"volumes\":[],\"truncated\":false"));
+    /* Worst cases fit the result cap: a full page of longest escaped names, and
+     * every feature present with a version. */
+    for(i=0;i<8;i++){
+        static char longname[8][32];
+        test_volume_count=8;
+        memset(longname[i],'"',27); longname[i][27]=0; /* each quote escapes to two bytes */
+        test_volumes[i].name=longname[i]; test_volumes[i].vref=(short)(-i-1);
+        test_volumes[i].total=18446744073709551615ULL; test_volumes[i].free_bytes=18446744073709551615ULL;
+        test_volumes[i].attributes=(short)0x8080;
+    }
+    strcpy(call.arguments,"{\"limit\":8}");
+    assert(!run() && strstr(result,"\"status\":\"ok\"") && strlen(result)<AGENT_RESULT_CAP/2);
+    assert(!strstr(result,"\"truncated\":true") && strstr(result,"18446744073709551615"));
+    test_volume_count=0; volume_fault=0;
+    gestalt_row_count=0;
+    gestalt_set('cput',0x0110,0); gestalt_set('ram ',0x7fffffffL,0); gestalt_set('lram',0x7fffffffL,0);
+    gestalt_set('qd  ',0x0200,0); gestalt_set('qtim',0x7fffffffL,0); gestalt_set('otan',0x7fffffffL,0);
+    gestalt_set('otvr',0x7fffffffL,0); gestalt_set('snd ',0x7fffffffL,0); gestalt_set('ttsc',0x7fffffffL,0);
+    gestalt_set('ascr',0x7fffffffL,0); gestalt_set('ascv',0x7fffffffL,0); gestalt_set('appr',0x7fffffffL,0);
+    gestalt_set('apvr',0x7fffffffL,0); gestalt_set('drag',0x7fffffffL,0); gestalt_set('thds',0x7fffffffL,0);
+    gestalt_set('srta',0x7fffffffL,0); gestalt_set('srtb',0x7fffffffL,0); gestalt_set('qd3d',0x7fffffffL,0);
+    gestalt_set('qdgx',0x7fffffffL,0);
+    strcpy(call.name,"get_capabilities"); strcpy(call.arguments,"{}");
+    assert(!run() && strlen(result)<AGENT_RESULT_CAP/2 && strstr(result,"PowerPC G4 (7450)"));
+    assert(!strstr(result,"\"available\":false"));
+    gestalt_row_count=0;
+    puts("PASS get_capabilities and get_volume_info: Gestalt flags, absent extensions, 64-bit space, locks, workspace by volume, cursor paging and unreadable volumes");
+}
 /* Every registry mutation inherits sealed-path protection, including pending
  * tools. The second build of this suite uses a different queue and length. */
 static void queue_guard_checks(void)
@@ -2266,6 +2478,7 @@ int main(void)
     edit_checks();
     large_text_checks();
     inspect_checks();
+    capability_checks();
     protection_checks();
     view_checks();
     instruction_checks();

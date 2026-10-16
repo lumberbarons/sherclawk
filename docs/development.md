@@ -139,7 +139,7 @@ diagnostic built as its own CMake target; launch it in the guest and read
 | Diagnostic | Exercises |
 |---|---|
 | `SherclawkProbe` (`tools/probe.c`) | Real model, tool and follow-up conversation; host variant via `tools/build-host-probe.sh` |
-| `SherclawkWriteCheck`, `SherclawkEditCheck`, `SherclawkSearchCheck`, `SherclawkInspectCheck` | The matching tool executors against the File Manager |
+| `SherclawkWriteCheck`, `SherclawkEditCheck`, `SherclawkSearchCheck`, `SherclawkInspectCheck` | The matching tool executors against the File Manager; `SherclawkInspectCheck` also covers `get_capabilities` and `get_volume_info` |
 | `SherclawkViewImageCheck` | `view_image` against the File Manager: a PNG at the size cap read in bounded steps, refusals and the vision gate |
 | `SherclawkMCPCheck` (`tools/mcp-check.c`) | MCP configuration, TLS initialize, discovery and a Tavily search; see [the MCP guide](mcp.md#protocol-diagnostic) |
 | `SherclawkTrashCheck` | `move_to_trash` against the real volume Trash: what `FindFolder` resolves, a pinned rename, destination identity, recovery and the fallback |

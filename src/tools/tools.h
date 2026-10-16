@@ -19,6 +19,7 @@ enum ToolId {
     TOOL_run_application, TOOL_quit_application, TOOL_get_file_info,
     TOOL_resolve_alias, TOOL_list_processes, TOOL_list_fonts,
     TOOL_measure_text, TOOL_list_resources, TOOL_read_resource,
+    TOOL_get_capabilities, TOOL_get_volume_info,
     TOOL_view_image, TOOL_copy_file, TOOL_read_mcp_result
 };
 typedef struct {

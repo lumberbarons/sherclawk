@@ -1966,6 +1966,8 @@ int tools_execute_checked(const AgentCall *call, const JsonToken *tokens, char *
     case TOOL_measure_text:
     case TOOL_list_resources:
     case TOOL_read_resource:
+    case TOOL_get_capabilities:
+    case TOOL_get_volume_info:
         inspect_execute(call, out, cap); return 0;
     case TOOL_read_mcp_result:
         return mcp_result_read(call, out, cap);

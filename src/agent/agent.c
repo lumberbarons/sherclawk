@@ -49,7 +49,9 @@ static const char policy[] =
     "changing it: get_file_info (Finder type/creator/flags, label, fork sizes, dates), resolve_alias "
     "(alias target and workspace-relative path), list_processes (Process Manager names, PSNs, front/self), "
     "list_fonts and measure_text (installed families and pixel text metrics), list_resources and "
-    "read_resource (resource maps and bounded resource bytes of artifacts and applications). They never "
+    "read_resource (resource maps and bounded resource bytes of artifacts and applications), "
+    "get_capabilities (Gestalt feature detection: a missing optional extension is available:false, not an error) "
+    "and get_volume_info (volume free space and locks; check it before a large build or copy). They never "
     "authorize edits, builds or execution. view_image attaches one workspace PNG, such as a screenshot a "
     "generated application wrote, so you can look at it; it fails when the model cannot accept images, "
     "and then you have not seen the picture and must say so. Do not assume Unix or "
@@ -85,7 +87,6 @@ static const char instructions_heading[] =
  * registry bug; the host registry test fails first because it asserts every
  * row appears here and the whole array parses. The freeze re-checks the fit
  * and refuses over-cap sets, so the merge cannot fail here. */
-#define AGENT_TOOL_SCHEMA_CAP 24576
 /* Frozen remote MCP tool schemas, in the request tools array after the
  * native rows. The text is exactly what discovery redacted; the freeze
  * re-checks structure, name uniqueness and native-name collisions, and

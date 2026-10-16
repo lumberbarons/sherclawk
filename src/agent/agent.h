@@ -39,6 +39,8 @@
  * whose names collide with native tools or each other is refused whole and
  * the run proceeds with native tools only (see docs/limits.md). */
 #define AGENT_MCP_SCHEMA_CAP 8192
+/* The native schema array and the merged native-plus-remote array each fit this. */
+#define AGENT_TOOL_SCHEMA_CAP 24576
 /* Frozen remote function names: discovery maps names to at most 63 bytes, so
  * one name also fits AgentCall.name. AGENT_MCP_TOOL_MAX must equal the
  * registry's MCP_TOOL_MAX (a LIMIT_CHECK in agent.c enforces it). */

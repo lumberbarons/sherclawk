@@ -305,6 +305,22 @@ against `AGENT_RESULT_CAP` before anything is created, the same way the trash
 report is. Each call costs one `mutation_intent`, `mutation_staged` and
 `mutation_committed` record; scratch is static, not stack.
 
+## Capability and volume reports
+
+`get_capabilities` is a fixed-size report that never pages: its feature table
+is compile-time data and the longest possible answer (every feature present
+with a version) stays well under half of `AGENT_RESULT_CAP`, so adding a
+feature means re-checking that margin in `tests/test_tools.c`. `get_volume_info`
+pages at most 8 volumes per call; one entry is at most about 300 bytes (a
+27-character name escaped, plus 64-bit byte counts), so a full page is far
+below `AGENT_RESULT_CAP`, and a page that would not fit is cut early and
+marked `truncated` instead of growing; both worst cases are asserted in
+`tests/test_tools.c`. The two schemas add under 1 KB to the native rows, whose
+total plus the policy is close to the request headroom the next section
+reserves, so keep new descriptions terse; `registry_checks` asserts the native
+rows still leave `AGENT_MCP_SCHEMA_CAP` of the merged array. Both run synchronously in a few File
+Manager or Gestalt calls and hold no scratch beyond one local entry buffer.
+
 ## Reading the evidence
 
 Each model round logs one line to `Retro68:Sherclawk.log` with
@@ -395,7 +411,7 @@ TLS allocations, so its footprint must also be measured on the guest.
   discovery; an admitted set that does not fit the freeze is refused whole
   and the run proceeds natively with a notice.
 - The merged tools array must fit `AGENT_TOOL_SCHEMA_CAP` (24 KiB) beside
-  the native rows, which take about 14.6 KB of it, so a frozen set can use
+  the native rows, which take about 15.5 KB of it, so a frozen set can use
   the whole `AGENT_MCP_SCHEMA_CAP`. (At 16 KiB only about 1.7 KB was left, and
   the real Tavily schemas, 4,129 bytes, were refused in the guest.) The
   freeze re-validates before anything is advertised:

@@ -131,6 +131,18 @@ const ToolDef kToolDefs[] = {
         "\"start_byte\":{\"type\":\"integer\",\"minimum\":0},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":256}},"
         "\"required\":[\"path\",\"type\",\"id\"],\"additionalProperties\":false}}}",
         0, 0, NULL },
+    { TOOL_get_capabilities, "get_capabilities",
+        "{\"type\":\"function\",\"function\":{\"name\":\"get_capabilities\","
+        "\"description\":\"Read-only Gestalt feature detection: native CPU, RAM bytes, and available/version of QuickDraw, QuickTime, Open Transport, Sound, Speech, AppleScript and other optional extensions. A missing extension is available:false, not an error.\","
+        "\"parameters\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}}}",
+        0, 0, NULL },
+    { TOOL_get_volume_info, "get_volume_info",
+        "{\"type\":\"function\",\"function\":{\"name\":\"get_volume_info\","
+        "\"description\":\"Read-only mounted volumes: name, total_bytes, free_bytes, read_only and whether it holds the workspace. Check free_bytes before a large build or copy. Paginated; pass next_cursor unchanged until truncated is false.\","
+        "\"parameters\":{\"type\":\"object\",\"properties\":{"
+        "\"cursor\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":1000},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8}},"
+        "\"additionalProperties\":false}}}",
+        0, 0, NULL },
     { TOOL_view_image, "view_image",
         "{\"type\":\"function\",\"function\":{\"name\":\"view_image\","
         "\"description\":\"Read-only: attach one workspace PNG, such as a screenshot a generated application wrote, so you can look at it. Relative classic colon-separated path from list_files. PNG only, at most " TOOLS_LIMIT_STRINGIFY(AGENT_IMAGE_CAP) " bytes; one image per round. The pixels arrive in a user message right after the tool results and only in the next request, so describe what matters then; call again to see the image again. Fails with an explicit error when the selected model is not known to accept images.\","
