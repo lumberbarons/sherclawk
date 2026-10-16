@@ -133,14 +133,14 @@ const ToolDef kToolDefs[] = {
         0, 0, NULL },
     { TOOL_get_capabilities, "get_capabilities",
         "{\"type\":\"function\",\"function\":{\"name\":\"get_capabilities\","
-        "\"description\":\"Read-only Gestalt feature detection for classic Mac OS: native CPU, physical and logical RAM bytes, and available/version for Color QuickDraw, QuickTime, Open Transport, Sound (with sound_input), Speech Manager, AppleScript, Appearance Manager, Drag Manager and Thread Manager. A missing optional extension is available:false, never an error. Takes no arguments; use get_environment for the workspace and tools.\","
+        "\"description\":\"Read-only Gestalt feature detection: native CPU, RAM bytes, and available/version of QuickDraw, QuickTime, Open Transport, Sound, Speech, AppleScript and other optional extensions. A missing extension is available:false, not an error.\","
         "\"parameters\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}}}",
         0, 0, NULL },
     { TOOL_get_volume_info, "get_volume_info",
         "{\"type\":\"function\",\"function\":{\"name\":\"get_volume_info\","
-        "\"description\":\"Read-only mounted-volume report: name, vref, total_bytes, free_bytes, read_only (hardware or software lock) and whether it holds the workspace. Check free_bytes before a build or copy_file. Pass path (relative classic colon-separated; empty means the workspace) for the one volume containing it, or page all volumes with next_cursor unchanged until truncated is false. path cannot be combined with cursor or limit.\","
-        "\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},"
-        "\"cursor\":{\"type\":\"integer\",\"minimum\":0},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8}},"
+        "\"description\":\"Read-only mounted volumes: name, total_bytes, free_bytes, read_only and whether it holds the workspace. Check free_bytes before a large build or copy. Paginated; pass next_cursor unchanged until truncated is false.\","
+        "\"parameters\":{\"type\":\"object\",\"properties\":{"
+        "\"cursor\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":1000},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8}},"
         "\"additionalProperties\":false}}}",
         0, 0, NULL },
     { TOOL_view_image, "view_image",

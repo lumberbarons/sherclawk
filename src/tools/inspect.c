@@ -990,6 +990,7 @@ static const char *cpu_name(long type)
     case 0x0109: return "PowerPC 604e";
     case 0x010A: return "PowerPC 604ev";
     case 0x010C: return "PowerPC G4";
+    case 0x0110: return "PowerPC G4 (7450)";
     default: return NULL;
     }
 }
@@ -1051,11 +1052,11 @@ static void u64_text(unsigned long long v, char *out, size_t cap)
     for (i = 0; i < n && i + 1 < cap; i++) out[i] = digits[n - 1 - i];
     out[i] = 0;
 }
-static OSErr volume_read(short index, short vref, XVolumeParam *pb, Str255 name)
+static OSErr volume_read(short index, XVolumeParam *pb, Str255 name)
 {
     memset(pb, 0, sizeof(*pb));
     name[0] = 0;
-    pb->ioNamePtr = name; pb->ioVolIndex = index; pb->ioVRefNum = vref;
+    pb->ioNamePtr = name; pb->ioVolIndex = index;
     return PBXGetVolInfoSync(pb);
 }
 static int volume_entry(const XVolumeParam *pb, const Str255 name, int workspace, char *entry, size_t cap)
@@ -1074,42 +1075,31 @@ static int volume_entry(const XVolumeParam *pb, const Str255 name, int workspace
 }
 static void get_volume_info(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap)
 {
-    char path[512] = "", entry[400];
-    FSSpec spec, workspace;
+    char entry[400];
+    FSSpec workspace;
     XVolumeParam pb;
     Str255 name;
     OSErr err;
     long cursor, limit, index;
-    int by_path, count = 0, truncated = 0;
+    int count = 0, truncated = 0;
     short workspace_vref = 0;
     size_t at = 0;
-    by_path = json_member(call->arguments, tokens, 0, "path") >= 0;
-    if (json_args_check_keys(call->arguments, tokens, 0, "|path||cursor||limit|") ||
-        (by_path && (json_member(call->arguments, tokens, 0, "cursor") >= 0 || json_member(call->arguments, tokens, 0, "limit") >= 0 ||
-                     json_args_string(call->arguments, tokens, "path", path, sizeof(path)) < 0)) ||
+    if (json_args_check_keys(call->arguments, tokens, 0, "|cursor||limit|") ||
         json_args_int(call->arguments, tokens, "cursor", 0, 0, 1000, &cursor) ||
         json_args_int(call->arguments, tokens, "limit", 4, 1, 8, &limit)) {
-        fail(out, cap, "ARGUMENTS", "Expected either a workspace path, or optional cursor (returned value) and limit 1-8.", 0); return;
+        fail(out, cap, "ARGUMENTS", "Expected optional cursor (returned value) and limit 1-8.", 0); return;
     }
     if (!tools_workspace_root(&workspace)) workspace_vref = workspace.vRefNum;
     if (json_buf_append(JSON_BUF(out, cap, &at), "{\"status\":\"ok\",\"volumes\":[")) goto limit;
-    if (by_path) {
-        err = path[0] ? tools_resolve(path, &spec) : tools_workspace_root(&spec);
-        if (err) { fail(out, cap, "FILE", "Cannot resolve the workspace path.", err); return; }
-        err = volume_read(0, spec.vRefNum, &pb, name);
-        if (err) { fail(out, cap, "VOLUME", "Cannot read the volume of this path.", err); return; }
-        if (volume_entry(&pb, name, spec.vRefNum == workspace_vref, entry, sizeof(entry)) ||
-            json_buf_append(JSON_BUF(out, cap, &at), entry)) goto limit;
-        if (json_buf_append(JSON_BUF(out, cap, &at), "],\"truncated\":false,\"next_cursor\":null}")) goto limit;
-        return;
-    }
     for (index = cursor + 1;; index++) {
-        err = volume_read((short)index, 0, &pb, name);
+        err = volume_read((short)index, &pb, name);
         if (err == VOLUME_NONE_ERR) break;
-        if (err) { fail(out, cap, "VOLUME", "Volume enumeration failed.", err); return; }
         if (count == limit) { truncated = 1; break; }
-        if (volume_entry(&pb, name, pb.ioVRefNum == workspace_vref, entry, sizeof(entry))) goto limit;
-        if (at + strlen(entry) + 80 >= cap) { truncated = 1; break; }
+        /* One unreadable volume (offline, unresponsive) is reported in place
+         * so the rest of the report, including the workspace, stays usable. */
+        if (err) snprintf(entry, sizeof(entry), "{\"index\":%ld,\"error\":%d}", index, (int)err);
+        else if (volume_entry(&pb, name, pb.ioVRefNum == workspace_vref, entry, sizeof(entry))) goto limit;
+        if (count && at + strlen(entry) + 80 >= cap) { truncated = 1; break; }
         if (count && json_buf_append(JSON_BUF(out, cap, &at), ",")) goto limit;
         if (json_buf_append(JSON_BUF(out, cap, &at), entry)) goto limit;
         count++;

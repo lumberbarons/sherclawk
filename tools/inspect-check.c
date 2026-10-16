@@ -151,6 +151,7 @@ static void feature_check(const char *key, unsigned long selector, long mask)
     check(strstr(result, needle) != NULL, name);
     if (err) check(!strstr(result, "\"error\""), "absent extension is not an error");
 }
+static char workspace_page[AGENT_RESULT_CAP];
 static double number_after(const char *from, const char *key)
 {
     const char *at = strstr(from, key);
@@ -386,31 +387,26 @@ int main(void)
     pages = total = 0; self_seen = 0;
     do {
         execute();
-        check(strstr(result, "\"status\":\"error\"") == NULL, "volume page");
-        if (strstr(result, "\"workspace\":true")) self_seen++;
+        check(strstr(result, "\"status\":\"error\"") == NULL && !strstr(result, "\"error\""), "volume page");
+        if (strstr(result, "\"workspace\":true")) { self_seen++; strcpy(workspace_page, result); }
         total++;
         if (strstr(result, "\"truncated\":false")) break;
-        if (int_field("next_cursor") < 0) break;
+        if (int_field("next_cursor") < 1) break;
         snprintf(call.arguments, sizeof(call.arguments), "{\"limit\":1,\"cursor\":%d}", int_field("next_cursor"));
         if (++pages > 20) break;
     } while (1);
     check(total >= 1 && self_seen == 1, "volume paging reaches the workspace volume exactly once");
-    strcpy(call.arguments, "{\"path\":\"\"}");
-    execute();
     {
-        double total_bytes = number_after(result, "\"total_bytes\":"), free_bytes = number_after(result, "\"free_bytes\":");
-        check(strstr(result, "\"workspace\":true") && strstr(result, "\"name\":\"Retro68\"") &&
+        double total_bytes = number_after(workspace_page, "\"total_bytes\":"), free_bytes = number_after(workspace_page, "\"free_bytes\":");
+        check(strstr(workspace_page, "\"name\":\"Retro68\"") &&
             total_bytes > 0 && free_bytes > 0 && free_bytes <= total_bytes, "workspace volume space reported");
-        check(strstr(result, "\"read_only\":false") != NULL, "workspace volume is writable");
-        snprintf(call.arguments, sizeof(call.arguments), "{\"path\":\"%s\"}", sample_path);
-        execute();
-        check(strstr(result, "\"workspace\":true") && number_after(result, "\"total_bytes\":") == total_bytes,
-            "fixture path resolves to the workspace volume");
+        check(strstr(workspace_page, "\"read_only\":false") != NULL, "workspace volume is writable");
     }
-    strcpy(call.arguments, "{\"path\":\"Sherclawk Inspect Missing\"}");
-    execute(); check(strstr(result, "\"code\":\"FILE\"") != NULL, "missing volume path refused");
-    strcpy(call.arguments, "{\"path\":\"\",\"limit\":1}");
-    execute(); check(strstr(result, "ARGUMENTS") != NULL, "path with limit refused");
+    strcpy(call.arguments, "{\"limit\":8}");
+    execute();
+    check(strlen(result) < AGENT_RESULT_CAP && strstr(result, "\"truncated\":false") != NULL, "all volumes in one page");
+    strcpy(call.arguments, "{\"path\":\"\"}");
+    execute(); check(strstr(result, "ARGUMENTS") != NULL, "path argument refused");
 
     fprintf(logfile, "RESULT failures=%d\n", failures);
     fclose(logfile);

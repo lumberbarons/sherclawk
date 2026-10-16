@@ -292,19 +292,18 @@ clear (its `value` is still shown). Only an unexpected Gestalt failure adds
 `"error"` with the native code, beside `available:false`. If the CPU, RAM or
 size selector itself fails, that field is null rather than failing the report.
 
-`get_volume_info(path | cursor, limit)` reports mounted volumes: `name`,
-`vref`, `total_bytes`, `free_bytes`, `read_only` (a hardware or software
-lock) and `workspace`, true for the volume that holds the configured
+`get_volume_info(cursor, limit)` pages the mounted volumes in File Manager
+order: `name`, `vref`, `total_bytes`, `free_bytes`, `read_only` (a hardware or
+software lock) and `workspace`, true for the volume that holds the configured
 workspace. Byte counts come from `PBXGetVolInfoSync` as full 64-bit values, so
-volumes above 4 GB report exactly; they are observational and change as
-files are written. Without arguments it pages every mounted volume in File
-Manager order (`limit` 1–8, default 4; pass `next_cursor` unchanged until
-`truncated` is false). With `path` (relative classic colon-separated, empty
-meaning the workspace) it reports only the volume that contains that existing
-path, with no paging; `path` cannot be combined with `cursor` or `limit`. A
-path that does not resolve is `FILE`, and a File Manager failure is `VOLUME`
-with the native code. Check `free_bytes` of the workspace volume against the
-project and artifact size before starting a multi-file build.
+volumes above 4 GB report exactly; they are observational and change as files
+are written. Pass `next_cursor` unchanged until `truncated` is false. The
+cursor is a position in the mount list, so a volume mounted or ejected between
+pages can shift it; re-read from the start if that matters. A volume the File
+Manager cannot read (offline, unresponsive) is reported in place as
+`{"index":n,"error":code}` and the rest of the report still arrives. Check the
+workspace volume's `free_bytes` against the project and artifact size before
+starting a multi-file build.
 
 ## Viewing images
 

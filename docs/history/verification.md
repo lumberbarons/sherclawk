@@ -882,7 +882,7 @@ requires successful retained extraction and distinct successful page reads.
 `get_capabilities` and `get_volume_info` were verified in the OS 9.2.2 guest
 with `SherclawkInspectCheck` (extended for them) before either was added to
 `agent_tool_schemas`. The diagnostic APPL's SHA-256 was
-`1a0f3cd949504b5d4f0fd58a7402fd668678ae8c5f3f165e59a8d444a2e655b7`. Result:
+`93d9c3850bc1787aa82bc41224f3231fdc624b66f87992009cb455ef9e33a63f`. Result:
 `RESULT failures=0`.
 
 `get_capabilities` reported a PowerPC 750 (`0x0108`), 536,870,912 physical and
@@ -897,14 +897,13 @@ against a direct Gestalt call made outside the tool, so every present and
 absent answer above was checked, not just read. The report was about 1,200
 bytes of the 4,096-byte result cap.
 
-`get_volume_info` paged the guest's two volumes one per call (`limit` 1):
+`get_volume_info` paged the guest's volumes one per call (`limit` 1):
 Macintosh HD (8,588,574,720 total, 7,645,519,872 free) and the share
 Retro68 (105,089,261,568 total, 30,481,670,144 free, writable), with
 `workspace:true` on exactly one. The Retro68 total exceeds 4 GB, exercising the
 64-bit counts; its free space agreed with the Finder's "28.38 GB available"
-window header. `path:""` and a fixture path under the workspace both resolved
-to the workspace volume, a missing path was refused `FILE` (`-43`), and `path`
-combined with `limit` was refused `ARGUMENTS`.
+window header. All volumes also fit one `limit` 8 page, and a `path` argument
+was refused `ARGUMENTS`.
 
 `tools/check.sh`, `tools/check-transport.sh`, `tools/lint.sh` and Docker
 `./build.sh` passed. No runtime buffer, deadline or shipping partition limit
