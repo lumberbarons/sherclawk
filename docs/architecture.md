@@ -17,10 +17,12 @@ C values; the UI adapts the rectangles to QuickDraw and applies scroll offsets.
 The transcript and MCP editor share the same scroll calculations.
 
 The Preferences model picker follows the same split. `src/app/prefs_model.c` holds the
-fetched catalog page, the local filter, the confirmed row and the fetch-complete
-transitions; Dialog Manager, Menu Manager and network effects reach it only through
-the `PrefsModelHost` callbacks that `main.c` supplies, so a fake host exercises it on
-the host. Loading and saving the preferences file stays in `main.c`.
+fetched catalog page, the local filter, the confirmed row, hand-edit tracking and
+the fetch transitions, including the deadline and drain rules; Dialog Manager,
+Menu Manager and network effects reach it only through the `PrefsModelHost`
+callbacks that `main.c` supplies, so a fake host exercises it on the host.
+`main.c` reads the model's state but changes it only through `prefs_model_*`
+calls. Loading and saving the preferences file stays in `main.c`.
 
 `chat_append_message()` in `src/app/chat.c` converts UTF-8 to bounded MacRoman/CR display
 text, substitutes session-file notices for oversized entries, and caps accumulated

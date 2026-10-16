@@ -103,7 +103,7 @@ void prefs_model_begin(PrefsModel *m)
 void prefs_model_find(PrefsModel *m)
 {
     char text[CHAT_MODEL_CAP];
-    if (m->fetch || m->draining) return;
+    if (prefs_model_busy(m)) return;
     m->host.get_model_text(m->context, text, sizeof(text));
     strcpy(m->last_text, text);
     m->filter[0] = 0;
@@ -206,6 +206,56 @@ void prefs_model_fetch_complete(PrefsModel *m, const char *body, size_t len)
     }
     m->edited = 0;
     m->host.draw_rows(m->context);
+}
+
+int prefs_model_text_changed(PrefsModel *m, const char *text)
+{
+    if (!strcmp(text, m->last_text)) return 0;
+    strcpy(m->last_text, text);
+    strcpy(m->filter, text);
+    m->edited = 1;
+    return 1;
+}
+
+int prefs_model_is_confirmed(const PrefsModel *m, const char *text)
+{
+    return m->confirmed_id[0] && !strcmp(m->confirmed_id, text);
+}
+
+int prefs_model_busy(const PrefsModel *m)
+{
+    return m->fetch || m->draining;
+}
+
+void prefs_model_step(PrefsModel *m)
+{
+    const char *body = NULL;
+    size_t len = 0;
+    int result;
+    uint32_t now;
+    if (!prefs_model_busy(m)) return;
+    now = m->host.now(m->context);
+    if (!m->draining && now - m->fetch_start > PREFS_FETCH_DEADLINE) {
+        m->draining = 1;
+        m->fetch_start = now;
+    }
+    result = m->host.poll(m->context, &body, &len);
+    if (result == PREFS_POLL_PENDING) {
+        if (m->draining && m->host.now(m->context) - m->fetch_start > PREFS_FETCH_DEADLINE) {
+            m->host.close(m->context);
+            prefs_model_fetch_failed(m, 1);
+        }
+        return;
+    }
+    m->host.close(m->context);
+    if (m->draining) { prefs_model_fetch_failed(m, 1); return; }
+    if (result == PREFS_POLL_ERROR) { prefs_model_fetch_failed(m, 0); return; }
+    prefs_model_fetch_complete(m, body, len);
+}
+
+void prefs_model_resume(PrefsModel *m)
+{
+    if (prefs_model_busy(m)) m->fetch_start = m->host.now(m->context);
 }
 
 void prefs_model_remember_saved(PrefsModel *m, const char *model)
