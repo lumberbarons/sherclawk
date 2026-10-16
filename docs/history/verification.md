@@ -882,7 +882,7 @@ requires successful retained extraction and distinct successful page reads.
 `get_capabilities` and `get_volume_info` were verified in the OS 9.2.2 guest
 with `SherclawkInspectCheck` (extended for them) before either was added to
 `agent_tool_schemas`. The diagnostic APPL's SHA-256 was
-`93d9c3850bc1787aa82bc41224f3231fdc624b66f87992009cb455ef9e33a63f`. Result:
+`c1fd176eedb27cd5251876193e65f8e809039f4d72d667afc1f5909f023b35bd`. Result:
 `RESULT failures=0`.
 
 `get_capabilities` reported a PowerPC 750 (`0x0108`), 536,870,912 physical and
@@ -892,18 +892,23 @@ Transport 2.7.9, Sound with input, Speech Manager, AppleScript 1.6.0 (Gestalt
 Recognition 2.0.3 and QuickDraw 3D present. QuickDraw GX is not installed in
 this guest: its Gestalt selector answered `-5551` and the tool reported
 `"quickdraw_gx":{"available":false}` with no `error` field, while every other
-feature still reported. The diagnostic compares each feature's `available`
-against a direct Gestalt call made outside the tool, so every present and
-absent answer above was checked, not just read. The report was about 1,200
-bytes of the 4,096-byte result cap.
+feature still reported. The diagnostic reads Gestalt itself and compares each feature's `available`,
+raw `value`, version value and (for Sound) input bit, plus the CPU type and
+both RAM sizes, against what the tool reported, so every present and absent
+answer above was checked, not just read. It logs a SKIP instead of a pass when
+no selector is absent; here one is. The report was about 1,200 bytes of the
+4,096-byte result cap.
 
-`get_volume_info` paged the guest's volumes one per call (`limit` 1):
-Macintosh HD (8,588,574,720 total, 7,645,519,872 free) and the share
-Retro68 (105,089,261,568 total, 30,481,670,144 free, writable), with
-`workspace:true` on exactly one. The Retro68 total exceeds 4 GB, exercising the
-64-bit counts; its free space agreed with the Finder's "28.38 GB available"
-window header. All volumes also fit one `limit` 8 page, and a `path` argument
-was refused `ARGUMENTS`.
+`get_volume_info` paged the guest's volumes one per call (`limit` 1), each
+page holding exactly one entry: Macintosh HD (8,588,574,720 total) and the
+share Retro68 (105,089,261,568 total, writable), with `workspace:true` only on
+the volume whose vref equals the workspace's. The Retro68 total exceeds 4 GB,
+exercising the 64-bit counts; each entry's total bytes, free bytes (within
+16 MiB, since files are written during the run) and read-only flag were
+compared with a direct `PBXGetVolInfoSync` call, and the paged volumes matched
+one `limit` 8 page in order. No volume in this guest is locked, so the
+diagnostic logged a SKIP for the locked branch; the lock bits are covered by
+the host suite only. A `path` argument was refused `ARGUMENTS`.
 
 `tools/check.sh`, `tools/check-transport.sh`, `tools/lint.sh` and Docker
 `./build.sh` passed. No runtime buffer, deadline or shipping partition limit

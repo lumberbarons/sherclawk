@@ -137,25 +137,75 @@ static int make_alias(const char *relative, const FSSpec *target)
     if (!err) err = FlushVol(NULL, spec.vRefNum);
     return err ? -1 : 0;
 }
-/* Cross-check one reported feature against a direct Gestalt answer taken
- * outside the tool, so an absent extension is verified as absent. Mask 0
- * means any answer, -1 a version of at least 1, otherwise attribute bits. */
-static void feature_check(const char *key, unsigned long selector, long mask)
+/* Cross-check one reported feature against Gestalt answers taken outside the
+ * tool: availability, the raw value, the version value and the sound-input
+ * bit. An absent extension is verified as absent, with no error field. */
+enum { RULE_ANY, RULE_MASK, RULE_MIN };
+static int absent_features;
+static void feature_check(const char *key, unsigned long selector, int rule, long threshold,
+                          int versioned, unsigned long version_selector, int flag_bit)
 {
-    char needle[64], name[96];
-    long value = 0;
-    OSErr err = Gestalt((OSType)selector, &value);
-    int expected = !err && (mask == 0 ? 1 : mask < 0 ? value >= 1 : (value & mask) != 0);
-    snprintf(needle, sizeof(needle), "\"%s\":{\"available\":%s", key, expected ? "true" : "false");
+    char start[64], entry[256], expect[64], name[96];
+    const char *at, *end;
+    long value = 0, version = 0;
+    OSErr err = Gestalt((OSType)selector, &value), version_err = 0;
+    int expected = !err && (rule == RULE_ANY ? 1 : rule == RULE_MASK ? (value & threshold) != 0 : value >= threshold);
+    if (err) absent_features++;
     snprintf(name, sizeof(name), "%s %s (gestalt %d)", key, expected ? "present" : "absent", (int)err);
-    check(strstr(result, needle) != NULL, name);
-    if (err) check(!strstr(result, "\"error\""), "absent extension is not an error");
+    snprintf(start, sizeof(start), "\"%s\":{", key);
+    at = strstr(result, start);
+    end = at ? strchr(at, '}') : NULL;
+    if (!at || !end || (size_t)(end - at) >= sizeof(entry)) { check(0, name); return; }
+    memcpy(entry, at, (size_t)(end - at)); entry[end - at] = 0;
+    snprintf(expect, sizeof(expect), "{\"available\":%s", expected ? "true" : "false");
+    check(strstr(entry, expect) != NULL, name);
+    snprintf(name, sizeof(name), "%s has no error field unless Gestalt failed unexpectedly", key);
+    check((strstr(entry, "\"error\"") != NULL) == (err && err != -5551), name);
+    if (!err) {
+        snprintf(expect, sizeof(expect), "\"value\":\"0x%08lx\"", (unsigned long)value & 0xffffffffUL);
+        snprintf(name, sizeof(name), "%s raw value", key);
+        check(strstr(entry, expect) != NULL, name);
+    }
+    if (expected && versioned) {
+        long number = value;
+        if (version_selector) { version_err = Gestalt((OSType)version_selector, &version); number = version; }
+        snprintf(expect, sizeof(expect), "\"version_value\":\"0x%08lx\"", (unsigned long)number & 0xffffffffUL);
+        snprintf(name, sizeof(name), "%s version value", key);
+        check(version_err ? strstr(entry, "\"version_value\"") == NULL : strstr(entry, expect) != NULL, name);
+    }
+    if (expected && flag_bit >= 0) {
+        snprintf(expect, sizeof(expect), "\"sound_input\":%s", (value >> flag_bit) & 1 ? "true" : "false");
+        snprintf(name, sizeof(name), "%s input bit", key);
+        check(strstr(entry, expect) != NULL, name);
+    }
 }
-static char workspace_page[AGENT_RESULT_CAP];
 static double number_after(const char *from, const char *key)
 {
     const char *at = strstr(from, key);
     return at ? atof(at + strlen(key)) : -1;
+}
+/* Every "vref" of a volume report, in order. */
+static int vrefs_of(const char *text, int *out, int cap)
+{
+    int n = 0;
+    const char *at = text;
+    while ((at = strstr(at, "\"vref\":")) != NULL && n < cap) { out[n++] = atoi(at + 7); at += 7; }
+    return n;
+}
+static double be64_double(const void *field)
+{
+    const unsigned char *b = field;
+    double v = 0;
+    int i;
+    for (i = 0; i < 8; i++) v = v * 256 + b[i];
+    return v;
+}
+/* Volume facts read straight from the File Manager, not through the tool. */
+static int direct_volume(int vref, XVolumeParam *pb, Str255 name)
+{
+    memset(pb, 0, sizeof(*pb)); name[0] = 0;
+    pb->ioNamePtr = name; pb->ioVRefNum = (short)vref;
+    return PBXGetVolInfoSync(pb) == 0;
 }
 /* ------------------------------------------------------------------ */
 int main(void)
@@ -365,46 +415,82 @@ int main(void)
 
     strcpy(call.name, "get_capabilities"); strcpy(call.arguments, "{}");
     execute();
-    check(strlen(result) < AGENT_RESULT_CAP && strstr(result, "\"status\":\"ok\"") && !strstr(result, "\"code\""), "capabilities reported");
-    check(strstr(result, "\"native_cpu_type\":\"0x") && number_after(result, "\"physical_bytes\":") > 0 &&
-        number_after(result, "\"logical_bytes\":") > 0, "processor and memory reported");
-    check(strstr(result, "\"color_quickdraw\":{\"available\":true") != NULL, "Color QuickDraw present");
-    check(strstr(result, "\"open_transport\":{\"available\":true") != NULL, "Open Transport present");
-    feature_check("quicktime", 'qtim', -1);
-    feature_check("sound", 'snd ', 0);
-    feature_check("speech_manager", 'ttsc', 1);
-    feature_check("applescript", 'ascr', 1);
-    feature_check("appearance_manager", 'appr', 1);
-    feature_check("drag_manager", 'drag', 1);
-    feature_check("thread_manager", 'thds', 1);
-    feature_check("speech_recognition", 'srta', 3);
-    feature_check("quickdraw_3d", 'qd3d', 1);
-    feature_check("quickdraw_gx", 'qdgx', -1);
+    check(strlen(result) < AGENT_RESULT_CAP / 2 && strstr(result, "\"status\":\"ok\"") && !strstr(result, "\"code\""), "capabilities reported");
+    {
+        long cpu = 0, physical = 0, logical = 0;
+        char expect[64];
+        check(!Gestalt('cput', &cpu) && !Gestalt('ram ', &physical) && !Gestalt('lram', &logical), "direct processor and memory reads");
+        snprintf(expect, sizeof(expect), "\"native_cpu_type\":\"0x%04lx\"", (unsigned long)cpu & 0xffffUL);
+        check(strstr(result, expect) != NULL, "processor type matches Gestalt");
+        snprintf(expect, sizeof(expect), "\"physical_bytes\":%lu,", (unsigned long)physical & 0xffffffffUL);
+        check(strstr(result, expect) != NULL, "physical RAM matches Gestalt");
+        snprintf(expect, sizeof(expect), "\"logical_bytes\":%lu}", (unsigned long)logical & 0xffffffffUL);
+        check(strstr(result, expect) != NULL, "logical RAM matches Gestalt");
+    }
+    absent_features = 0;
+    feature_check("color_quickdraw", 'qd  ', RULE_MIN, 0x0100, 0, 0, -1);
+    feature_check("quicktime", 'qtim', RULE_MIN, 1, 1, 0, -1);
+    feature_check("open_transport", 'otan', RULE_MASK, 1, 1, 'otvr', -1);
+    feature_check("sound", 'snd ', RULE_ANY, 0, 0, 0, 5);
+    feature_check("speech_manager", 'ttsc', RULE_MASK, 1, 0, 0, -1);
+    feature_check("applescript", 'ascr', RULE_MASK, 1, 1, 'ascv', -1);
+    feature_check("appearance_manager", 'appr', RULE_MASK, 1, 1, 'apvr', -1);
+    feature_check("drag_manager", 'drag', RULE_MASK, 1, 0, 0, -1);
+    feature_check("thread_manager", 'thds', RULE_MASK, 1, 0, 0, -1);
+    feature_check("speech_recognition", 'srta', RULE_MASK, 3, 1, 'srtb', -1);
+    feature_check("quickdraw_3d", 'qd3d', RULE_MASK, 1, 0, 0, -1);
+    feature_check("quickdraw_gx", 'qdgx', RULE_MIN, 1, 1, 0, -1);
+    /* This guest lacks QuickDraw GX; a guest with every extension cannot show
+     * the absent path, and the log must say so instead of looking healthy. */
+    if (absent_features) fprintf(logfile, "PASS absent-extension path exercised by %d selector(s)\n", absent_features);
+    else { fprintf(logfile, "SKIP absent-extension path not exercised: every optional selector is present\n"); fflush(logfile); }
     strcpy(call.arguments, "{\"extra\":1}");
     execute(); check(strstr(result, "ARGUMENTS") != NULL, "capabilities refuse arguments");
 
-    strcpy(call.name, "get_volume_info"); strcpy(call.arguments, "{\"limit\":1}");
-    pages = total = 0; self_seen = 0;
-    do {
-        execute();
-        check(strstr(result, "\"status\":\"error\"") == NULL && !strstr(result, "\"error\""), "volume page");
-        if (strstr(result, "\"workspace\":true")) { self_seen++; strcpy(workspace_page, result); }
-        total++;
-        if (strstr(result, "\"truncated\":false")) break;
-        if (int_field("next_cursor") < 1) break;
-        snprintf(call.arguments, sizeof(call.arguments), "{\"limit\":1,\"cursor\":%d}", int_field("next_cursor"));
-        if (++pages > 20) break;
-    } while (1);
-    check(total >= 1 && self_seen == 1, "volume paging reaches the workspace volume exactly once");
+    /* Volumes: one entry per limit-1 page, the same set and order as one big
+     * page, and every entry compared with a direct File Manager read. */
     {
-        double total_bytes = number_after(workspace_page, "\"total_bytes\":"), free_bytes = number_after(workspace_page, "\"free_bytes\":");
-        check(strstr(workspace_page, "\"name\":\"Retro68\"") &&
-            total_bytes > 0 && free_bytes > 0 && free_bytes <= total_bytes, "workspace volume space reported");
-        check(strstr(workspace_page, "\"read_only\":false") != NULL, "workspace volume is writable");
+        int paged[16], paged_count = 0, all[16], all_count, k, page_vrefs[2], locked_seen = 0, workspace_vref_seen = 0;
+        int workspace_vref = 0, have_workspace;
+        FSSpec ws;
+        strcpy(call.name, "get_volume_info"); strcpy(call.arguments, "{\"limit\":1}");
+        pages = 0;
+        do {
+            XVolumeParam pb; Str255 vol_name; char expect[48];
+            double reported_total, reported_free, direct_free;
+            execute();
+            check(strstr(result, "\"status\":\"error\"") == NULL && !strstr(result, "\"error\""), "volume page");
+            check(vrefs_of(result, page_vrefs, 2) == 1, "limit 1 page holds exactly one volume");
+            if (vrefs_of(result, page_vrefs, 2) == 1 && paged_count < 16) paged[paged_count++] = page_vrefs[0];
+            if (vrefs_of(result, page_vrefs, 2) == 1 && direct_volume(page_vrefs[0], &pb, vol_name)) {
+                reported_total = number_after(result, "\"total_bytes\":");
+                reported_free = number_after(result, "\"free_bytes\":");
+                direct_free = be64_double(&pb.ioVFreeBytes);
+                check(reported_total == be64_double(&pb.ioVTotalBytes), "total bytes match the File Manager");
+                check(reported_free - direct_free < 16777216.0 && direct_free - reported_free < 16777216.0, "free bytes match the File Manager");
+                snprintf(expect, sizeof(expect), "\"read_only\":%s", (pb.ioVAtrb & 0x8080) ? "true" : "false");
+                check(strstr(result, expect) != NULL, "read-only flag matches the volume lock bits");
+                if (pb.ioVAtrb & 0x8080) locked_seen = 1;
+                check(vol_name[0] > 0 && strstr(result, "\"name\":\"") != NULL, "volume named");
+                if (strstr(result, "\"workspace\":true")) { workspace_vref_seen++; workspace_vref = page_vrefs[0]; }
+            } else check(0, "volume read directly");
+            if (strstr(result, "\"truncated\":false")) break;
+            if (int_field("next_cursor") < 1) break;
+            snprintf(call.arguments, sizeof(call.arguments), "{\"limit\":1,\"cursor\":%d}", int_field("next_cursor"));
+        } while (++pages < 16);
+        if (paged_count >= 2) check(1, "volumes span more than one page");
+        else fprintf(logfile, "SKIP paging not exercised: only one volume is mounted\n");
+        strcpy(call.arguments, "{\"limit\":8}");
+        execute();
+        all_count = vrefs_of(result, all, 16);
+        check(strstr(result, "\"truncated\":false") != NULL && all_count == paged_count, "one big page holds every volume");
+        for (k = 0; k < all_count && k < paged_count; k++)
+            if (all[k] != paged[k]) { check(0, "paged and one-page volume order agree"); break; }
+        if (k == all_count) check(1, "paged and one-page volume order agree");
+        have_workspace = !spec_for("", 1, &ws);
+        check(have_workspace && workspace_vref_seen == 1 && ws.vRefNum == workspace_vref, "workspace flag marks exactly the workspace volume");
+        if (!locked_seen) fprintf(logfile, "SKIP locked branch not exercised: no volume is locked\n");
     }
-    strcpy(call.arguments, "{\"limit\":8}");
-    execute();
-    check(strlen(result) < AGENT_RESULT_CAP && strstr(result, "\"truncated\":false") != NULL, "all volumes in one page");
     strcpy(call.arguments, "{\"path\":\"\"}");
     execute(); check(strstr(result, "ARGUMENTS") != NULL, "path argument refused");
 
