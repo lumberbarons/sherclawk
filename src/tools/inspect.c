@@ -1,6 +1,7 @@
 /* Read-only OS 9 inspection tools: resource maps and bounded resource bytes,
- * Finder catalog identity, alias resolution, Process Manager liveness and
- * QuickDraw text metrics. Nothing here writes to a volume or changes Finder
+ * Finder catalog identity, alias resolution, Process Manager liveness,
+ * QuickDraw text metrics, Gestalt capabilities and mounted-volume space.
+ * Nothing here writes to a volume or changes Finder
  * state; results are bounded and paginate with next_* cursors. Resource reads
  * never load whole resources: handles are opened with automatic loading
  * disabled, sizes come from the map, and bytes arrive in pages through
@@ -21,6 +22,7 @@
 #include <Quickdraw.h>
 #include <QuickdrawText.h>
 #include <Memory.h>
+#include <Gestalt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -898,6 +900,231 @@ limit:
     fail(out, cap, "LIMIT", "Resource read exceeds the result capacity.", 0);
 }
 /* ------------------------------------------------------------------ */
+/* Gestalt answers "gestaltUndefSelectorErr" for a selector this system never
+ * defined, which is how an absent optional extension reports itself. */
+#define GESTALT_UNDEFINED_SELECTOR (-5551)
+
+enum { PRESENT_ANY, PRESENT_MASK, PRESENT_MIN };
+enum { VERSION_NONE, VERSION_NUM, VERSION_SHORT };
+typedef struct {
+    const char *key;
+    unsigned long selector;
+    int rule;                      /* how the answer decides availability */
+    long threshold;                /* mask of attribute bits, or minimum value */
+    unsigned long version_selector;
+    int version_kind;
+    const char *flag_key;          /* one extra attribute bit worth naming */
+    int flag_bit;
+} Feature;
+static const Feature features[] = {
+    { "color_quickdraw", 'qd  ', PRESENT_MIN, 0x0100, 0, VERSION_NONE, NULL, 0 },
+    { "quicktime", 'qtim', PRESENT_MIN, 1, 0, VERSION_NUM, NULL, 0 },
+    { "open_transport", 'otan', PRESENT_MASK, 1, 'otvr', VERSION_NUM, NULL, 0 },
+    { "sound", 'snd ', PRESENT_ANY, 0, 0, VERSION_NONE, "sound_input", 5 },
+    { "speech_manager", 'ttsc', PRESENT_MASK, 1, 0, VERSION_NONE, NULL, 0 },
+    { "applescript", 'ascr', PRESENT_MASK, 1, 'ascv', VERSION_SHORT, NULL, 0 },
+    { "appearance_manager", 'appr', PRESENT_MASK, 1, 'apvr', VERSION_SHORT, NULL, 0 },
+    { "drag_manager", 'drag', PRESENT_MASK, 1, 0, VERSION_NONE, NULL, 0 },
+    { "thread_manager", 'thds', PRESENT_MASK, 1, 0, VERSION_NONE, NULL, 0 },
+    /* Installed only on some systems: the usual absent-extension cases. */
+    { "speech_recognition", 'srta', PRESENT_MASK, 3, 'srtb', VERSION_SHORT, NULL, 0 },
+    { "quickdraw_3d", 'qd3d', PRESENT_MASK, 1, 0, VERSION_NONE, NULL, 0 },
+    { "quickdraw_gx", 'qdgx', PRESENT_MIN, 1, 0, VERSION_NUM, NULL, 0 },
+};
+/* Short versions are BCD in the low word (0x0160 is 1.6.0); AppleScript
+ * answers 0x01100160 on Mac OS 9.2.2, so only the low word is decoded. */
+static void version_text(long value, int kind, char *out, size_t cap)
+{
+    unsigned long v = (unsigned long)value;
+    if (kind == VERSION_NUM) snprintf(out, cap, "%lx.%lx.%lx", (v >> 24) & 0xff, (v >> 20) & 0xf, (v >> 16) & 0xf);
+    else snprintf(out, cap, "%lx.%lx.%lx", (v >> 8) & 0xf, (v >> 4) & 0xf, v & 0xf);
+}
+/* Absence is an answer, not a failure: only an unexpected Gestalt error is
+ * reported, as the native code beside available:false. */
+static int feature_json(const Feature *f, char *entry, size_t cap)
+{
+    long value = 0, version = 0;
+    OSErr err = (OSErr)Gestalt((OSType)f->selector, &value);
+    int available = 0;
+    size_t at = 0;
+    char part[96];
+    if (err) value = 0;
+    else if (f->rule == PRESENT_ANY) available = 1;
+    else if (f->rule == PRESENT_MASK) available = (value & f->threshold) != 0;
+    else available = value >= f->threshold;
+    snprintf(part, sizeof(part), "\"%s\":{\"available\":%s", f->key, available ? "true" : "false");
+    if (json_buf_append(JSON_BUF(entry, cap, &at), part)) return -1;
+    if (!err) {
+        snprintf(part, sizeof(part), ",\"value\":\"0x%08lx\"", (unsigned long)value & 0xffffffffUL);
+        if (json_buf_append(JSON_BUF(entry, cap, &at), part)) return -1;
+    } else if (err != GESTALT_UNDEFINED_SELECTOR) {
+        snprintf(part, sizeof(part), ",\"error\":%d", (int)err);
+        if (json_buf_append(JSON_BUF(entry, cap, &at), part)) return -1;
+    }
+    if (available && f->flag_key) {
+        snprintf(part, sizeof(part), ",\"%s\":%s", f->flag_key, (value >> f->flag_bit) & 1 ? "true" : "false");
+        if (json_buf_append(JSON_BUF(entry, cap, &at), part)) return -1;
+    }
+    if (available && f->version_kind != VERSION_NONE) {
+        char text[24];
+        long number = f->version_selector ? 0 : value;
+        int have = !f->version_selector;
+        if (f->version_selector && !Gestalt((OSType)f->version_selector, &version)) { number = version; have = 1; }
+        if (have) {
+            version_text(number, f->version_kind, text, sizeof(text));
+            snprintf(part, sizeof(part), ",\"version\":\"%s\",\"version_value\":\"0x%08lx\"", text, (unsigned long)number & 0xffffffffUL);
+            if (json_buf_append(JSON_BUF(entry, cap, &at), part)) return -1;
+        }
+    }
+    return json_buf_append(JSON_BUF(entry, cap, &at), "}");
+}
+static const char *cpu_name(long type)
+{
+    switch (type) {
+    case 0x0101: return "PowerPC 601";
+    case 0x0103: return "PowerPC 603";
+    case 0x0104: return "PowerPC 604";
+    case 0x0106: return "PowerPC 603e";
+    case 0x0107: return "PowerPC 603ev";
+    case 0x0108: return "PowerPC 750 (G3)";
+    case 0x0109: return "PowerPC 604e";
+    case 0x010A: return "PowerPC 604ev";
+    case 0x010C: return "PowerPC G4";
+    default: return NULL;
+    }
+}
+static void get_capabilities(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap)
+{
+    char part[160], entry[320];
+    long value;
+    size_t at = 0, i;
+    if (tokens[0].next != 1) { fail(out, cap, "ARGUMENTS", "get_capabilities takes no arguments.", 0); return; }
+    (void)call;
+    if (json_buf_append(JSON_BUF(out, cap, &at), "{\"status\":\"ok\",\"processor\":{\"native_cpu_type\":")) goto limit;
+    if (Gestalt((OSType)'cput', &value)) {
+        if (json_buf_append(JSON_BUF(out, cap, &at), "null,\"name\":null}")) goto limit;
+    } else {
+        const char *name = cpu_name(value);
+        snprintf(part, sizeof(part), "\"0x%04lx\",\"name\":", (unsigned long)value & 0xffffUL);
+        if (json_buf_append(JSON_BUF(out, cap, &at), part)) goto limit;
+        if (name ? json_buf_quote(JSON_BUF(out, cap, &at), name) : json_buf_append(JSON_BUF(out, cap, &at), "null")) goto limit;
+        if (json_buf_append(JSON_BUF(out, cap, &at), "}")) goto limit;
+    }
+    if (json_buf_append(JSON_BUF(out, cap, &at), ",\"memory\":{\"physical_bytes\":")) goto limit;
+    if (Gestalt((OSType)'ram ', &value)) snprintf(part, sizeof(part), "null,\"logical_bytes\":");
+    else snprintf(part, sizeof(part), "%lu,\"logical_bytes\":", (unsigned long)value & 0xffffffffUL);
+    if (json_buf_append(JSON_BUF(out, cap, &at), part)) goto limit;
+    if (Gestalt((OSType)'lram', &value)) snprintf(part, sizeof(part), "null}");
+    else snprintf(part, sizeof(part), "%lu}", (unsigned long)value & 0xffffffffUL);
+    if (json_buf_append(JSON_BUF(out, cap, &at), part)) goto limit;
+    if (json_buf_append(JSON_BUF(out, cap, &at), ",\"features\":{")) goto limit;
+    for (i = 0; i < sizeof(features) / sizeof(*features); i++) {
+        entry[0] = 0;
+        if (feature_json(&features[i], entry, sizeof(entry)) ||
+            (i && json_buf_append(JSON_BUF(out, cap, &at), ",")) ||
+            json_buf_append(JSON_BUF(out, cap, &at), entry)) goto limit;
+    }
+    if (json_buf_append(JSON_BUF(out, cap, &at), "}}")) goto limit;
+    return;
+limit:
+    fail(out, cap, "LIMIT", "Capability report exceeds the result capacity.", 0);
+}
+/* ------------------------------------------------------------------ */
+#define VOLUME_LOCKED_MASK 0x8080 /* hardware lock (0x0080) or software lock (0x8000) */
+#define VOLUME_NONE_ERR (-35)     /* nsvErr: no volume at this index */
+
+/* Byte counts arrive as a 64-bit big-endian integer whichever way the
+ * interface declares UInt64, so they are read as raw bytes. */
+static unsigned long long be64(const void *field)
+{
+    const unsigned char *b = field;
+    unsigned long long v = 0;
+    int i;
+    for (i = 0; i < 8; i++) v = (v << 8) | b[i];
+    return v;
+}
+static void u64_text(unsigned long long v, char *out, size_t cap)
+{
+    char digits[24];
+    size_t n = 0, i;
+    do { digits[n++] = (char)('0' + (int)(v % 10)); v /= 10; } while (v && n < sizeof(digits));
+    for (i = 0; i < n && i + 1 < cap; i++) out[i] = digits[n - 1 - i];
+    out[i] = 0;
+}
+static OSErr volume_read(short index, short vref, XVolumeParam *pb, Str255 name)
+{
+    memset(pb, 0, sizeof(*pb));
+    name[0] = 0;
+    pb->ioNamePtr = name; pb->ioVolIndex = index; pb->ioVRefNum = vref;
+    return PBXGetVolInfoSync(pb);
+}
+static int volume_entry(const XVolumeParam *pb, const Str255 name, int workspace, char *entry, size_t cap)
+{
+    char utf[128], quoted[200], total[24], free_bytes[24], part[160];
+    size_t at = 0;
+    if (text_to_utf8((const char *)name + 1, name[0], utf, sizeof(utf)) < 0) utf[0] = 0;
+    if (json_quote(utf, quoted, sizeof(quoted)) < 0) return -1;
+    u64_text(be64(&pb->ioVTotalBytes), total, sizeof(total));
+    u64_text(be64(&pb->ioVFreeBytes), free_bytes, sizeof(free_bytes));
+    snprintf(part, sizeof(part), ",\"vref\":%d,\"total_bytes\":%s,\"free_bytes\":%s,\"read_only\":%s,\"workspace\":%s}",
+        (int)pb->ioVRefNum, total, free_bytes, (pb->ioVAtrb & VOLUME_LOCKED_MASK) ? "true" : "false",
+        workspace ? "true" : "false");
+    return json_buf_append(JSON_BUF(entry, cap, &at), "{\"name\":") ||
+        json_buf_append(JSON_BUF(entry, cap, &at), quoted) || json_buf_append(JSON_BUF(entry, cap, &at), part);
+}
+static void get_volume_info(const AgentCall *call, const JsonToken *tokens, char *out, size_t cap)
+{
+    char path[512] = "", entry[400];
+    FSSpec spec, workspace;
+    XVolumeParam pb;
+    Str255 name;
+    OSErr err;
+    long cursor, limit, index;
+    int by_path, count = 0, truncated = 0;
+    short workspace_vref = 0;
+    size_t at = 0;
+    by_path = json_member(call->arguments, tokens, 0, "path") >= 0;
+    if (json_args_check_keys(call->arguments, tokens, 0, "|path||cursor||limit|") ||
+        (by_path && (json_member(call->arguments, tokens, 0, "cursor") >= 0 || json_member(call->arguments, tokens, 0, "limit") >= 0 ||
+                     json_args_string(call->arguments, tokens, "path", path, sizeof(path)) < 0)) ||
+        json_args_int(call->arguments, tokens, "cursor", 0, 0, 1000, &cursor) ||
+        json_args_int(call->arguments, tokens, "limit", 4, 1, 8, &limit)) {
+        fail(out, cap, "ARGUMENTS", "Expected either a workspace path, or optional cursor (returned value) and limit 1-8.", 0); return;
+    }
+    if (!tools_workspace_root(&workspace)) workspace_vref = workspace.vRefNum;
+    if (json_buf_append(JSON_BUF(out, cap, &at), "{\"status\":\"ok\",\"volumes\":[")) goto limit;
+    if (by_path) {
+        err = path[0] ? tools_resolve(path, &spec) : tools_workspace_root(&spec);
+        if (err) { fail(out, cap, "FILE", "Cannot resolve the workspace path.", err); return; }
+        err = volume_read(0, spec.vRefNum, &pb, name);
+        if (err) { fail(out, cap, "VOLUME", "Cannot read the volume of this path.", err); return; }
+        if (volume_entry(&pb, name, spec.vRefNum == workspace_vref, entry, sizeof(entry)) ||
+            json_buf_append(JSON_BUF(out, cap, &at), entry)) goto limit;
+        if (json_buf_append(JSON_BUF(out, cap, &at), "],\"truncated\":false,\"next_cursor\":null}")) goto limit;
+        return;
+    }
+    for (index = cursor + 1;; index++) {
+        err = volume_read((short)index, 0, &pb, name);
+        if (err == VOLUME_NONE_ERR) break;
+        if (err) { fail(out, cap, "VOLUME", "Volume enumeration failed.", err); return; }
+        if (count == limit) { truncated = 1; break; }
+        if (volume_entry(&pb, name, pb.ioVRefNum == workspace_vref, entry, sizeof(entry))) goto limit;
+        if (at + strlen(entry) + 80 >= cap) { truncated = 1; break; }
+        if (count && json_buf_append(JSON_BUF(out, cap, &at), ",")) goto limit;
+        if (json_buf_append(JSON_BUF(out, cap, &at), entry)) goto limit;
+        count++;
+    }
+    if (json_buf_append(JSON_BUF(out, cap, &at), "],\"truncated\":")) goto limit;
+    if (truncated) {
+        char tail[64];
+        snprintf(tail, sizeof(tail), "true,\"next_cursor\":%ld}", cursor + count);
+        if (json_buf_append(JSON_BUF(out, cap, &at), tail)) goto limit;
+    } else if (json_buf_append(JSON_BUF(out, cap, &at), "false,\"next_cursor\":null}")) goto limit;
+    return;
+limit:
+    fail(out, cap, "LIMIT", "Volume report exceeds the result capacity.", 0);
+}
+/* ------------------------------------------------------------------ */
 void inspect_execute(const AgentCall *call, char *out, size_t cap)
 {
     JsonToken tokens[128];
@@ -912,5 +1139,7 @@ void inspect_execute(const AgentCall *call, char *out, size_t cap)
     else if (!strcmp(call->name, "measure_text")) measure_text(call, tokens, out, cap);
     else if (!strcmp(call->name, "list_resources")) list_resources(call, tokens, out, cap);
     else if (!strcmp(call->name, "read_resource")) read_resource(call, tokens, out, cap);
+    else if (!strcmp(call->name, "get_capabilities")) get_capabilities(call, tokens, out, cap);
+    else if (!strcmp(call->name, "get_volume_info")) get_volume_info(call, tokens, out, cap);
     else fail(out, cap, "UNKNOWN_TOOL", "This tool is not installed.", 0);
 }

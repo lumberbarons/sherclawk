@@ -131,6 +131,18 @@ const ToolDef kToolDefs[] = {
         "\"start_byte\":{\"type\":\"integer\",\"minimum\":0},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":256}},"
         "\"required\":[\"path\",\"type\",\"id\"],\"additionalProperties\":false}}}",
         0, 0, NULL },
+    { TOOL_get_capabilities, "get_capabilities",
+        "{\"type\":\"function\",\"function\":{\"name\":\"get_capabilities\","
+        "\"description\":\"Read-only Gestalt feature detection for classic Mac OS: native CPU, physical and logical RAM bytes, and available/version for Color QuickDraw, QuickTime, Open Transport, Sound (with sound_input), Speech Manager, AppleScript, Appearance Manager, Drag Manager and Thread Manager. A missing optional extension is available:false, never an error. Takes no arguments; use get_environment for the workspace and tools.\","
+        "\"parameters\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}}}",
+        0, 0, NULL },
+    { TOOL_get_volume_info, "get_volume_info",
+        "{\"type\":\"function\",\"function\":{\"name\":\"get_volume_info\","
+        "\"description\":\"Read-only mounted-volume report: name, vref, total_bytes, free_bytes, read_only (hardware or software lock) and whether it holds the workspace. Check free_bytes before a build or copy_file. Pass path (relative classic colon-separated; empty means the workspace) for the one volume containing it, or page all volumes with next_cursor unchanged until truncated is false. path cannot be combined with cursor or limit.\","
+        "\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},"
+        "\"cursor\":{\"type\":\"integer\",\"minimum\":0},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8}},"
+        "\"additionalProperties\":false}}}",
+        0, 0, NULL },
     { TOOL_view_image, "view_image",
         "{\"type\":\"function\",\"function\":{\"name\":\"view_image\","
         "\"description\":\"Read-only: attach one workspace PNG, such as a screenshot a generated application wrote, so you can look at it. Relative classic colon-separated path from list_files. PNG only, at most " TOOLS_LIMIT_STRINGIFY(AGENT_IMAGE_CAP) " bytes; one image per round. The pixels arrive in a user message right after the tool results and only in the next request, so describe what matters then; call again to see the image again. Fails with an explicit error when the selected model is not known to accept images.\","

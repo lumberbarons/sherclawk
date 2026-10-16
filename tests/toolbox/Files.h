@@ -21,11 +21,15 @@ typedef union {
     struct { unsigned char *ioNamePtr; short ioVRefNum; long ioDirID; short ioFDirIndex;
         unsigned char ioFlAttrib; FInfo unused; long ioDrDirID; } dirInfo;
 } CInfoPBRec;
-enum { noErr=0, fnfErr=-43, fBsyErr=-47, dupFNErr=-48, paramErr=-50, dirNFErr=-120, ioErr=-36, eofErr=-39,
+enum { noErr=0, fnfErr=-43, fBsyErr=-47, dupFNErr=-48, nsvErr=-35, paramErr=-50, dirNFErr=-120, ioErr=-36, eofErr=-39,
        fsRdPerm=1, fsWrPerm=2, fsRdWrPerm=3, fsFromStart=1, smSystemScript=0 };
 typedef union { struct { unsigned char *ioNamePtr;short ioVolIndex,ioVRefNum; } volumeParam; } HParamBlockRec;
 typedef struct { unsigned char *ioNamePtr;short ioVRefNum,ioIndex;unsigned long ioFileCreator;long ioAPPLParID; } DTPBRec;
 OSErr PBHGetVInfoSync(HParamBlockRec *);
+/* Byte counts are raw big-endian bytes: the real UInt64 is read the same way. */
+typedef struct { unsigned char *ioNamePtr; short ioVRefNum; unsigned long ioXVersion; short ioVolIndex;
+    short ioVAtrb; unsigned char ioVTotalBytes[8], ioVFreeBytes[8]; } XVolumeParam;
+OSErr PBXGetVolInfoSync(XVolumeParam *);
 OSErr PBDTGetPath(DTPBRec *);
 OSErr PBDTGetAPPLSync(DTPBRec *);
 OSErr FSMakeFSSpec(short, long, const unsigned char *, FSSpec *);

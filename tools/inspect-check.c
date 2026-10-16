@@ -1,6 +1,7 @@
 /* Native read-only inspection acceptance: Finder identity and formatted
  * dates, alias targets, Process Manager paging, Font Manager families and
- * metrics, and resource map/byte reads against a retained fixture whose
+ * metrics, Gestalt capabilities cross-checked against direct Gestalt calls,
+ * mounted-volume space, and resource map/byte reads against a retained fixture whose
  * resource fork is written through the real Resource Manager. Fixtures stay
  * in Retro68:Sherclawk Inspect <ticks>: for inspection. */
 #include "tools/tools.h"
@@ -17,6 +18,7 @@
 #include <Aliases.h>
 #include <Script.h>
 #include <Memory.h>
+#include <Gestalt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -134,6 +136,25 @@ static int make_alias(const char *relative, const FSSpec *target)
     }
     if (!err) err = FlushVol(NULL, spec.vRefNum);
     return err ? -1 : 0;
+}
+/* Cross-check one reported feature against a direct Gestalt answer taken
+ * outside the tool, so an absent extension is verified as absent. Mask 0
+ * means any answer, -1 a version of at least 1, otherwise attribute bits. */
+static void feature_check(const char *key, unsigned long selector, long mask)
+{
+    char needle[64], name[96];
+    long value = 0;
+    OSErr err = Gestalt((OSType)selector, &value);
+    int expected = !err && (mask == 0 ? 1 : mask < 0 ? value >= 1 : (value & mask) != 0);
+    snprintf(needle, sizeof(needle), "\"%s\":{\"available\":%s", key, expected ? "true" : "false");
+    snprintf(name, sizeof(name), "%s %s (gestalt %d)", key, expected ? "present" : "absent", (int)err);
+    check(strstr(result, needle) != NULL, name);
+    if (err) check(!strstr(result, "\"error\""), "absent extension is not an error");
+}
+static double number_after(const char *from, const char *key)
+{
+    const char *at = strstr(from, key);
+    return at ? atof(at + strlen(key)) : -1;
 }
 /* ------------------------------------------------------------------ */
 int main(void)
@@ -340,6 +361,56 @@ int main(void)
     snprintf(call.arguments, sizeof(call.arguments), "{\"path\":\"%s\"}", resource_path);
     execute();
     check(int_field("resource_bytes") > 0 && strstr(result, "\"file_type\":\"TEST\""), "resource fixture fork reported");
+
+    strcpy(call.name, "get_capabilities"); strcpy(call.arguments, "{}");
+    execute();
+    check(strlen(result) < AGENT_RESULT_CAP && strstr(result, "\"status\":\"ok\"") && !strstr(result, "\"code\""), "capabilities reported");
+    check(strstr(result, "\"native_cpu_type\":\"0x") && number_after(result, "\"physical_bytes\":") > 0 &&
+        number_after(result, "\"logical_bytes\":") > 0, "processor and memory reported");
+    check(strstr(result, "\"color_quickdraw\":{\"available\":true") != NULL, "Color QuickDraw present");
+    check(strstr(result, "\"open_transport\":{\"available\":true") != NULL, "Open Transport present");
+    feature_check("quicktime", 'qtim', -1);
+    feature_check("sound", 'snd ', 0);
+    feature_check("speech_manager", 'ttsc', 1);
+    feature_check("applescript", 'ascr', 1);
+    feature_check("appearance_manager", 'appr', 1);
+    feature_check("drag_manager", 'drag', 1);
+    feature_check("thread_manager", 'thds', 1);
+    feature_check("speech_recognition", 'srta', 3);
+    feature_check("quickdraw_3d", 'qd3d', 1);
+    feature_check("quickdraw_gx", 'qdgx', -1);
+    strcpy(call.arguments, "{\"extra\":1}");
+    execute(); check(strstr(result, "ARGUMENTS") != NULL, "capabilities refuse arguments");
+
+    strcpy(call.name, "get_volume_info"); strcpy(call.arguments, "{\"limit\":1}");
+    pages = total = 0; self_seen = 0;
+    do {
+        execute();
+        check(strstr(result, "\"status\":\"error\"") == NULL, "volume page");
+        if (strstr(result, "\"workspace\":true")) self_seen++;
+        total++;
+        if (strstr(result, "\"truncated\":false")) break;
+        if (int_field("next_cursor") < 0) break;
+        snprintf(call.arguments, sizeof(call.arguments), "{\"limit\":1,\"cursor\":%d}", int_field("next_cursor"));
+        if (++pages > 20) break;
+    } while (1);
+    check(total >= 1 && self_seen == 1, "volume paging reaches the workspace volume exactly once");
+    strcpy(call.arguments, "{\"path\":\"\"}");
+    execute();
+    {
+        double total_bytes = number_after(result, "\"total_bytes\":"), free_bytes = number_after(result, "\"free_bytes\":");
+        check(strstr(result, "\"workspace\":true") && strstr(result, "\"name\":\"Retro68\"") &&
+            total_bytes > 0 && free_bytes > 0 && free_bytes <= total_bytes, "workspace volume space reported");
+        check(strstr(result, "\"read_only\":false") != NULL, "workspace volume is writable");
+        snprintf(call.arguments, sizeof(call.arguments), "{\"path\":\"%s\"}", sample_path);
+        execute();
+        check(strstr(result, "\"workspace\":true") && number_after(result, "\"total_bytes\":") == total_bytes,
+            "fixture path resolves to the workspace volume");
+    }
+    strcpy(call.arguments, "{\"path\":\"Sherclawk Inspect Missing\"}");
+    execute(); check(strstr(result, "\"code\":\"FILE\"") != NULL, "missing volume path refused");
+    strcpy(call.arguments, "{\"path\":\"\",\"limit\":1}");
+    execute(); check(strstr(result, "ARGUMENTS") != NULL, "path with limit refused");
 
     fprintf(logfile, "RESULT failures=%d\n", failures);
     fclose(logfile);

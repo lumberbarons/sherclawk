@@ -11,6 +11,7 @@ buffer and deadline relationships are in [limits](limits.md).
 | Copy and publish | `copy_file` |
 | Native project work | `create_project`, `build_project`, `read_build_log`, `run_application` |
 | Read-only platform inspection | `get_file_info`, `resolve_alias`, `list_processes`, `list_fonts`, `measure_text`, `list_resources`, `read_resource` |
+| Read-only capabilities and volumes | `get_capabilities`, `get_volume_info` |
 | Read-only image viewing | `view_image` |
 | Retained remote tool results | `read_mcp_result` |
 
@@ -215,9 +216,9 @@ authorized build IDs.
 
 ## Inspecting resources and identity
 
-Seven read-only tools report what the workspace and the running system
-actually contain; none of them writes to a volume, changes Finder state or
-authorizes execution. Results use the same bounds and pagination conventions
+The read-only inspection tools report what the workspace and the running
+system actually contain; none of them writes to a volume, changes Finder state
+or authorizes execution. Results use the same bounds and pagination conventions
 as the other tools.
 
 `get_file_info(path)` reports kind, four-character type and creator, the raw
@@ -263,6 +264,47 @@ folders, files without resource forks and types that are not four printable
 characters are refused. A file that changes during a listing or read is
 reported as `CHANGED` instead of returning mixed evidence; cursors are
 observational catalog positions.
+
+## Capabilities and volume space
+
+`get_capabilities` and `get_volume_info` answer "what can this system do" and
+"is there room" before a build or copy. Both are read-only, change nothing and
+write no journal record. They are separate from `get_environment`, which
+describes the workspace and the installed tools, so none of the three grows
+past a comfortable share of `AGENT_RESULT_CAP`.
+
+`get_capabilities()` takes no arguments and reads Gestalt. It reports the
+native CPU type with a name for the known PowerPC parts (`name` is null for an
+unrecognised type), physical and logical RAM in bytes, and a `features`
+object. Each feature carries `available`, the raw Gestalt `value` as
+`0x%08lx`, and a decoded `version` plus `version_value` where the system
+publishes one. Features: Color QuickDraw (QuickDraw version at least `0x0100`),
+QuickTime, Open Transport, Sound (with `sound_input`), Speech Manager,
+AppleScript, Appearance Manager, Drag Manager, Thread Manager, Speech
+Recognition, QuickDraw 3D and QuickDraw GX. Versions are BCD: QuickTime, Open
+Transport and QuickDraw GX decode the `NumVersion` high bytes, AppleScript,
+Appearance Manager and Speech Recognition the low word.
+
+An optional extension that is not installed is a capability flag, never an
+error: a selector the system never defined (Gestalt `-5551`) reports
+`{"available":false}`, and so does an attribute selector whose presence bit is
+clear (its `value` is still shown). Only an unexpected Gestalt failure adds
+`"error"` with the native code, beside `available:false`. If the CPU, RAM or
+size selector itself fails, that field is null rather than failing the report.
+
+`get_volume_info(path | cursor, limit)` reports mounted volumes: `name`,
+`vref`, `total_bytes`, `free_bytes`, `read_only` (a hardware or software
+lock) and `workspace`, true for the volume that holds the configured
+workspace. Byte counts come from `PBXGetVolInfoSync` as full 64-bit values, so
+volumes above 4 GB report exactly; they are observational and change as
+files are written. Without arguments it pages every mounted volume in File
+Manager order (`limit` 1–8, default 4; pass `next_cursor` unchanged until
+`truncated` is false). With `path` (relative classic colon-separated, empty
+meaning the workspace) it reports only the volume that contains that existing
+path, with no paging; `path` cannot be combined with `cursor` or `limit`. A
+path that does not resolve is `FILE`, and a File Manager failure is `VOLUME`
+with the native code. Check `free_bytes` of the workspace volume against the
+project and artifact size before starting a multi-file build.
 
 ## Viewing images
 
