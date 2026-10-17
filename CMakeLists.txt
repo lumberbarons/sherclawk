@@ -1,4 +1,4 @@
-# Sherclawk stages a Certainly clone (patches/ applied, see build.sh) and
+# Sherclawk builds against a Certainly clone (see build.sh) and
 # vendors its HTTP transport under vendor/.
 cmake_minimum_required(VERSION 3.12)
 project(sherclawk C)

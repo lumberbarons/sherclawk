@@ -159,7 +159,7 @@ if [ -d "$CERTAINLY_DIR/include" ]; then
     run_test test-mcp-run
 else
     echo "skip: network test needs a Certainly clone at $CERTAINLY_DIR" >&2
-    echo "      git clone --recursive --depth 1 https://github.com/minorbug/certainly.git Certainly" >&2
+    echo "      git clone --depth 1 https://github.com/lumberbarons/certainly.git Certainly" >&2
 fi
 
 build_test test-base64 "${WARN[@]}" -I"$HERE" -I"$HERE/src" \

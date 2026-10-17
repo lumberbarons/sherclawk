@@ -8,9 +8,10 @@ Toolbox stubs; a successful host run does not establish guest behavior.
 
 Prerequisites: Docker with the `ghcr.io/autc04/retro68` image, host Python 3
 (stdlib only) for `build.sh` and the artwork converter, and `ssh`/`scp` for
-publishing, plus a Certainly clone next to this repository, your own lawfully
-obtained Apple Universal Interfaces 3.4 SDK, and
-the vendored `patches/` + `art/` in this tree. Publishing needs an AFP
+publishing, plus a clone of the
+[`lumberbarons/certainly`](https://github.com/lumberbarons/certainly) fork next
+to this repository, your own lawfully obtained Apple Universal Interfaces 3.4
+SDK, and the vendored `art/` in this tree. Publishing needs an AFP
 share host reachable over `ssh`/`scp` with passwordless `sudo -n`, a `macos9`
 user and group, python3 and netatalk; files go to `/srv/retro68` unless
 `SHARE_DIR` overrides it. The converter reads
@@ -18,7 +19,7 @@ user and group, python3 and netatalk; files go to `/srv/retro68` unless
 `SHERCLAWK_ART`.
 
 ```bash
-git clone --recursive --depth 1 https://github.com/minorbug/certainly.git ../Certainly
+git clone --depth 1 https://github.com/lumberbarons/certainly.git ../Certainly
 # Supply your own SDK; this is the Interfaces&Libraries folder, not its parent.
 export INTERFACES_DIR="/path/to/Interfaces&Libraries"
 # Optional compiled fallbacks; normal runtime keys can be entered in Preferences.

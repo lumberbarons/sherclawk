@@ -10,10 +10,10 @@ Third-party material retains its own copyright and license as described below.
   Postman example. The upstream code is Copyright (c) 2026 Matt Baker,
   MIT-licensed; the full notice is in [LICENSES/Certainly.txt](LICENSES/Certainly.txt).
   [Upstream Certainly](https://github.com/minorbug/certainly).
-- **Certainly patches** — `patches/` contains project modifications and
-  upstream code/context covered by the same Certainly MIT license.
-  `build.sh` applies these patches to a staging copy; the user's upstream
-  clone remains pristine.
+- **Certainly fork** — builds use the
+  [lumberbarons/certainly](https://github.com/lumberbarons/certainly) fork,
+  which carries project modifications under the same Certainly MIT license.
+  It is fetched separately and never committed here.
 - **Host TLS shim** — `vendor/host-tls/` is project code under the repository's
   MIT license. It implements Certainly's transport interface for host tests.
 - **Project artwork** — `art/sherclawk.png` was generated with ChatGPT. The

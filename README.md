@@ -48,7 +48,7 @@ To cross-compile the app:
 
 - Docker with `ghcr.io/autc04/retro68` and host Python 3; Python helpers use only
   the standard library.
-- A separate [Certainly](https://github.com/minorbug/certainly) clone.
+- A separate clone of the [Certainly](https://github.com/lumberbarons/certainly) fork.
 - Your own lawfully obtained Apple Universal Interfaces 3.4 SDK. The repository
   neither provides nor downloads it. Supply the complete `Interfaces&Libraries`
   folder, including Open Transport headers and PPC libraries; see
@@ -64,7 +64,7 @@ need the guest's ToolServer and MrC/PPCLink/Rez installation. The
 Run from the repository root:
 
 ```bash
-git clone --recursive --depth 1 https://github.com/minorbug/certainly.git ../Certainly
+git clone --depth 1 https://github.com/lumberbarons/certainly.git ../Certainly
 export INTERFACES_DIR="/path/to/Interfaces&Libraries"
 ./build.sh
 ```
