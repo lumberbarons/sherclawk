@@ -4,6 +4,20 @@ Dated acceptance evidence for the OS 9 guest, host checks and live model runs,
 retained from earlier development. Entries describe the state on their recorded
 dates. Use the [current guides](../../README.md#documentation) for present behavior.
 
+Recorded October 16, 2026 (host cost counters, issue #19): `SherclawkCalibrateCheck`
+built from the issue branch, published to the AFP share with `tools/deploy-to-share.sh`
+and launched in the OS 9.2.2 UTM guest with the Retro68 window frontmost, the guest
+otherwise idle. Each of three runs reported `RESULT failures=0` and deleted its
+scratch file. The first run lacked the write, flush and create rows; the third ran
+after the diagnostic was changed to stop on a failed open. Totals over 200
+repetitions, as run one, two and three: open and close 138, 135, 146 ticks; seek and
+1 KiB read 65, 66, 74; open, read and close 205, 201, 222; catalog lookup 69, 64, 74.
+Seek and 1 KiB write took 75 and 86 ticks (runs two and three). Over 20 repetitions,
+`FlushVol` took 7 and 9 ticks and create and delete 62 and 81. Over 300 event turns,
+sleep 0 took 5, 5 and 41 ticks and sleep 1 took 331, 323 and 300; sleep 10 took 251,
+254 and 257 ticks over 30 turns. The per-call ranges in [Cost table and guest
+calibration](../development.md#cost-table-and-guest-calibration) come from these.
+
 Recorded October 15, 2026 (model chooser and reasoning effort, issue #62
 follow-up): OS 9.2.2 running the main application built from main (`0f99919`
 was the head). With DHCP DNS in place, Edit > Preferences loaded the popular

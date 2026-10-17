@@ -90,6 +90,57 @@ first. Raise the floors deliberately.
 Full builds also regenerate `build/art.r`, so use
 `build.sh` rather than configuring CMake by hand in a fresh tree.
 
+### Cost table and guest calibration
+
+`tools/check.sh` ends with a table of deterministic cost counters, and
+`tools/check-transport.sh` prints the TLS ones. Each suite reports its counters
+through `tests/cost.h`, which also asserts the measured total against a bound
+pinned to today's value, so a change that adds model rounds, event turns,
+File Manager calls or network steps fails the host checks instead of only
+showing up as slower guest timing. When a change lowers a total, lower its
+bound in the same commit. The counters are:
+
+| Counter | Reference |
+|---|---|
+| `jobs stage ...` (`tests/test_jobs.c`) | Event turns and File Manager calls to stage and publish a job at the snapshot input limits, plus the most File Manager calls in one idle poll turn |
+| `build_project stage ...` (`tests/test_build_project.c`) | The same from a `build_project` call with a source set near the snapshot cap |
+| `run_application launch verification` (`tests/test_quit_application.c`) | Event turns and File Manager calls from `run_application` to a verified, launched artifact |
+| `agent model rounds` (`tests/test_agent.c`) | Model rounds for a run with one truncation retry and a fixed number of single-call tool rounds |
+| `network_step turns` (`tests/test_network.c`) | `network_step` calls to send a 256 KiB request and receive a 64 KiB response in 1.4 KiB and 16 KiB records |
+| `TLS pumps ...` (`tests/test_tls_io.c`) | `MacTLS_Pump` calls for the same transfer against the patched Certainly sources |
+
+Host counts convert to guest time with the per-call costs that
+`SherclawkCalibrateCheck` (`tools/calibrate-check.c`) measures on the real
+`Retro68:` AFP volume. It runs unattended, writes
+`Retro68:SherclawkCalibrateCheck.log`, deletes its scratch file and quits;
+launch it with the guest otherwise idle. Each figure is total ticks over many
+repetitions, because a tick is 1/60 s.
+
+| Operation | Ticks per call, range over runs |
+|---|---|
+| `FSpOpenDF` + `FSClose` | 0.68 to 0.73 |
+| `SetFPos` + 1 KiB `FSRead` on an open file | 0.33 to 0.37 |
+| `FSpOpenDF` + 1 KiB `FSRead` + `FSClose` | 1.0 to 1.1 |
+| `PBGetCatInfoSync` lookup | 0.32 to 0.37 |
+| `SetFPos` + 1 KiB `FSWrite` on an open file | 0.38 to 0.43 |
+| `FlushVol` | 0.35 to 0.45 |
+| `FSpCreate` + `FSpDelete` | 3.1 to 4.1 |
+| Event turn, `WaitNextEvent` sleep 0 | 0.02 to 0.14 |
+| Event turn, sleep 1 (the busy-run cadence) | 1.0 to 1.1 |
+| Event turn, sleep 10 (the idle cadence) | 8.4 to 8.6 |
+
+The figures were recorded on October 16, 2026; the [verification
+history](history/verification.md) has the raw totals. A busy run costs at least
+a tick per event turn however little each turn does, and the File Manager calls
+inside the turns add to that. Treat the conversion as a lower-bound estimate
+for ordering changes, not a latency promise: the file figures repeat one 1 KiB
+file that the share keeps hot, while staging touches many files and larger
+transfers, and the runs were on one idle UTM guest and one AFP share. The
+spread between runs is up to about 15% for most rows and wider for file
+creation and the sleep-0 turn, so quote a range rather than one value. Rerun the diagnostic after
+a change of host, share or guest configuration and update the table.
+
+
 ### Deployment
 
 The default Docker target is `Sherclawk_APPL`; pass another CMake target as the
@@ -148,6 +199,7 @@ diagnostic built as its own CMake target; launch it in the guest and read
 | `SherclawkCopyCheck` (`tools/copy-check.c`) | `copy_file` against the real volume: a fixture with both forks and Finder identity, a pinned publish under a new name, byte verification of both forks, an untouched source and the overwrite refusal |
 | `SherclawkMCPGuardCheck` (`tools/mcp-guard-check.c`) | The MCP configuration guard against the real Preferences folder: the workspace is pointed at the boot volume, every protected tool is refused, listing and search skip the file, an alias target is refused, and its size and modification date stay unchanged; the log carries only statuses |
 | `SherclawkProjectCheck` | `create_project` publication, bytes and metadata |
+| `SherclawkCalibrateCheck` (`tools/calibrate-check.c`) | Guest ticks per File Manager call and event turn, for converting the host [cost table](#cost-table-and-guest-calibration) to time |
 | `SherclawkBuildCheck`, `SherclawkRunCheck`, `SherclawkSelfBuildCheck`, `SherclawkSelfBuildStopCheck` | `build_project` / `run_application` through the native executor (`tools/build-check.c`) |
 | `SherclawkToolServerCheck`, `SherclawkNativeBuildCheck`, `SherclawkNativeBuildErrorCheck` | ToolServer channel and fixed native build, described below |
 | `SherclawkHandoffCheck` | Save Handoff persistence and seeding |

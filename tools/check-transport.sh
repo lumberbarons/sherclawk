@@ -12,6 +12,8 @@ if [ ! -d "$SOURCE/include" ]; then
 fi
 STAGE="$HERE/build/transport-tests"
 mkdir -p "$STAGE"
+export SHERCLAWK_COST_LOG="$STAGE/cost.log"
+: > "$SHERCLAWK_COST_LOG"
 LINK_GC=-Wl,--gc-sections
 if [ "$(uname -s)" = Darwin ]; then LINK_GC=-Wl,-dead_strip; fi
 "${CC:-cc}" -std=gnu99 -O1 -g -Wall -Wextra \
@@ -21,3 +23,7 @@ if [ "$(uname -s)" = Darwin ]; then LINK_GC=-Wl,-dead_strip; fi
     -I"$SOURCE/bearssl/inc" "$HERE/tests/test_tls_io.c" "$SOURCE/src/certainly.c" \
     "$LINK_GC" -o "$STAGE/test-tls-io"
 "$STAGE/test-tls-io"
+echo
+echo "Cost table (host counts; convert to guest ticks with docs/development.md#cost-table-and-guest-calibration)"
+printf '%-62s %8s %8s\n' counter measured bound
+cat "$SHERCLAWK_COST_LOG"

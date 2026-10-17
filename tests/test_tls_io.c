@@ -6,6 +6,7 @@
  * EXPECT_BASELINE measures the pre-optimization event-loop delay.
  */
 #include "certainly_internal.h"
+#include "cost.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,7 +22,7 @@ static int send_result, recv_result, sends, recvs, steps, resets;
 static int send_acks, recv_acks, mode, prepare_next;
 static unsigned engine_state;
 static tls13_hs_result step_result;
-static unsigned char wire[65536];
+static unsigned char wire[262144 + 4096];
 static size_t wire_len;
 static unsigned char engine_buf[32];
 static unsigned char recvapp_data[32];
@@ -44,10 +45,21 @@ int ot_transport_send(OTTransport *t, const void *buf, size_t len)
     }
     return n;
 }
+/* When rx_len is set, receives deliver this prebuilt stream, up to recv_result
+ * bytes per call, instead of the filler bytes the handshake checks use. */
+static unsigned char rx_stream[65536 + 64 * 5 + 5];
+static size_t rx_len, rx_at;
 int ot_transport_recv(OTTransport *t, void *buf, size_t len)
 {
     (void)t;
     recvs++;
+    if (rx_len) {
+        size_t n = rx_len - rx_at;
+        if (n > (size_t)recv_result) n = (size_t)recv_result;
+        if (n > len) n = len;
+        memcpy(buf, rx_stream + rx_at, n); rx_at += n;
+        return (int)n;
+    }
     if (recv_result > 0) {
         assert((size_t)recv_result <= len);
         memset(buf, 0x42, (size_t)recv_result);
@@ -271,6 +283,44 @@ static void application_reset(void)
     last_sendapp_ack = last_recvapp_ack = flushes = 0;
     recvapp_len = 0;
 }
+/* Pump counts for the reference transfers: 256 KiB of request up with the OT
+ * send accepting `chunk` bytes per call, and 64 KiB of response down in records
+ * of `record` payload bytes, each delivered by one receive. One pump is one
+ * network_step's worth of TLS work. */
+static int bulk_up_pumps(int chunk)
+{
+    static char request[262144];
+    size_t at = 0; int n, pumps = 0;
+    application_reset(); memset(request, 'u', sizeof(request)); send_result = chunk;
+    while (pumps < 100000 && (at < sizeof(request) || ctx.tls13_send_offset < ctx.tls13_send_len)) {
+        if (at < sizeof(request)) {
+            n = MacTLS_Write(&ctx, request + at, sizeof(request) - at);
+            assert(n >= 0); at += (size_t)n;
+        }
+        pump(); pumps++;
+    }
+    assert(at == sizeof(request) && wire_len == sizeof(request) + 5 * 16);
+    return pumps;
+}
+static int bulk_down_pumps(size_t record)
+{
+    static char received[16384];
+    size_t sent = 0, got = 0; int pumps = 0, n;
+    application_reset(); rx_len = rx_at = 0;
+    while (sent < 65536) {
+        size_t len = 65536 - sent < record ? 65536 - sent : record;
+        rx_stream[rx_len] = TLS13_CT_APPLICATION_DATA; rx_stream[rx_len + 1] = rx_stream[rx_len + 2] = 3;
+        rx_stream[rx_len + 3] = (unsigned char)(len >> 8); rx_stream[rx_len + 4] = (unsigned char)len;
+        memset(rx_stream + rx_len + 5, 'd', len); rx_len += 5 + len; sent += len;
+    }
+    recv_result = (int)record + 5;
+    while (pumps < 100000 && got < 65536) {
+        pump(); pumps++;
+        while ((n = MacTLS_Read(&ctx, received, sizeof(received))) > 0) got += (size_t)n;
+    }
+    assert(got == 65536); rx_len = rx_at = 0;
+    return pumps;
+}
 int main(void)
 {
     static char large[20000], received[16384];
@@ -372,6 +422,10 @@ int main(void)
     closing = malloc(sizeof(*closing)); assert(closing); *closing = ctx;
     MacTLS_Close(closing);
     assert(closes == 2 && destroys == 2 && engine_closes == 1 && encryptions == 0);
+    cost_check("TLS pumps to send 256 KiB in 1.4 KiB transport sends", bulk_up_pumps(1400), 192);
+    cost_check("TLS pumps to send 256 KiB in 16 KiB transport sends", bulk_up_pumps(16389), 16);
+    cost_check("TLS pumps to receive 64 KiB in 1.4 KiB records", bulk_down_pumps(1400), 47);
+    cost_check("TLS pumps to receive 64 KiB in 16 KiB records", bulk_down_pumps(16384), 4);
     puts("PASS application TLS partial I/O, backpressure, record boundaries, receive draining");
     puts("PASS TLS 1.3 Close skips close_notify behind a pending record; MacTLS_Available counts queued bytes");
     puts("PASS TLS handshake Stop skips uninitialized TLS 1.3 engine and preserves TLS 1.2 close");

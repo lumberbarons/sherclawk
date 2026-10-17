@@ -39,6 +39,8 @@ static int trash_can, trash_vref, trash_moves, trash_intents, trash_commits, ren
 static int copy_intents, copy_commits;
 static int opens[64];
 static int io_reads,io_writes,io_closes,io_flushes,io_opens;
+/* Every File Manager entry point below counts one call, for the cost tables. */
+static long fm_calls;
 static int fault_read,fault_write,fault_close,fault_flush,fault_open;
 static long largest_transfer;
 static size_t longest_temporary;
@@ -61,6 +63,7 @@ static int add(long parent, const char *name, int dir)
 }
 OSErr FSMakeFSSpec(short vol, long parent, const unsigned char *name, FSSpec *spec)
 {
+    fm_calls++;
     (void)vol; spec->vRefNum=1;
     unsigned char leafname[32];
     if (parent && !name[0]) { /* the directory itself, like the real File Manager */
@@ -93,6 +96,7 @@ OSErr FSMakeFSSpec(short vol, long parent, const unsigned char *name, FSSpec *sp
 }
 OSErr PBGetCatInfoSync(CInfoPBRec *pb)
 {
+    fm_calls++;
     int i;
     if(pb->hFileInfo.ioFDirIndex>0) {
         int n=0;
@@ -113,6 +117,7 @@ OSErr PBGetCatInfoSync(CInfoPBRec *pb)
 }
 OSErr FSpCreate(const FSSpec *s, unsigned long creator, unsigned long type, short script)
 {
+    fm_calls++;
     char name[32]; int i; (void)script;
     if(find(s->parID,s->name)>=0) return dupFNErr;
     memcpy(name,s->name+1,s->name[0]); name[s->name[0]]=0; i=add(s->parID,name,0);
@@ -120,6 +125,7 @@ OSErr FSpCreate(const FSSpec *s, unsigned long creator, unsigned long type, shor
 }
 OSErr FSpDirCreate(const FSSpec *s, short script, long *id)
 {
+    fm_calls++;
     char name[32]; int i; (void)script;
     if(dir_race) { memcpy(name,s->name+1,s->name[0]); name[s->name[0]]=0; add(s->parID,name,0); }
     if(find(s->parID,s->name)>=0) return dupFNErr;
@@ -129,6 +135,7 @@ OSErr FSpDirCreate(const FSSpec *s, short script, long *id)
 }
 OSErr FSpOpenDF(const FSSpec *s, short mode, short *ref)
 {
+    fm_calls++;
     int i=find(s->parID,s->name); if(i<0)return fnfErr;
     if(++io_opens==fault_open)return ioErr;
     if((mode==fsRdWrPerm && (busy || opens[i])) || opens[i]==fsRdWrPerm)return ioErr;
@@ -138,6 +145,7 @@ OSErr FSpOpenDF(const FSSpec *s, short mode, short *ref)
  * executor uses one fork at a time and repositions at each phase start. */
 OSErr FSpOpenRF(const FSSpec *s, short mode, short *ref)
 {
+    fm_calls++;
     int i=find(s->parID,s->name); if(i<0)return fnfErr;
     if(++io_opens==fault_open)return ioErr;
     if((mode==fsRdWrPerm && (busy || opens[i])) || opens[i]==fsRdWrPerm)return ioErr;
@@ -145,20 +153,23 @@ OSErr FSpOpenRF(const FSSpec *s, short mode, short *ref)
 }
 OSErr FSpSetFInfo(const FSSpec *s, const FInfo *finfo)
 {
+    fm_calls++;
     int i=find(s->parID,s->name); if(i<0)return fnfErr;
     files[i].info=*finfo; return 0;
 }
 /* Retained MCP results read their artifacts back whole and delete failed
  * stages; the model treats a delete as the file vanishing from the catalog. */
-OSErr GetEOF(short ref, long *eof) { *eof=files[ref].size; return 0; }
+OSErr GetEOF(short ref, long *eof) { fm_calls++; *eof=files[ref].size; return 0; }
 OSErr FSpDelete(const FSSpec *s)
 {
+    fm_calls++;
     int i=find(s->parID,s->name);
     if(i<0) return fnfErr;
     files[i].used=0; return 0;
 }
 OSErr FSRead(short ref, long *n, void *out)
 {
+    fm_calls++;
     char *buf=rfork[ref]?files[ref].rbytes:files[ref].bytes;
     long size=rfork[ref]?files[ref].resource:files[ref].size;
     if(*n>largest_transfer)largest_transfer=*n;
@@ -172,6 +183,7 @@ OSErr FSRead(short ref, long *n, void *out)
 }
 OSErr FSWrite(short ref, long *n, const void *in)
 {
+    fm_calls++;
     char *buf=rfork[ref]?files[ref].rbytes:files[ref].bytes;
     long cap=(long)(rfork[ref]?sizeof(files[ref].rbytes):sizeof(files[ref].bytes));
     long *size=rfork[ref]?&files[ref].resource:&files[ref].size;
@@ -180,11 +192,12 @@ OSErr FSWrite(short ref, long *n, const void *in)
     if(short_write && *n) --*n;
     assert(positions[ref]+*n<=cap); memcpy(buf+positions[ref],in,(size_t)*n); positions[ref]+=*n; if(positions[ref]>*size)*size=positions[ref]; return 0;
 }
-OSErr FSClose(short ref) { opens[ref]=0; rfork[ref]=0; return bad_close || ++io_closes==fault_close ? ioErr : 0; }
-OSErr SetFPos(short ref, short mode, long pos) { (void)mode; positions[ref]=pos; return 0; }
-OSErr FlushVol(const unsigned char *name, short vol) { (void)name;(void)vol;return (published && flush_error) || ++io_flushes==fault_flush ? ioErr : 0; }
+OSErr FSClose(short ref) { fm_calls++; opens[ref]=0; rfork[ref]=0; return bad_close || ++io_closes==fault_close ? ioErr : 0; }
+OSErr SetFPos(short ref, short mode, long pos) { (void)mode; fm_calls++; positions[ref]=pos; return 0; }
+OSErr FlushVol(const unsigned char *name, short vol) { (void)name;(void)vol;fm_calls++;return (published && flush_error) || ++io_flushes==fault_flush ? ioErr : 0; }
 OSErr FSpRename(const FSSpec *s, const unsigned char *name)
 {
+    fm_calls++;
     int i=find(s->parID,s->name); char dest[32]; assert(i>=0);
     renames++;
     memcpy(dest,name+1,name[0]); dest[name[0]]=0;
@@ -219,6 +232,7 @@ OSErr FindFolder(short vRefNum, unsigned long folderType, Boolean createFolder, 
  * call does; the moved file keeps its name. */
 OSErr FSpCatMove(const FSSpec *source, const FSSpec *dest)
 {
+    fm_calls++;
     int i=find(source->parID,source->name), d=find(dest->parID,dest->name);
     if(i<0)return fnfErr;
     if(d<0 || !files[d].dir)return fnfErr;

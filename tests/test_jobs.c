@@ -1,6 +1,7 @@
 /* Native job protocol fault model: publication barriers, bounded event steps,
  * malformed completion, log continuation, Stop/deadline and no replay. */
 #include "native/jobs.h"
+#include "cost.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -9,7 +10,7 @@ struct File { int used,folder; long parent,id,size,resource; unsigned short flag
 static struct File files[32];
 static long position[32];
 static int open_count,read_bytes,write_bytes,short_write,corrupt_read,close_error,flush_error,rename_error;
-static int records,journal_error,creates,renames;
+static int records,journal_error,creates,renames,fm_calls;
 static NativeJob job;
 static FSSpec queue={1,1,{5,'q','u','e','u','e'}};
 static const char script[]="echo native\n";
@@ -32,7 +33,7 @@ static int add(long parent,const char *name,int folder,const char *bytes,size_t 
 }
 OSErr PBGetCatInfoSync(CInfoPBRec *p)
 {
-    int i=find(p->hFileInfo.ioDirID,p->hFileInfo.ioNamePtr); if(i<0) return fnfErr;
+    int i; fm_calls++; i=find(p->hFileInfo.ioDirID,p->hFileInfo.ioNamePtr); if(i<0) return fnfErr;
     p->hFileInfo.ioFlAttrib=files[i].folder ? 16 : 0;
     p->hFileInfo.ioFlRLgLen=files[i].resource;
     p->hFileInfo.ioFlFndrInfo.fdFlags=files[i].flags;
@@ -44,7 +45,7 @@ OSErr PBGetCatInfoSync(CInfoPBRec *p)
 }
 OSErr FSpCreate(const FSSpec *s,unsigned long creator,unsigned long type,short script_code)
 {
-    char name[32]; int i; (void)script_code;
+    char name[32]; int i; (void)script_code; fm_calls++;
     if(find(s->parID,s->name)>=0) return dupFNErr;
     memcpy(name,s->name+1,s->name[0]); name[s->name[0]]=0;
     i=add(s->parID,name,0,NULL,0);
@@ -58,12 +59,13 @@ OSErr FSpDirCreate(const FSSpec *s,short code,long *id)
 }
 OSErr FSpOpenDF(const FSSpec *s,short mode,short *ref)
 {
-    int i=find(s->parID,s->name); (void)mode; if(i<0) return fnfErr;
+    int i=find(s->parID,s->name); (void)mode; fm_calls++; if(i<0) return fnfErr;
     *ref=(short)i; position[i]=0; open_count++; return 0;
 }
-OSErr SetFPos(short ref,short mode,long offset) { (void)mode; position[ref]=offset; return 0; }
+OSErr SetFPos(short ref,short mode,long offset) { (void)mode; fm_calls++; position[ref]=offset; return 0; }
 OSErr FSWrite(short ref,long *n,const void *bytes)
 {
+    fm_calls++;
     if(short_write && *n) --*n;
     assert(position[ref]+*n<=JOB_TOTAL_MAX); memcpy(files[ref].bytes+position[ref],bytes,(size_t)*n);
     position[ref]+=*n; if(position[ref]>files[ref].size) files[ref].size=position[ref];
@@ -71,16 +73,17 @@ OSErr FSWrite(short ref,long *n,const void *bytes)
 }
 OSErr FSRead(short ref,long *n,void *bytes)
 {
+    fm_calls++;
     if(*n>files[ref].size-position[ref]) *n=files[ref].size-position[ref];
     memcpy(bytes,files[ref].bytes+position[ref],(size_t)*n); position[ref]+=*n; read_bytes+=(int)*n;
     if(corrupt_read && *n) ((char *)bytes)[0]^=1;
     return 0;
 }
-OSErr FSClose(short ref) { (void)ref; open_count--; return close_error ? ioErr : 0; }
-OSErr FlushVol(const unsigned char *name,short volume) { (void)name;(void)volume; return flush_error ? ioErr : 0; }
+OSErr FSClose(short ref) { (void)ref; fm_calls++; open_count--; return close_error ? ioErr : 0; }
+OSErr FlushVol(const unsigned char *name,short volume) { (void)name;(void)volume; fm_calls++; return flush_error ? ioErr : 0; }
 OSErr FSpRename(const FSSpec *s,const unsigned char *name)
 {
-    int i=find(s->parID,s->name); assert(i>=0); renames++;
+    int i=find(s->parID,s->name); assert(i>=0); renames++; fm_calls++;
     assert(open_count==0);
     if(find(s->parID,name)>=0) return dupFNErr;
     if(rename_error) return ioErr;
@@ -97,7 +100,7 @@ static void reset(void)
 {
     memset(files,0,sizeof(files)); add(1,"queue",1,NULL,0);
     open_count=read_bytes=write_bytes=short_write=corrupt_read=close_error=flush_error=rename_error=0;
-    records=journal_error=creates=renames=0;
+    records=journal_error=creates=renames=fm_calls=0;
 }
 static int begin(void) { return jobs_begin(&job,&queue,"native1",inputs,2,0,7200,journal,NULL); }
 static void step(uint32_t now,int stop)
@@ -133,6 +136,32 @@ static void parser(void)
         assert(!jobs_parse_result(&job,good[i],strlen(good[i])));
         for(k=0;k<strlen(good[i]);k++) assert(jobs_parse_result(&job,good[i],k)<0);
     }
+}
+/* Reference snapshot at the input limits: the script plus nine files filling the
+ * 131072-byte total cap. Staging cost is counted in event turns (one jobs_step
+ * each) and File Manager calls, so a guest tick calibration converts them. */
+static void reference_cost(void)
+{
+    static char bodies[9][(JOB_TOTAL_MAX-(sizeof(script)-1))/9]; JobInput ref[10]; char names[9][8];
+    size_t used=sizeof(script)-1; int i,turns=0,calls,polls; long fm_stage;
+    ref[0]=inputs[0];
+    for(i=0;i<9;i++) {
+        snprintf(names[i],sizeof(names[i]),"f%d.c",i+1); memset(bodies[i],'a'+i,sizeof(bodies[i]));
+        ref[i+1].name=names[i]; ref[i+1].bytes=bodies[i]; ref[i+1].size=sizeof(bodies[i]); used+=sizeof(bodies[i]);
+    }
+    assert(used<=JOB_TOTAL_MAX && JOB_TOTAL_MAX-used<9);
+    reset(); assert(!jobs_begin(&job,&queue,"native1",ref,10,0,7200,journal,NULL));
+    while(job.state==JOB_STAGING) { step(0,0); turns++; assert(turns<10000); }
+    assert(job.state==JOB_WAITING && job.published);
+    fm_stage=fm_calls;
+    cost_check("jobs stage a snapshot at the input cap: event turns",turns,273);
+    cost_check("jobs stage a snapshot at the input cap: File Manager calls",fm_stage,1132);
+    /* The first poll after publication and the steady state both count. */
+    for(i=0,polls=0;i<3;i++) {
+        calls=fm_calls; step(60*(uint32_t)(i+1),0);
+        if(fm_calls-calls>polls) polls=fm_calls-calls;
+    }
+    cost_check("jobs poll an idle waiting job: most File Manager calls in a turn",polls,3);
 }
 int main(void)
 {
@@ -223,5 +252,6 @@ int main(void)
         invalid[1].size=JOB_FILE_MAX+1;
         assert(jobs_begin(&job,&queue,"native1",invalid,2,0,7200,journal,NULL)<0);
     }
+    reference_cost();
     puts("native job checks passed"); return 0;
 }

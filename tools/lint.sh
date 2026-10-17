@@ -30,6 +30,7 @@ if command -v cppcheck >/dev/null 2>&1; then
         --suppress=assignmentInAssert:tests/test_selfbuild.c \
         --suppress=assertWithSideEffect:tests/test_tools.c \
         --suppress=assertWithSideEffect:tests/test_jobs.c \
+        --suppress=assertWithSideEffect:tests/test_quit_application.c \
         --suppress=assertWithSideEffect:tests/test_build_project.c \
         -I tests/toolbox -I . -I src -I vendor \
         src/mcp/config.c src/mcp/protocol.c src/mcp/stream.c src/mcp/client.c src/mcp/editor.c src/mcp/store.c tests/test_mcp.c tests/test_mcp_client.c \
