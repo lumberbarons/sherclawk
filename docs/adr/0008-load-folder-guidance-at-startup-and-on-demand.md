@@ -6,7 +6,7 @@ date: 2026-10-16
 deciders: []
 supersedes: [ADR-0004]
 superseded-by: []
-related: [ADR-0003, ADR-0007]
+related: [ADR-0003, ADR-0005, ADR-0007]
 tags: [prompt, workspace, trust, limits]
 ---
 
@@ -68,6 +68,11 @@ adding it does not change the running application's loader.
 - Use `AGENTS.md` in any workspace folder. The configured workspace is the
   discovery boundary under ADR-0007: never climb into its parents, sibling
   workspaces, the data root or the application installation.
+- Resolve instruction paths through ADR-0007's shared workspace context and
+  bounded resolver. That context binds the stable workspace ID to its validated
+  root folder; instruction loading must not invent a separate root from current
+  Preferences, a displayed name, or a journal's storage path. External and AFP
+  workspaces use the same boundary as workspaces beneath the managed data root.
 - Read workspace-root guidance before the first model request of a new chat.
   Sherclawk has no separate shell working directory, so startup scope is the
   workspace root. Do not recursively scan its descendants for instructions.
@@ -116,8 +121,12 @@ adding it does not change the running application's loader.
 
 ### Cache, limits and visibility
 
-- Cache checked folders by full workspace-relative scope for the current
-  history, distinguishing delivered, absent, unusable and deferred states.
+- Bind instruction caches and delivered snapshots to the stable workspace ID
+  and current history. Cache checked folders by full workspace-relative scope
+  within that binding, distinguishing delivered, absent, unusable and deferred
+  states. The same relative folder name in two workspaces is never one entry;
+  a renamed workspace does not become a new identity merely because its display
+  name or absolute path changed. Revalidate its root through the shared resolver.
   "Not loaded because a limit was reached" is never equivalent to delivered.
   Missing-file lookup caching must not consume the allowance for delivered
   instruction content or suppress unrelated folders.
@@ -137,9 +146,12 @@ adding it does not change the running application's loader.
   guidance cannot be admitted, pause affected work with a visible explanation
   instead of proceeding as though it had been supplied. Preserve all work
   already completed; limits do not authorize cancellation or rollback.
-- Journal the delivered context, source and revision so the recorded history
-  explains what the model actually received. Report truncation honestly;
-  do not describe a partial snapshot as the complete file.
+- Journal the delivered context, source, revision and workspace association so
+  the recorded history explains what the model actually received. Central
+  session storage under ADR-0007 does not grant ordinary file-tool access to
+  those records. Instruction contents belong in the private conversation
+  journal, not the operational logs governed by ADR-0005. Report truncation
+  honestly; do not describe a partial snapshot as the complete file.
 - Continue to treat guidance as bounded plain MacRoman/CR workspace text,
   converted to UTF-8 for inference. Existing plain-text validation applies;
   this decision does not introduce a second text encoding or mutation path.
@@ -150,6 +162,16 @@ adding it does not change the running application's loader.
   clear folder-delivery state and load current root guidance before the first
   model request using the new history. Read nested guidance again on demand.
   A failed handoff leaves the old history and its instruction state intact.
+- Selecting a different workspace takes effect only with a new chat while
+  execution is idle, as required by ADR-0007. Bind the new conversation to the
+  selected workspace ID, clear prior instruction state, and load that workspace's
+  root guidance before its first model request. A failed transition leaves the
+  original conversation and workspace binding intact; changing Preferences
+  must not redirect tools underneath an existing conversation.
+- A handoff refreshes guidance for its original workspace; it is not a way to
+  transplant a conversation into another workspace. Existing journals, saved
+  handoffs, retained results and outstanding native operations retain their
+  original workspace association and storage location across a workspace switch.
 - A summary may mention conventions with their original scope, but is neither
   the exact instruction snapshot nor proof that the fresh history has loaded
   it. Prevent summarized sibling guidance from being promoted to global rules.
@@ -245,6 +267,11 @@ the need to define limits and show the user when guidance was not loaded.
   remove root-file text from `system_content`. `src/app/run_ctl.c` coordinates
   loading, pairing and any non-executed deferral before affected tool effects.
   `src/app/session.c` starts fresh delivery state only when a handoff commits.
+- Establish the shared workspace binding and new-chat-only switch boundary
+  before, or together with, this loader. Today's immediate Preferences-based
+  tool-root change is incompatible with per-history guidance snapshots. The
+  full central-storage migration need not ship first, but instruction loading,
+  native tools and sessions must use the same workspace identity and resolver.
 - Preserve journal-before-effect barriers, Stop and transport drains. Neither
   adding guidance nor starting a new history resets native process ownership,
   cancels a published job, or permits retry of an uncertain operation.
@@ -253,6 +280,11 @@ the need to define limits and show the user when guidance was not loaded.
   case-equivalent scopes; first-access mutations; failed instruction reads;
   capacity exhaustion; Stop; and successful/failed handoffs. Request snapshots
   must show file guidance in labelled history rather than the system policy.
+- Exercise identical relative folder names in two workspaces, successful and
+  failed workspace switches, renamed or external/AFP workspace roots, and a
+  handoff after workspace selection changes. Verify that parent/data-root
+  guidance stays outside discovery, caches never cross workspace identities,
+  and old records and operations keep their original associations.
 - Update usage, architecture and limits when the behavior ships. Host fault
   checks and the full Docker build are necessary; verify loader/controller
   integration and responsiveness in OS 9.2.2 before claiming guest support.
@@ -268,6 +300,7 @@ the need to define limits and show the user when guidance was not loaded.
 
 - [ADR-0004: Previous instruction-loading policy](0004-load-agents-md-as-bounded-owner-guidance.md)
 - [ADR-0003: Tool admission and mutation guarantees](0003-admit-tools-read-only-first.md)
+- [ADR-0005: Diagnostic privacy and record boundaries](0005-expose-bounded-read-only-self-diagnostics.md)
 - [ADR-0007: Workspace and application-data boundaries](0007-keep-data-separate-from-application.md)
 - [Claude Code: How CLAUDE.md files load](https://code.claude.com/docs/en/memory#how-claudemd-files-load)
   (consulted 2026-10-16): startup ancestry, lazy descendant discovery and
