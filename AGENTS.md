@@ -9,7 +9,7 @@ against the stub headers in `tests/toolbox/`.
 
 ```bash
 tools/check.sh                # ASan/UBSan protocol, loop and File Manager fault suites
-tools/check-transport.sh      # TLS I/O against patched Certainly sources
+tools/check-transport.sh      # TLS I/O against the Certainly sources
 tools/lint.sh                 # shellcheck, cppcheck and ruff (the CI lint gate)
 ```
 
@@ -23,8 +23,9 @@ tools/lint.sh                 # shellcheck, cppcheck and ruff (the CI lint gate)
   shared sources with plain `cc`.
 - There is no test runner: each suite is a standalone binary under
   `build/tests/`. To rerun one suite, reuse its `cc` line from `tools/check.sh`.
-- Certainly is fetch-only and never committed:
-  `git clone --recursive --depth 1 https://github.com/minorbug/certainly.git ../Certainly`
+- Certainly is fetch-only and never committed. Sherclawk builds against the
+  `lumberbarons/certainly` fork, not upstream `minorbug/certainly`:
+  `git clone --depth 1 https://github.com/lumberbarons/certainly.git ../Certainly`
   (override with `CERTAINLY_DIR`). Without it, check.sh skips the network suite
   and check-transport.sh exits with an error.
 
@@ -40,8 +41,8 @@ cp config.example.h config.local.h  # optional local config; gitignored
 - All code changes must pass a Docker-based `./build.sh` before a PR is created:
   the host checks do not compile `src/app/main.c` or the other Toolbox-only sources.
 - `build.sh` runs the `ghcr.io/autc04/retro68` image, swaps in the Universal
-  Interfaces, stages Certainly and applies `patches/*.patch` to the staged copy
-  (the upstream clone stays pristine), then builds with CMake.
+  Interfaces, stages a copy of Certainly, then builds with CMake. Certainly fixes belong in
+  the fork, not in this repo.
 - The SDK is user-supplied, never downloaded or redistributed by this repo.
   `INTERFACES_DIR` points to the complete `Interfaces&Libraries` folder;
   the default is `../InterfacesAndLibraries`. See
@@ -109,8 +110,7 @@ cp config.example.h config.local.h  # optional local config; gitignored
   programs. `tools/native-process-check.c` is the exception: a guest source
   fixture built as `main.c` of a starter project (see
   `templates/ppc-toolbox/README.md`).
-- `patches/` are fixes applied to staged copies of Certainly by build.sh and
-  check-transport.sh. `vendor/` is imported code (HelloChat HTTP plus the host
+- `vendor/` is imported code (HelloChat HTTP plus the host
   TLS shim); `SHERCLAWK_APP` gates Sherclawk's own User-Agent there.
 - Generated files and secrets stay in `build/` and `config.local.h` (both
   gitignored). Never commit credentials; builds without them still launch.
