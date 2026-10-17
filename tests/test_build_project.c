@@ -46,7 +46,7 @@ int toolserver_poll(uint32_t now,int stop,ToolServerReply *reply)
 #endif
 /* FSpDelete itself now lives in the shared test_tools.c model, which the
  * retained MCP result adapter also links. */
-OSErr FSpGetFInfo(const FSSpec *s,FInfo *p) {int i=find(s->parID,s->name);if(i<0)return fnfErr;*p=files[i].info;return 0;}
+OSErr FSpGetFInfo(const FSSpec *s,FInfo *p) {int i=find(s->parID,s->name);fm_calls++;if(i<0)return fnfErr;*p=files[i].info;return 0;}
 static int launches,launch_error,process_error,run_journal_error;
 static FSSpec launched;
 static int process_absent, identity_changed;
@@ -55,7 +55,7 @@ static unsigned char resource_bytes[64][4096];
 OSErr FSRead(short ref,long *n,void *out)
 {
     if(ref<64)return model_FSRead(ref,n,out);
-    ref-=64;
+    fm_calls++;ref-=64;
     if(*n>files[ref].resource-positions[ref])*n=files[ref].resource-positions[ref];
     memcpy(out,resource_bytes[ref]+positions[ref],(size_t)*n);positions[ref]+=*n;
     return 0;
@@ -155,26 +155,25 @@ static void large_build_checks(void)
  * job (the ready marker), so guest ticks per call convert them to time. */
 static void reference_build_cost(void)
 {
+    enum { SOURCE_BYTES=(JOB_TOTAL_MAX-6*1024)/BUILD_INPUTS };
     char descriptor[256]="{\"protocol\":2,\"toolchain\":\"mpw-ppc-v2\",\"sources\":[\"main.c\"",name[16];
-    static char body[BUILD_INPUTS][(JOB_TOTAL_MAX-6*1024)/BUILD_INPUTS];
-    int k,f,r=2,turns=0;long fm0;
+    int k,r=2,turns=0;long fm0;
     for(k=1;k<BUILD_INPUTS;k++) {
         snprintf(name,sizeof(name),",\"s%d.c\"",k);strcat(descriptor,name);
     }
     strcat(descriptor,"],\"output\":\"sample\"}\r");
-    f=fixture(descriptor);
+    fixture(descriptor);
     for(k=0;k<BUILD_INPUTS;k++) {
         int i=k?record_file(files[entry("project")].id,"",""):entry("main.c");
         if(k) snprintf(files[i].name,sizeof(files[i].name),"s%d.c",k);
-        files[i].size=(long)sizeof(body[k]);
-        memset(body[k],'x',sizeof(body[k]));memcpy(files[i].bytes,body[k],(size_t)files[i].size);
-        files[i].bytes[files[i].size-1]='\r';
+        files[i].size=SOURCE_BYTES;
+        memset(files[i].bytes,'x',SOURCE_BYTES);files[i].bytes[SOURCE_BYTES-1]='\r';
     }
-    (void)f;fm0=fm_calls;
+    fm0=fm_calls;
     for(;r==2 && entry("ready")<0 && turns<2000;turns++)r=build_project_step(result,sizeof(result),(uint32_t)turns+2,0);
     assert(r==2 && entry("ready")>=0);
-    cost_check("build_project stage ten 12 KiB sources: event turns",turns,535);
-    cost_check("build_project stage ten 12 KiB sources: File Manager calls",fm_calls-fm0,3829);
+    cost_check("build_project stage a snapshot near the input cap: event turns",turns,535);
+    cost_check("build_project stage a snapshot near the input cap: File Manager calls",fm_calls-fm0,3829);
     assert(build_project_step(result,sizeof(result),9000,1)==1);handles_closed();
 }
 /* Run a whole build through the native executor with ToolServer replies

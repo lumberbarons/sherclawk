@@ -101,8 +101,8 @@ bound in the same commit. The counters are:
 
 | Counter | Reference |
 |---|---|
-| `jobs stage ...` (`tests/test_jobs.c`) | Event turns and File Manager calls to stage and publish a job at the snapshot input limits, plus File Manager calls per idle poll turn |
-| `build_project stage ...` (`tests/test_build_project.c`) | The same from a `build_project` call with ten sources of about 12 KiB each |
+| `jobs stage ...` (`tests/test_jobs.c`) | Event turns and File Manager calls to stage and publish a job at the snapshot input limits, plus the most File Manager calls in one idle poll turn |
+| `build_project stage ...` (`tests/test_build_project.c`) | The same from a `build_project` call with a source set near the snapshot cap |
 | `run_application launch verification` (`tests/test_quit_application.c`) | Event turns and File Manager calls from `run_application` to a verified, launched artifact |
 | `agent model rounds` (`tests/test_agent.c`) | Model rounds for a run with one truncation retry and a fixed number of single-call tool rounds |
 | `network_step turns` (`tests/test_network.c`) | `network_step` calls to send a 256 KiB request and receive a 64 KiB response in 1.4 KiB and 16 KiB records |
@@ -115,24 +115,28 @@ Host counts convert to guest time with the per-call costs that
 launch it with the guest otherwise idle. Each figure is total ticks over many
 repetitions, because a tick is 1/60 s.
 
-| Operation | Ticks per call | Recorded |
-|---|---|---|
-| `FSpOpenDF` + `FSClose` | 0.68 | October 16, 2026 |
-| `SetFPos` + 1 KiB `FSRead` on an open file | 0.33 | October 16, 2026 |
-| `FSpOpenDF` + 1 KiB `FSRead` + `FSClose` | 1.0 | October 16, 2026 |
-| `PBGetCatInfoSync` lookup | 0.32 | October 16, 2026 |
-| `SetFPos` + 1 KiB `FSWrite` on an open file | 0.38 | October 16, 2026 |
-| `FlushVol` | 0.35 | October 16, 2026 |
-| `FSpCreate` + `FSpDelete` | 3.1 | October 16, 2026 |
-| Event turn, `WaitNextEvent` sleep 0 | 0.02 | October 16, 2026 |
-| Event turn, sleep 1 (the busy-run cadence) | 1.1 | October 16, 2026 |
-| Event turn, sleep 10 (the idle cadence) | 8.5 | October 16, 2026 |
+| Operation | Ticks per call, range over runs |
+|---|---|
+| `FSpOpenDF` + `FSClose` | 0.68 to 0.73 |
+| `SetFPos` + 1 KiB `FSRead` on an open file | 0.33 to 0.37 |
+| `FSpOpenDF` + 1 KiB `FSRead` + `FSClose` | 1.0 to 1.1 |
+| `PBGetCatInfoSync` lookup | 0.32 to 0.37 |
+| `SetFPos` + 1 KiB `FSWrite` on an open file | 0.38 to 0.43 |
+| `FlushVol` | 0.35 to 0.45 |
+| `FSpCreate` + `FSpDelete` | 3.1 to 4.1 |
+| Event turn, `WaitNextEvent` sleep 0 | 0.02 to 0.14 |
+| Event turn, sleep 1 (the busy-run cadence) | 1.0 to 1.1 |
+| Event turn, sleep 10 (the idle cadence) | 8.4 to 8.6 |
 
-A busy run therefore costs at least a tick per event turn however little each
-turn does, and the File Manager calls inside the turns add to that. Treat the
-conversion as an estimate for ordering changes, not a latency promise: it was
-measured on one idle UTM guest and one AFP share, and two runs agreed to within
-about 8% on every figure both measured. Rerun the diagnostic after
+The figures were recorded on October 16, 2026; the [verification
+history](history/verification.md) has the raw totals. A busy run costs at least
+a tick per event turn however little each turn does, and the File Manager calls
+inside the turns add to that. Treat the conversion as a lower-bound estimate
+for ordering changes, not a latency promise: the file figures repeat one 1 KiB
+file that the share keeps hot, while staging touches many files and larger
+transfers, and the runs were on one idle UTM guest and one AFP share. The
+spread between runs is up to about 15% for most rows and wider for file
+creation and the sleep-0 turn, so quote a range rather than one value. Rerun the diagnostic after
 a change of host, share or guest configuration and update the table.
 
 

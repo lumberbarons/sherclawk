@@ -154,10 +154,14 @@ static void reference_cost(void)
     while(job.state==JOB_STAGING) { step(0,0); turns++; assert(turns<10000); }
     assert(job.state==JOB_WAITING && job.published);
     fm_stage=fm_calls;
-    cost_check("jobs stage ten inputs at the 128 KiB cap: event turns",turns,273);
-    cost_check("jobs stage ten inputs at the 128 KiB cap: File Manager calls",fm_stage,1132);
-    calls=fm_calls; step(60,0); polls=fm_calls-calls;
-    cost_check("jobs poll an idle waiting job: File Manager calls per turn",polls,3);
+    cost_check("jobs stage a snapshot at the input cap: event turns",turns,273);
+    cost_check("jobs stage a snapshot at the input cap: File Manager calls",fm_stage,1132);
+    /* The first poll after publication and the steady state both count. */
+    for(i=0,polls=0;i<3;i++) {
+        calls=fm_calls; step(60*(uint32_t)(i+1),0);
+        if(fm_calls-calls>polls) polls=fm_calls-calls;
+    }
+    cost_check("jobs poll an idle waiting job: most File Manager calls in a turn",polls,3);
 }
 int main(void)
 {

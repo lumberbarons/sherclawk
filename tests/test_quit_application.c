@@ -6,9 +6,9 @@
 #include "native/application_process.h"
 #include "cost.h"
 #include <stdarg.h>
-OSErr PBHGetVInfoSync(HParamBlockRec *p) {(void)p;return fnfErr;}
-OSErr PBDTGetPath(DTPBRec *p) {(void)p;return fnfErr;}
-OSErr PBDTGetAPPLSync(DTPBRec *p) {(void)p;return fnfErr;}
+OSErr PBHGetVInfoSync(HParamBlockRec *p) {(void)p;fm_calls++;return fnfErr;}
+OSErr PBDTGetPath(DTPBRec *p) {(void)p;fm_calls++;return fnfErr;}
+OSErr PBDTGetAPPLSync(DTPBRec *p) {(void)p;fm_calls++;return fnfErr;}
 static void log_message(const char *s,...) {(void)s;}
 
 static char runargs[128],handle[32];
@@ -77,7 +77,7 @@ int main(void)
     strcpy(call.arguments,"{\"run_id\":\"arbitrary\",\"process\":42}");r=quit_application_begin(&call,result,sizeof(result),quit_log,NULL,1);assert(!r);assert(strstr(result,"QUIT_ARGUMENTS"));
     fresh();
     cost_check("run_application launch verification: event turns",launch_turns,36);
-    cost_check("run_application launch verification: File Manager calls",launch_fm,996);
+    cost_check("run_application launch verification: File Manager calls",launch_fm,997);
     n=ae_sends;assert(quit_begin()==2);assert(!quit_application_step(result,sizeof(result),2001,1));unchanged_sends(n);
     submit();old_id=ae_last_id;
     for(i=1;i<=8;i*=2) {

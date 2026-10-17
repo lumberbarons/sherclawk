@@ -32,13 +32,21 @@ static void need(OSErr err, const char *what)
 {
     if (err) { fprintf(logfile, "FAIL %s err=%d\n", what, (int)err); failures++; }
 }
+/* A failed open ends the measurement: timing the error path, or using the
+ * reference it never set, would report numbers that mean nothing. */
+static int open_scratch(short perm, short *ref, const char *what)
+{
+    OSErr err = FSpOpenDF(&scratch, perm, ref);
+    if (err) { fprintf(logfile, "FAIL %s err=%d\n", what, (int)err); failures++; return 0; }
+    return 1;
+}
 static unsigned long open_close(void)
 {
     unsigned long start = TickCount();
     short ref;
     int i;
     for (i = 0; i < OPS; i++) {
-        need(FSpOpenDF(&scratch, fsRdPerm, &ref), "open");
+        if (!open_scratch(fsRdPerm, &ref, "open")) return 0;
         need(FSClose(ref), "close");
     }
     return TickCount() - start;
@@ -51,7 +59,7 @@ static unsigned long open_read_close(void)
     int i;
     for (i = 0; i < OPS; i++) {
         n = PAGE;
-        need(FSpOpenDF(&scratch, fsRdPerm, &ref), "open");
+        if (!open_scratch(fsRdPerm, &ref, "open")) return 0;
         need(FSRead(ref, &n, page), "read");
         need(FSClose(ref), "close");
     }
@@ -63,7 +71,7 @@ static unsigned long reads_on_open_file(void)
     short ref;
     long n;
     int i;
-    need(FSpOpenDF(&scratch, fsRdPerm, &ref), "open");
+    if (!open_scratch(fsRdPerm, &ref, "open")) return 0;
     start = TickCount();
     for (i = 0; i < OPS; i++) {
         n = PAGE;
@@ -94,7 +102,7 @@ static unsigned long writes_on_open_file(void)
     short ref;
     long n;
     int i;
-    need(FSpOpenDF(&scratch, fsRdWrPerm, &ref), "open for write");
+    if (!open_scratch(fsRdWrPerm, &ref, "open for write")) return 0;
     start = TickCount();
     for (i = 0; i < OPS; i++) {
         n = PAGE;
@@ -153,7 +161,9 @@ int main(void)
         fprintf(logfile, "FAIL scratch create\nRESULT failures=1\n"); fclose(logfile); return 1;
     }
     memset(page, 'x', sizeof(page)); n = PAGE;
-    need(FSpOpenDF(&scratch, fsRdWrPerm, &ref), "open for write");
+    if (!open_scratch(fsRdWrPerm, &ref, "open for write")) {
+        fprintf(logfile, "RESULT failures=%d\n", failures); fclose(logfile); return 1;
+    }
     need(FSWrite(ref, &n, page), "write");
     need(FSClose(ref), "close after write");
     FlushVol(NULL, scratch.vRefNum);

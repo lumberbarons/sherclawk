@@ -1076,7 +1076,7 @@ static void reference_cost(void)
     }
     assert(pin(agent_request(&a, "model", "", req, sizeof(req))) > 0);
     assert(!agent_response(&a, final, strlen(final), 200, error, sizeof(error)) && !a.active);
-    cost_check("agent model rounds, one truncation retry and three tool calls", a.rounds, 5);
+    cost_check("agent model rounds, one truncation retry and single-call tool rounds", a.rounds, 5);
 }
 int main(void)
 {
