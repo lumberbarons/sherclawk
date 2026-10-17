@@ -1,11 +1,11 @@
 ---
 id: ADR-0004
 title: Load AGENTS.md as bounded owner guidance
-status: proposed
+status: superseded
 date: 2026-10-09
 deciders: [lumberbarons]
 supersedes: []
-superseded-by: []
+superseded-by: [ADR-0008]
 related: [ADR-0003]
 tags: [prompt, workspace, trust, limits]
 ---
