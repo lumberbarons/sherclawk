@@ -21,6 +21,7 @@
 #include <Processes.h>
 #include "native/ae_dispatch.h"
 #include "ae_model.c"
+#include "cost.h"
 /* Queued transport model: replies arrive only when explicitly released. */
 #ifndef TEST_REAL_TOOLSERVER
 #include "stepped-tools.h"
@@ -148,6 +149,34 @@ static void large_build_checks(void)
     queue_mode=0;
     puts("PASS 64 KiB build inputs, immutable arena and aggregate limits before reservation");
 }
+/* Reference build at the input limits: BUILD_INPUTS sources that together
+ * fill the snapshot cap with project.json, manifest.json and the script.
+ * Counts the event turns and File Manager calls from the call to the published
+ * job (the ready marker), so guest ticks per call convert them to time. */
+static void reference_build_cost(void)
+{
+    char descriptor[256]="{\"protocol\":2,\"toolchain\":\"mpw-ppc-v2\",\"sources\":[\"main.c\"",name[16];
+    static char body[BUILD_INPUTS][(JOB_TOTAL_MAX-6*1024)/BUILD_INPUTS];
+    int k,f,r=2,turns=0;long fm0;
+    for(k=1;k<BUILD_INPUTS;k++) {
+        snprintf(name,sizeof(name),",\"s%d.c\"",k);strcat(descriptor,name);
+    }
+    strcat(descriptor,"],\"output\":\"sample\"}\r");
+    f=fixture(descriptor);
+    for(k=0;k<BUILD_INPUTS;k++) {
+        int i=k?record_file(files[entry("project")].id,"",""):entry("main.c");
+        if(k) snprintf(files[i].name,sizeof(files[i].name),"s%d.c",k);
+        files[i].size=(long)sizeof(body[k]);
+        memset(body[k],'x',sizeof(body[k]));memcpy(files[i].bytes,body[k],(size_t)files[i].size);
+        files[i].bytes[files[i].size-1]='\r';
+    }
+    (void)f;fm0=fm_calls;
+    for(;r==2 && entry("ready")<0 && turns<2000;turns++)r=build_project_step(result,sizeof(result),(uint32_t)turns+2,0);
+    assert(r==2 && entry("ready")>=0);
+    cost_check("build_project stage ten 12 KiB sources: event turns",turns,535);
+    cost_check("build_project stage ten 12 KiB sources: File Manager calls",fm_calls-fm0,3829);
+    assert(build_project_step(result,sizeof(result),9000,1)==1);handles_closed();
+}
 /* Run a whole build through the native executor with ToolServer replies
  * released by hand: compile and link succeed, the linker's PEF is planted, and
  * the executor publishes success. A PEF without a resource fork is refused by
@@ -205,6 +234,7 @@ static void authorization_check(const char *good,int mode)
 int main(void)
 {
     large_build_checks();
+    reference_build_cost();
     const char *good="{\"protocol\":2,\"toolchain\":\"mpw-ppc-v2\",\"sources\":[\"main.c\"],\"output\":\"sample\"}\r";
     char recipe[12288];int i,r,steps;
     assert(!build_project_recipe(good,recipe,sizeof(recipe)));

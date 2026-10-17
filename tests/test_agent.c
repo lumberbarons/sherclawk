@@ -4,6 +4,7 @@
 #include "agent/text.h"
 #include "app/chat.h"
 #include "agent/base64.h"
+#include "cost.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -1056,6 +1057,27 @@ static void longest_prompt(void)
     assert(a.used > strlen(prompt) && pin(agent_request(&a, "model", "", req, sizeof(req))) > 0);
     assert(strstr(req, prompt));
 }
+/* Reference run: one reply cut off at the output limit and retried, three
+ * single-call tool rounds, then the final answer. A change that adds model
+ * rounds (an extra retry, a lost tool result) shows up here. */
+static void reference_cost(void)
+{
+    const char *final = "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Inspected.\"}}]}";
+    int i;
+    begin();
+    assert(pin(agent_request(&a, "model", "", req, sizeof(req))) > 0);
+    call("length");
+    assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)) && a.truncated);
+    for (i = 0; i < 3; i++) {
+        assert(pin(agent_request(&a, "model", "", req, sizeof(req))) > 0);
+        call("tool_calls");
+        assert(!agent_response(&a, response, strlen(response), 200, error, sizeof(error)) && a.count == 1);
+        assert(!agent_tool_result(&a, "{\"status\":\"ok\"}", error, sizeof(error)));
+    }
+    assert(pin(agent_request(&a, "model", "", req, sizeof(req))) > 0);
+    assert(!agent_response(&a, final, strlen(final), 200, error, sizeof(error)) && !a.active);
+    cost_check("agent model rounds, one truncation retry and three tool calls", a.rounds, 5);
+}
 int main(void)
 {
     const char *final = "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Inspected.\"}}]}";
@@ -1218,6 +1240,7 @@ int main(void)
     vision_flag();
     images();
     model_page();
+    reference_cost();
     puts("PASS agent tools, usage accounting, history, truncation, Stop, persistence barriers, bounds and model metadata");
     return 0;
 }

@@ -4,6 +4,7 @@
 #include "test_build_project.c"
 #undef main
 #include "native/application_process.h"
+#include "cost.h"
 #include <stdarg.h>
 OSErr PBHGetVInfoSync(HParamBlockRec *p) {(void)p;return fnfErr;}
 OSErr PBDTGetPath(DTPBRec *p) {(void)p;return fnfErr;}
@@ -21,13 +22,14 @@ static int quit_log(void *ctx,const char *event,const char *json)
 }
 static void set_self(void)
 {process_count=1;process_self=0;processes[0].hi=0;processes[0].lo=7;}
+static long launch_turns,launch_fm;
 static int launch_again(void)
 {
-    int r,turns=0;
+    int r,turns=0;long fm0=fm_calls;
     strcpy(call.arguments,runargs);
     r=run_application_begin(&call,result,sizeof(result),build_journal,NULL,1000);assert(r==2);
     do {r=run_application_step(result,sizeof(result),1001,0);turns++;assert(turns<400);}while(r==2);
-    field("run_id",handle,sizeof(handle));return r;
+    launch_turns=turns;launch_fm=fm_calls-fm0;field("run_id",handle,sizeof(handle));return r;
 }
 static void fresh(void)
 {
@@ -73,7 +75,10 @@ int main(void)
     strcpy(call.arguments,"{\"run_id\":\"arbitrary\"}");r=quit_application_begin(&call,result,sizeof(result),quit_log,NULL,1);assert(!r);
     assert(strstr(result,"RUN_NOT_OWNED"));unchanged_sends(n);
     strcpy(call.arguments,"{\"run_id\":\"arbitrary\",\"process\":42}");r=quit_application_begin(&call,result,sizeof(result),quit_log,NULL,1);assert(!r);assert(strstr(result,"QUIT_ARGUMENTS"));
-    fresh();n=ae_sends;assert(quit_begin()==2);assert(!quit_application_step(result,sizeof(result),2001,1));unchanged_sends(n);
+    fresh();
+    cost_check("run_application launch verification: event turns",launch_turns,36);
+    cost_check("run_application launch verification: File Manager calls",launch_fm,996);
+    n=ae_sends;assert(quit_begin()==2);assert(!quit_application_step(result,sizeof(result),2001,1));unchanged_sends(n);
     submit();old_id=ae_last_id;
     for(i=1;i<=8;i*=2) {
         ae_attribute_fault=i;ae_deliver(old_id,42,0,1,-128);

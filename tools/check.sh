@@ -14,6 +14,10 @@ if ! "${CC:-cc}" -dM -E -x c /dev/null 2>/dev/null | grep -q __clang__; then
     WARN+=(-Wno-format-truncation)
 fi
 SAN=("-fsanitize=address,undefined" -fno-omit-frame-pointer)
+# Suites append their deterministic cost totals (tests/cost.h) here; the table
+# prints at the end and every total is also an upper-bound assertion.
+export SHERCLAWK_COST_LOG="$HERE/build/cost.log"
+: > "$SHERCLAWK_COST_LOG"
 # tools/check-coverage.sh sets CHECK_COVERAGE=1 to build profile-instrumented
 # binaries and keep each suite's raw profile for the aggregated report.
 COV=()
@@ -246,3 +250,8 @@ build_test test-template "${WARN[@]}" -Wno-multichar -Wno-deprecated-declaration
     "$HERE/tests/template/test_template.c" "$HERE/templates/ppc-toolbox/io.c" \
     "$HERE/templates/ppc-toolbox/png.c" "$HERE/templates/ppc-toolbox/selfrender.c"
 run_test test-template
+
+echo
+echo "Cost table (host counts; convert to guest ticks with docs/development.md#cost-table-and-guest-calibration)"
+printf '%-62s %8s %8s\n' counter measured bound
+cat "$SHERCLAWK_COST_LOG"

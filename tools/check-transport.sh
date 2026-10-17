@@ -12,6 +12,8 @@ if [ ! -d "$SOURCE/include" ]; then
 fi
 STAGE="$HERE/build/transport-tests"
 mkdir -p "$STAGE"
+export SHERCLAWK_COST_LOG="$STAGE/cost.log"
+: > "$SHERCLAWK_COST_LOG"
 cp -R "$SOURCE/src" "$SOURCE/include" "$STAGE/"
 git init -q "$STAGE"
 for patch in "$HERE"/patches/*.patch; do (cd "$STAGE" && git apply "$patch"); done
@@ -24,3 +26,7 @@ if [ "$(uname -s)" = Darwin ]; then LINK_GC=-Wl,-dead_strip; fi
     -I"$SOURCE/bearssl/inc" "$HERE/tests/test_tls_io.c" "$STAGE/src/certainly.c" \
     "$LINK_GC" -o "$STAGE/test-tls-io"
 "$STAGE/test-tls-io"
+echo
+echo "Cost table (host counts; convert to guest ticks with docs/development.md#cost-table-and-guest-calibration)"
+printf '%-62s %8s %8s\n' counter measured bound
+cat "$SHERCLAWK_COST_LOG"

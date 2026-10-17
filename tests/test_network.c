@@ -1,5 +1,6 @@
 /* Fake Certainly boundaries verify request offsets and failure recovery. */
 #include "agent/network.h"
+#include "cost.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -11,16 +12,32 @@ static MacTLS_State state;
 static size_t wire_len, response_at;
 static char wire[128];
 static const char *response;
+/* Bulk mode moves one TLS record of bulk_record bytes per Write call and makes
+ * one response record readable per Pump, once the request is fully written. */
+static size_t bulk_record, bulk_len, bulk_at, bulk_avail;
+static char bulk_wire[262144], bulk_response[CHAT_RESPONSE_CAP];
 static const char *destination = "openrouter.ai";
 static uint16_t destination_port = 443;
 MacTLS_Context *MacTLS_Create(const char *host, uint16_t port)
 { assert(!strcmp(host, destination) && port == destination_port); return create_fail ? NULL : &context; }
 MacTLS_State MacTLS_Pump(MacTLS_Context *c)
-{ assert(c == &context); pumps++; read_once = 0; return state; }
+{
+    assert(c == &context); pumps++; read_once = 0;
+    if (bulk_record && wire_len == net.request_len) {
+        bulk_avail = bulk_len - bulk_at;
+        if (bulk_avail > bulk_record) bulk_avail = bulk_record;
+    }
+    return state;
+}
 int MacTLS_Write(MacTLS_Context *c, const void *data, size_t len)
 {
     int n = write_result;
     assert(c == &context); writes++;
+    if (bulk_record) {
+        n = len < bulk_record ? (int)len : (int)bulk_record;
+        memcpy(bulk_wire + wire_len, data, (size_t)n); wire_len += (size_t)n;
+        return n;
+    }
     if (n > (int)len) n = (int)len;
     if (n > 0) { memcpy(wire + wire_len, data, (size_t)n); wire_len += (size_t)n; }
     return n;
@@ -29,6 +46,11 @@ int MacTLS_Read(MacTLS_Context *c, void *out, size_t len)
 {
     size_t n;
     assert(c == &context);
+    if (bulk_record) {
+        n = bulk_avail < len ? bulk_avail : len;
+        memcpy(out, bulk_response + bulk_at, n); bulk_at += n; bulk_avail -= n;
+        return (int)n;
+    }
     if (read_once++ || !response || wire_len != net.request_len) return 0;
     n = strlen(response) - response_at;
     if (n > 3) n = 3;
@@ -47,6 +69,26 @@ static void reset(void)
     memset(&net, 0, sizeof(net)); memset(wire, 0, sizeof(wire));
     pumps = writes = closes = response_at = wire_len = create_fail = 0;
     state = kMacTLS_Connected; response = NULL; write_result = 3;
+}
+/* A 256 KiB request up and a response filling the 64 KiB cap, carried in
+ * records of the given size: network_step turns until the exchange completes. */
+static int bulk_turns(size_t record)
+{
+    static char request[262144];
+    char header[64]; size_t body, header_len; int turns = 0;
+    memset(request, 'q', sizeof(request));
+    reset(); bulk_record = record; destination = "openrouter.ai"; destination_port = 443;
+    header_len = (size_t)snprintf(header, sizeof(header), "HTTP/1.1 200 OK\r\nContent-Length: %05d\r\n\r\n", 0);
+    body = CHAT_RESPONSE_CAP - header_len;
+    snprintf(header, sizeof(header), "HTTP/1.1 200 OK\r\nContent-Length: %05d\r\n\r\n", (int)body);
+    memcpy(bulk_response, header, header_len); memset(bulk_response + header_len, 'r', body);
+    bulk_len = CHAT_RESPONSE_CAP; bulk_at = bulk_avail = 0;
+    assert(network_start(&net, request, sizeof(request)) == 0);
+    while (!net.result && turns < 100000) { network_step(&net); turns++; }
+    assert(net.result == 1 && net.status == 200 && net.body_len == body);
+    assert(net.sent == sizeof(request) && !memcmp(bulk_wire, request, sizeof(request)));
+    network_close(&net); bulk_record = 0;
+    return turns;
 }
 int main(void)
 {
@@ -85,6 +127,8 @@ int main(void)
     reset(); destination = "mcp.example"; destination_port = 8443;
     assert(network_start_at(&net, destination, destination_port, "x", 1) == 0);
     network_close(&net); assert(closes == 1);
+    cost_check("network_step turns, 256 KiB up and 64 KiB down in 1.4 KiB records", bulk_turns(1400), 235);
+    cost_check("network_step turns, 256 KiB up and 64 KiB down in 16 KiB records", bulk_turns(16384), 20);
     puts("PASS network request offsets, backpressure, response assembly and recovery");
     return 0;
 }
