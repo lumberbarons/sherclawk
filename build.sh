@@ -4,8 +4,8 @@
 #
 # Two things beyond the usual Retro68 container are required:
 #
-#   * Certainly, a separate upstream clone (fetch-only, never committed):
-#       git clone --recursive --depth 1 https://github.com/minorbug/certainly.git Certainly
+#   * Certainly, a separate clone of the lumberbarons fork (fetch-only, never committed):
+#       git clone --depth 1 https://github.com/lumberbarons/certainly.git Certainly
 #     Default location: ../Certainly next to this repo; override CERTAINLY_DIR.
 #
 #   * Your own lawfully obtained Apple Universal Interfaces 3.4. The container image
@@ -16,9 +16,8 @@
 #
 # The interfaces are swapped into the container's toolchain for the build
 # (interfaces-and-libraries.sh, the mechanism Retro68 provides for this),
-# and Certainly is staged into the container with the vendored patches
-# (patches/*.patch) applied there — the upstream clone stays pristine.
-# It is built out-of-tree as part of the same CMake run.
+# and Certainly is staged into the container as a copy, so the clone itself
+# is never written to. It is built out-of-tree as part of the same CMake run.
 # The artwork resource is generated from art/sherclawk.png (8-bit RGBA,
 # noninterlaced); override with SHERCLAWK_ART.
 # BUILD_TARGET (or $1) selects a diagnostic target; default Sherclawk_APPL.
@@ -35,13 +34,12 @@ HERE="$PWD"
 IMAGE="ghcr.io/autc04/retro68"
 TOOLCHAIN="/Retro68-build/toolchain/powerpc-apple-macos/cmake/retroppc.toolchain.cmake"
 BUILD_TARGET="${BUILD_TARGET:-${1:-Sherclawk_APPL}}"
-PATCH_DIR="$HERE/patches"
 
 CERTAINLY_DIR="${CERTAINLY_DIR:-$HERE/../Certainly}"
 if [ ! -f "$CERTAINLY_DIR/CMakeLists.txt" ]; then
     echo "error: Certainly not found at $CERTAINLY_DIR" >&2
     echo "clone it first, next to this repository:" >&2
-    echo "  git clone --recursive --depth 1 https://github.com/minorbug/certainly.git Certainly" >&2
+    echo "  git clone --depth 1 https://github.com/lumberbarons/certainly.git Certainly" >&2
     exit 1
 fi
 CERTAINLY_DIR="$(cd "$CERTAINLY_DIR" && pwd)"
@@ -65,7 +63,6 @@ python3 "$HERE/tools/make-art.py" "${SHERCLAWK_ART:-$HERE/art/sherclawk.png}" "$
 docker run --rm \
     -e BUILD_TARGET="$BUILD_TARGET" \
     -v "$HERE":/work \
-    -v "$PATCH_DIR":/patches:ro \
     -v "$CERTAINLY_DIR":/certainly:ro \
     -v "$INTERFACES_DIR":/interfaces:ro \
     -w /work "$IMAGE" bash -c "
@@ -75,19 +72,12 @@ docker run --rm \
     # are off — this is a PowerPC app.
     cd /Retro68-build/bin
     ./interfaces-and-libraries.sh /Retro68-build/toolchain /interfaces false true false
-    # Stage Certainly and apply the vendored patches (patches/*.patch).
-    # The upstream clone stays pristine and pull-able.
+    # Stage a copy of Certainly so the build never writes to the clone.
     rm -rf /tmp/certainly
     cp -a /certainly /tmp/certainly
     cd /tmp/certainly
-    for p in /patches/*.patch; do
-        [ -e \"\$p\" ] || continue
-        echo \"applying patch: \$(basename \$p)\"
-        git apply \"\$p\"
-    done
-    # A baseline build may restore older source/header mtimes than the
-    # previous optimized objects. Recompile the staged library to avoid
-    # mixing context layouts from different patch sets.
+    # Recompile the staged library rather than trust object mtimes from an
+    # earlier build.
     find src include -type f -exec touch {} +
     # Build Certainly + BearSSL + the app.
     cd /work

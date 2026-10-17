@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Clone Certainly (fetch-only dependency)
-        run: git clone --recursive --depth 1 https://github.com/minorbug/certainly.git ../Certainly
+        run: git clone --depth 1 https://github.com/lumberbarons/certainly.git ../Certainly
       - name: Protocol, loop and File Manager fault suites (ASan/UBSan)
         run: tools/check.sh
       - name: TLS transport suites (ASan/UBSan)
@@ -53,6 +53,6 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang-18 llvm-18
       - name: Clone Certainly (fetch-only dependency)
-        run: git clone --recursive --depth 1 https://github.com/minorbug/certainly.git ../Certainly
+        run: git clone --depth 1 https://github.com/lumberbarons/certainly.git ../Certainly
       - name: Line and branch coverage over the host suites
         run: tools/check-coverage.sh
