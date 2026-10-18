@@ -141,6 +141,7 @@ ADRs live in `docs/adr/`. Read the relevant ADRs before proposing architectural 
 |---|---|
 | `docs/adr/0001-execute-builds-natively-through-toolserver.md` | Any change to how builds execute: `src/native/selfbuild.c`, `src/native/toolserver.c`, the build queue, `worker-lock` ownership, retry/replay of builds, or reintroducing MacRelix or a shell worker |
 | `docs/adr/0002-run-tests-in-separate-native-app.md` | Designing `test_project`, a test target in the project descriptor, or any place project-authored code would run |
+| `docs/adr/0009-build-harness-in-repo-then-extract.md` | Adding code to `harness/`, touching the guest controller, QMP tooling, or the reservation manager, or deciding what code lives in the repo versus the future harness project |
 | `docs/adr/0004-load-agents-md-as-bounded-owner-guidance.md` | Historical instruction-loading policy, superseded by ADR-0008; read for the original constraints and rejected alternatives |
 | `docs/adr/0008-load-folder-guidance-at-startup-and-on-demand.md` | Changing workspace or nested-folder `AGENTS.md` discovery, scoped delivery, caching, handoff restoration, bounds or authority framing |
 | `docs/adr/0003-admit-tools-read-only-first.md` | Adding or changing a model-facing tool, especially one that mutates files, Finder metadata, resources or other processes |
