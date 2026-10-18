@@ -7,6 +7,8 @@
 #   * Certainly, a separate clone of the lumberbarons fork (fetch-only, never committed):
 #       git clone --depth 1 https://github.com/lumberbarons/certainly.git Certainly
 #     Default location: ../Certainly next to this repo; override CERTAINLY_DIR.
+#     The build uses the commit pinned in tools/certainly.sh; a clean clone is
+#     moved to it. Bumping the pin is a deliberate PR (tools/certainly-bump.sh).
 #
 #   * Your own lawfully obtained Apple Universal Interfaces 3.4. The container image
 #     only ships the open-source Multiversal Interfaces, which have no
@@ -35,13 +37,9 @@ IMAGE="ghcr.io/autc04/retro68"
 TOOLCHAIN="/Retro68-build/toolchain/powerpc-apple-macos/cmake/retroppc.toolchain.cmake"
 BUILD_TARGET="${BUILD_TARGET:-${1:-Sherclawk_APPL}}"
 
-CERTAINLY_DIR="${CERTAINLY_DIR:-$HERE/../Certainly}"
-if [ ! -f "$CERTAINLY_DIR/CMakeLists.txt" ]; then
-    echo "error: Certainly not found at $CERTAINLY_DIR" >&2
-    echo "clone it first, next to this repository:" >&2
-    echo "  git clone --depth 1 https://github.com/lumberbarons/certainly.git Certainly" >&2
-    exit 1
-fi
+. "$HERE/tools/certainly.sh"
+CERTAINLY_DIR="$(certainly_dir)"
+certainly_ensure "$CERTAINLY_DIR"
 CERTAINLY_DIR="$(cd "$CERTAINLY_DIR" && pwd)"
 
 INTERFACES_DIR="${INTERFACES_DIR:-$HERE/../InterfacesAndLibraries}"

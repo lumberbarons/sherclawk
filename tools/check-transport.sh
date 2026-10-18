@@ -3,13 +3,9 @@
 # ASan/UBSan.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-SOURCE="${CERTAINLY_DIR:-$HERE/../Certainly}"
-if [ ! -d "$SOURCE/include" ]; then
-    echo "error: Certainly not found at $SOURCE" >&2
-    echo "clone it next to this repository (fetch-only):" >&2
-    echo "  git clone --depth 1 https://github.com/lumberbarons/certainly.git Certainly" >&2
-    exit 1
-fi
+. "$HERE/tools/certainly.sh"
+SOURCE="$(certainly_dir)"
+certainly_ensure "$SOURCE"
 STAGE="$HERE/build/transport-tests"
 mkdir -p "$STAGE"
 export SHERCLAWK_COST_LOG="$STAGE/cost.log"
