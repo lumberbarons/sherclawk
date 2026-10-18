@@ -29,6 +29,18 @@ cp config.example.h config.local.h
 SHARE_HOST=<afp-server> tools/deploy-to-share.sh
 ```
 
+The build and every host check run against the commit pinned in
+`tools/certainly.sh`. The script resolves the clone, moves a clean
+one to the pinned commit (fetching it by SHA when the clone lacks it), and
+refuses a checkout with local changes rather than modifying it; CI fetches
+exactly the pinned SHA. A push to the fork therefore cannot change what
+Sherclawk compiles against — taking a new Certainly version is a deliberate
+PR: `tools/certainly-bump.sh` checks the fork's main out, runs
+`tools/check.sh` and `tools/check-transport.sh` against it and rewrites the
+pin (`--check` only reports a moved fork). Host suites do not cover guest
+behavior, so a bump whose fork commits change runtime behavior still needs
+its own OS 9 verification before merging.
+
 ### SDK setup
 
 The SDK is not included or downloaded by this repository. Obtain it yourself

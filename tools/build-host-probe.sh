@@ -3,13 +3,9 @@
 # All outputs stay under ignored build/.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-CERTAINLY_DIR="${CERTAINLY_DIR:-$HERE/../Certainly}"
-if [ ! -d "$CERTAINLY_DIR/include" ]; then
-    echo "error: Certainly not found at $CERTAINLY_DIR" >&2
-    echo "clone it next to this repository (fetch-only):" >&2
-    echo "  git clone --depth 1 https://github.com/lumberbarons/certainly.git Certainly" >&2
-    exit 1
-fi
+. "$HERE/tools/certainly.sh"
+CERTAINLY_DIR="$(certainly_dir)"
+certainly_ensure "$CERTAINLY_DIR"
 mkdir -p "$HERE/build"
 LOCAL_FLAGS=(-DSHERCLAWK_HOST=1 -DSHERCLAWK_APP=1)
 if [ -f "$HERE/config.local.h" ]; then LOCAL_FLAGS+=(-DSHERCLAWK_HAS_LOCAL_CONFIG=1); fi

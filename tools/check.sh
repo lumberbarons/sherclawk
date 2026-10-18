@@ -129,9 +129,12 @@ run_test test-mcp-redact
     -o "$HERE/build/tests/test-mcp-store"
 "$HERE/build/tests/test-mcp-store"
 
-# The network test needs a Certainly clone (fetch-only, see README).
-CERTAINLY_DIR="${CERTAINLY_DIR:-$HERE/../Certainly}"
-if [ -d "$CERTAINLY_DIR/include" ]; then
+# The network test needs a Certainly clone (fetch-only, see README); checks
+# run against the commit pinned in tools/certainly.sh.
+. "$HERE/tools/certainly.sh"
+CERTAINLY_DIR="$(certainly_dir)"
+if [ -d "$CERTAINLY_DIR" ]; then
+    certainly_ensure "$CERTAINLY_DIR"
     build_test test-network "${WARN[@]}" \
         -I"$HERE" -I"$HERE/src" -I"$HERE/vendor" -I"$CERTAINLY_DIR/include" \
         -I"$HERE/vendor/host-tls/shim" \
@@ -159,7 +162,8 @@ if [ -d "$CERTAINLY_DIR/include" ]; then
     run_test test-mcp-run
 else
     echo "skip: network test needs a Certainly clone at $CERTAINLY_DIR" >&2
-    echo "      git clone --depth 1 https://github.com/lumberbarons/certainly.git Certainly" >&2
+    echo "      git clone --depth 1 $CERTAINLY_REPO Certainly" >&2
+    echo "      (all checks use the commit pinned in tools/certainly.sh)" >&2
 fi
 
 build_test test-base64 "${WARN[@]}" -I"$HERE" -I"$HERE/src" \

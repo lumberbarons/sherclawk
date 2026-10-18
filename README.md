@@ -48,7 +48,8 @@ To cross-compile the app:
 
 - Docker with `ghcr.io/autc04/retro68` and host Python 3; Python helpers use only
   the standard library.
-- A separate clone of the [Certainly](https://github.com/lumberbarons/certainly) fork.
+- A separate clone of the [Certainly](https://github.com/lumberbarons/certainly) fork;
+  checks and builds use the commit pinned in `tools/certainly.sh`.
 - Your own lawfully obtained Apple Universal Interfaces 3.4 SDK. The repository
   neither provides nor downloads it. Supply the complete `Interfaces&Libraries`
   folder, including Open Transport headers and PPC libraries; see
@@ -68,6 +69,12 @@ git clone --depth 1 https://github.com/lumberbarons/certainly.git ../Certainly
 export INTERFACES_DIR="/path/to/Interfaces&Libraries"
 ./build.sh
 ```
+
+The build and every check run against the commit pinned in `tools/certainly.sh`
+(a clean clone is moved to it, and CI fetches exactly that SHA), so a push to
+the fork cannot change what Sherclawk compiles against. A new Certainly
+version is taken deliberately: `tools/certainly-bump.sh` runs the suites
+against the fork's current main and updates the pin for its own PR.
 
 The default target is `Sherclawk_APPL`; outputs are in `build/`. Transfer and
 decode `Sherclawk.bin` with a MacBinary-aware utility in OS 9, or use the

@@ -24,10 +24,13 @@ tools/lint.sh                 # shellcheck, cppcheck and ruff (the CI lint gate)
 - There is no test runner: each suite is a standalone binary under
   `build/tests/`. To rerun one suite, reuse its `cc` line from `tools/check.sh`.
 - Certainly is fetch-only and never committed. Sherclawk builds against the
-  `lumberbarons/certainly` fork, not upstream `minorbug/certainly`:
+  `lumberbarons/certainly` fork, not upstream `minorbug/certainly`, at the
+  commit pinned in `tools/certainly.sh`:
   `git clone --depth 1 https://github.com/lumberbarons/certainly.git ../Certainly`
-  (override with `CERTAINLY_DIR`). Without it, check.sh skips the network suite
-  and check-transport.sh exits with an error.
+  (override with `CERTAINLY_DIR`). Scripts check a clean clone out to the pin
+  and CI fetches exactly it; bump the pin only in a PR with
+  `tools/certainly-bump.sh`. Without the clone, check.sh skips the network
+  suite and check-transport.sh exits with an error.
 
 ## Full app build (Docker)
 
