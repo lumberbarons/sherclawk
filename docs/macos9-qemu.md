@@ -68,6 +68,10 @@ Notes:
   by itself. Closing the QEMU window also ends the session.
 - Prefer a GUI (and sound)? See **Running it in UTM** below.
 
+For reproducible headless guests with MPW installed, see
+[`harness/docs/provisioning.md`](../harness/docs/provisioning.md); it leaves this
+launcher and its disk untouched.
+
 ## Running it in UTM (optional GUI route)
 
 A UTM VM named **"Mac OS 9.2.2"** is set up in UTM.app. It runs the same

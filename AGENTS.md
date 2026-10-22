@@ -108,6 +108,10 @@ cp config.example.h config.local.h  # optional local config; gitignored
 - Native build/run machinery: `src/native/build_project.c`, `src/native/selfbuild.c`, `src/native/toolserver.c`,
   `src/native/run_application.c`, `src/native/jobs.c`. MPW ToolServer is the only build backend; the
   queue's `worker-lock` and `STOP` names are kept for existing queues.
+- `harness/` is the OS 9 guest harness (ADR-0009): stdlib-only Python with its own
+  tests under `harness/tests/` (run by `tools/check.sh`, linted by `tools/lint.sh`) and
+  provisioning docs in `harness/docs/`. It imports nothing from `tools/` or `src/`;
+  guest disk images and installation media stay outside the repository.
 - `tests/` uses `tests/toolbox/` stubs to compile app sources with host `cc`;
   most `tools/*-check.c` are Mac GUI diagnostics built by CMake, not host
   programs. `tools/native-process-check.c` is the exception: a guest source
