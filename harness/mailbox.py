@@ -10,6 +10,7 @@ import json
 import os
 import secrets
 import sys
+import time
 
 from contract import (ContractError, DIAGNOSTICS, Request, filename,
                       read_ready, read_ready_clock, read_report, read_request, write_request)
@@ -24,6 +25,26 @@ def publish(path, data):
         os.fsync(f.fileno())
     os.link(staging, path)
     os.unlink(staging)
+
+
+def wait_ready(mailbox, slot, previous_boot=None, timeout=10):
+    """Admit only a live heartbeat; missing/partial replacement files can retry.
+
+    No request has been published yet, so this wait cannot replay a launch.
+    """
+    deadline = time.monotonic() + timeout
+    first = None
+    while time.monotonic() < deadline:
+        try:
+            with open(os.path.join(mailbox, 'ready'), 'rb') as f:
+                current = read_ready_clock(f.read(129), slot, previous_boot)
+            if first and current[0] == first[0] and current[1] > first[1]:
+                return current
+            first = current
+        except (OSError, ContractError):
+            pass
+        time.sleep(min(0.1, max(0, deadline-time.monotonic())))
+    raise ContractError('no advancing fresh controller heartbeat')
 
 
 def main(argv=None):

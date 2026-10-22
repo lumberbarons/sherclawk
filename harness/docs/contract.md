@@ -9,15 +9,10 @@ No API key or running Sherclawk agent is needed.
 
 ## Build and install
 
-Build before booting or reserving a guest:
+Build all six applications before booting or reserving a guest:
 
 ```bash
-./build.sh HarnessController_APPL
-./build.sh HarnessInstall1_APPL
-./build.sh HarnessInstall2_APPL
-./build.sh HarnessAcceptance_APPL
-./build.sh SherclawkWriteCheck_APPL
-./build.sh SherclawkInspectCheck_APPL
+./build.sh HarnessChecks_APPL
 ```
 
 Publish those applications fork-aware to the existing `Retro68:` export. Use
@@ -25,6 +20,10 @@ Publish those applications fork-aware to the existing `Retro68:` export. Use
 consumers; the controller and helpers use the same MacBinary or
 APPL/resource-fork/Finder-metadata transport. Never restart AFP.
 Create `Retro68:Harness:slot1:` and `Retro68:Harness:slot2:` on the export.
+For concurrent guests, publish separate fork-preserved diagnostic copies into
+`Retro68:Harness:Apps:slot1:` and `Retro68:Harness:Apps:slot2:`; sharing the same
+AFP executable path can cause an in-use launch failure. Keep those applications
+outside evidence mailboxes that rotate during recovery.
 Each mailbox has one writer; exclusive ownership is the reservation manager's
 job (#71), not a protection provided by these files.
 
@@ -116,7 +115,10 @@ The controller writes, flushes, closes, reads back and renames the complete
 request to `Harness active` in boot-disk Preferences **before** launch. It
 rejects aliases and an already running instance of the application. A launch
 error is uncertain (`unknown`), never automatically retried. It observes only
-the returned PSN and yields between each controller phase.
+the returned PSN and yields between each controller phase. Launch Apple events
+are serviced; a bounded `log-<boot prefix>` lifecycle trace records up to 128
+startup/phase entries. File removal uses the File Manager directly because
+Retro68 libc does not implement `remove()`.
 
 The diagnostic calls `harness_begin(name)`, verifies the requested name and
 its own exact Process Manager application spec, then uses
@@ -184,14 +186,18 @@ creates fresh private fixtures and asserts the expected outcome:
 ```bash
 python3 harness/tests/guest_acceptance.py write --slot slot1 \
   --mailbox /mounted/Retro68/Harness/slot1 --runs /mounted/Retro68/Harness/runs \
-  --guest-runs Retro68:Harness:runs:
+  --guest-runs Retro68:Harness:runs: --applications Retro68:Harness:Apps:slot1:
 ```
 
 Run `write`, `inspect`, `pass`, `fail`, `duplicate`, `early`, `partial`,
-`identity`, `target`, `badconfig`, `deadline` and `stop`. The duplicate case leaves an unconsumed
+`identity`, `target`, `badconfig`, `deadline`, `stop` and `active-stop`.
+`stop` checks the pre-launch barrier; `active-stop` waits for the controller
+to record observation of the launched PSN before publishing Stop. The duplicate case leaves an unconsumed
 request deliberately; retain it, then recover before the next case. After any
 quarantining case, preserve evidence, reset/init/launch the slot, and require
-fresh boot readiness before proceeding. Missing final results time out as
+fresh boot readiness before proceeding (`--previous-boot` and
+`--ready-timeout 180`). The runner observes an advancing heartbeat before it
+publishes a request; a static readiness file is insufficient. Missing final results time out as
 unknown and are never replayed. The runner requires an already-owned guest;
 it does not implement #71's reservation or #72's remote publication/evidence
 manager. Record actual guest results separately from host-test evidence.

@@ -80,6 +80,13 @@ int h_publish(const char *path, const char *data, size_t size)
     err=FSpRename(&stage,dest.name);
     return !err && !FlushVol(NULL,stage.vRefNum);
 }
+int h_delete(const char *path)
+{
+    FSSpec spec;
+    OSErr err=h_spec(path,&spec);
+    if (err == fnfErr) return 1;
+    return !err && !FSpDelete(&spec) && !FlushVol(NULL,spec.vRefNum);
+}
 int h_self_matches(const char *path)
 {
     ProcessSerialNumber psn;

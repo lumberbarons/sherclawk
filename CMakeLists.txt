@@ -103,6 +103,8 @@ sherclawk_app(SherclawkNativeBuildCheck ${NATIVE_BUILD_CHECK_SRC})
 sherclawk_app(SherclawkNativeBuildErrorCheck ${NATIVE_BUILD_CHECK_SRC})
 target_compile_definitions(SherclawkNativeBuildErrorCheck PRIVATE NATIVE_BUILD_ERROR=1)
 sherclawk_app(SherclawkInspectCheck tools/inspect-check.c ${HARNESS_SUPPORT} ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
+add_custom_target(HarnessChecks_APPL DEPENDS HarnessController_APPL HarnessAcceptance_APPL
+    HarnessInstall1_APPL HarnessInstall2_APPL SherclawkWriteCheck_APPL SherclawkInspectCheck_APPL)
 sherclawk_app(SherclawkViewImageCheck tools/view-image-check.c ${TOOLS_SRC} src/tools/view_image.c src/agent/json.c src/agent/text.c hello.r)
 sherclawk_app(SherclawkCatalogCheck tools/catalog-check.c ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
 sherclawk_app(SherclawkTrashCheck tools/trash-check.c ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)

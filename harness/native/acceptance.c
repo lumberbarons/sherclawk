@@ -24,7 +24,7 @@ int main(void)
     n=h_read(path,mode,sizeof(mode)); if (n < 0) return 1;
     if (!strcmp(mode,"early")) return 1;
     if (!strcmp(mode,"badconfig")) {
-        if (!h_private_path("Harness active",path,sizeof(path)) || remove(path) ||
+        if (!h_private_path("Harness active",path,sizeof(path)) || !h_delete(path) ||
             !h_publish(path,"BROKEN\r",7)) return 1;
         return harness_begin("HarnessAcceptance") < 0 ? 1 : 0;
     }
