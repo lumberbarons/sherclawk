@@ -4,6 +4,19 @@ Dated acceptance evidence for the OS 9 guest, host checks and live model runs,
 retained from earlier development. Entries describe the state on their recorded
 dates. Use the [current guides](../../README.md#documentation) for present behavior.
 
+Recorded October 21, 2026 (standalone guests, issue #68): the base image built from
+a copy of the original QEMU disk (Mac OS 9.2.2, QEMU 10.1.2, `mac99`, 512 MB) plus the
+MPW-GM distribution, with MacRelix absent. Both slot overlays booted headless side by
+side to the desktop, auto-mounted the `Retro68` share and held independent AFP
+sessions; `info network` showed MACs `52:54:00:09:00:01` and `52:54:00:09:00:02`,
+each on its own user-mode stack at `10.0.2.15`. `SherclawkNativeBuildCheck`, published
+with `tools/deploy-to-share.sh` and launched in the working image and then in each slot,
+reported `RESULT failures=0 fixed_native_build=complete` every time, with MrC, PPCLink
+and Rez at `stat=0` through ToolServer and no MacRelix in the logged process list.
+Afterwards the base matched its recorded checksum, the verbatim copy matched the
+original disk, and the original disk and the UTM virtual machine's image kept their
+modification times. Procedure and configuration: [harness provisioning](../../harness/docs/provisioning.md).
+
 Recorded October 16, 2026 (host cost counters, issue #19): `SherclawkCalibrateCheck`
 built from the issue branch, published to the AFP share with `tools/deploy-to-share.sh`
 and launched in the OS 9.2.2 UTM guest with the Retro68 window frontmost, the guest

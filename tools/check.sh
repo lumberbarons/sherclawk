@@ -255,6 +255,10 @@ build_test test-template "${WARN[@]}" -Wno-multichar -Wno-deprecated-declaration
     "$HERE/templates/ppc-toolbox/png.c" "$HERE/templates/ppc-toolbox/selfrender.c"
 run_test test-template
 
+# The OS 9 guest harness (ADR-0009) keeps its own stdlib-only suites; they
+# need no QEMU, VM or network.
+python3 -I -m unittest discover -s "$HERE/harness/tests"
+
 echo
 echo "Cost table (host counts; convert to guest ticks with docs/development.md#cost-table-and-guest-calibration)"
 printf '%-62s %8s %8s\n' counter measured bound

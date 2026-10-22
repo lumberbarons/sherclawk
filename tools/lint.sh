@@ -53,8 +53,8 @@ else
 fi
 
 if command -v ruff >/dev/null 2>&1; then
-    echo "ruff: Python tools"
-    ruff check tools tests || status=1
+    echo "ruff: Python tools and harness"
+    ruff check tools tests harness || status=1
 else
     echo "skip: ruff not installed (pip install ruff)" >&2
 fi
