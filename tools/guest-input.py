@@ -1,23 +1,13 @@
 #!/usr/bin/env python3
-"""Send non-overlapping QMP key presses for reliable OS 9 guest diagnostics.
+"""Send non-overlapping QMP key presses to the UTM guest for diagnostics.
 
-QMP send-key defaults to a 100ms hold, which the guest can drop (Escape in
-particular), while the original fast text helper sends again after 40ms.
-QMP.type_text in utm_qmp.py holds each key long enough and keeps a complete
-release interval between keys. Control clicks use a small move and 250ms hold, as required by the guest.
-Uses the vendored UTM socket helper (tools/utm_qmp.py); it does not change
-VM configuration.
+A thin consumer of the harness's public command line (harness/guest.py --utm
+input): keys are held long enough for the guest and released fully between
+presses, and --click makes a small move and a 250ms hold at the current
+pointer first, as the guest requires. It does not change VM configuration.
 """
-import argparse
-import time
-from utm_qmp import QMP
+import os
+import sys
 
-parser = argparse.ArgumentParser()
-parser.add_argument('text', nargs='?', default='')
-parser.add_argument('--click', action='store_true', help='small move, then 250ms hold at current pointer')
-args = parser.parse_args()
-q = QMP()
-if args.click:
-    q.move(1, 0); time.sleep(.1); q.move(-1, 0); time.sleep(.15)
-    q.button(True); time.sleep(.25); q.button(False); time.sleep(.3)
-q.type_text(args.text)
+HARNESS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "harness", "guest.py")
+os.execv(sys.executable, [sys.executable, HARNESS, "--utm", "input", *sys.argv[1:]])

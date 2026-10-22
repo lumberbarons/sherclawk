@@ -189,14 +189,14 @@ from it.
 ## Appendix A — how this install was performed
 
 The GUI installer was driven automatically from the host because Mac OS 9 has
-no unattended-install path. The vendored `tools/qmpdrive.py` talks to QEMU's
-QMP interface (mouse/keyboard events) and tracks the guest cursor with
+no unattended-install path. The original `qmpdrive.py` (now consolidated as
+`harness/guest.py`; see `harness/docs/driving.md`) talked to QEMU's
+QMP interface (mouse/keyboard events) and tracked the guest cursor with
 framebuffer screenshots (screen differences + a template of the classic
 arrow). The scripts initialized the disk via Drive Setup, launched
 *Mac OS Install*, clicked through every dialog, and boot-from-disk was
-verified afterwards. The automation came from the VM folder's `tools/`; the
-QMP driver remains here for reference — day-to-day you only need
-`run-macos9.sh`.
+verified afterwards. The automation came from the VM folder's `tools/`;
+day-to-day you only need `run-macos9.sh`.
 
 ## Appendix B — reusing your own installation
 
