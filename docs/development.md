@@ -224,8 +224,9 @@ same sources, and `.github/workflows/ci.yml` runs those checks on `ubuntu-24.04`
 for pushes to main and pull requests. Python helpers: `tools/make-art.py`
 (icon and window art), `tools/netatalk_meta.py` (fork-aware publication),
 `tools/embed-project-template.py` (starter template),
-and `tools/guest-input.py`, `tools/qmpdrive.py` and `tools/utm_qmp.py`
-(drive the UTM guest over QMP).
+and `tools/guest-input.py` and `tools/utm_qmp.py` (thin wrappers that drive the
+UTM guest through the harness's `harness/guest.py`; see
+[driving a guest](../harness/docs/driving.md)).
 
 ```bash
 APP=SherclawkHandoffCheck tools/deploy-to-share.sh
@@ -264,8 +265,9 @@ ssh "$SHARE_HOST" 'cat /srv/retro68/SherclawkCopyCheck.log'
 ```
 
 The cursor matcher can mistake highlights in the lobster artwork for the arrow.
-After using UTM, check `info mice`; this VM needs `mouse_set 4` for the
-working relative HID mouse. The active absolute tablet ignores relative input.
+The active absolute tablet in the UTM VM ignores relative input. `utm_qmp.py mice`
+lists the pointing devices, and the pointer commands switch to a relative one
+themselves with `mouse_set`, using the device number `query-mice` reports.
 For UI diagnostics prefer the closed-loop pointer commands in `tools/utm_qmp.py`
 (`pgoto`, `pclick`, `pdclick`, `phold`, `nudge`, `release`). They park the pointer
 in the corner, keep that screen as a baseline and find the pointer as the

@@ -158,8 +158,7 @@ reaches the guest:
   re-locates the pointer closes any open menu.
 - The socket serves one client at a time.
 
-This session used the helpers in `tools/` for that driving; consolidating them
-into the harness is a separate piece of work (hew #69).
+[Driving a guest](driving.md) covers `guest.py`, which wraps all of this.
 
 ## Changing the base later
 
