@@ -12,6 +12,10 @@ repository and meant to be extracted later, so it imports nothing from
   the UTM VM. `qmp.py` (bounded protocol, input and capture), `screen.py`
   (framebuffer decoding) and `pointer.py` (pointer tracking) sit behind it.
   See [`docs/driving.md`](docs/driving.md).
+- `native/` — Startup Items controller, cooperative run state machine, public
+  diagnostic adapter and explicit guest failure fixture.
+- `contract.py` and `mailbox.py` — version 1 request/report codecs and single-run
+  CLI; [contract, installation and acceptance](docs/contract.md).
 - `tests/` — stdlib-only host suites, including a fake QMP server, run by `tools/check.sh`; no QEMU, VM or
   network.
 - [`docs/provisioning.md`](docs/provisioning.md) — how the guests were built,

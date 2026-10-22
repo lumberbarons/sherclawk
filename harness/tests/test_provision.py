@@ -232,3 +232,57 @@ class ManifestTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ControllerImageTest(unittest.TestCase):
+    def test_freeze_slot_preserves_shared_base_and_creates_fresh_overlay(self):
+        with tempfile.TemporaryDirectory() as root:
+            home = provision.Home(root)
+            os.makedirs(home.base_dir)
+            os.makedirs(home.slot_dir)
+            with open(home.base_path, 'wb') as f:
+                f.write(b'immutable shared base')
+            provision.freeze(home.base_path)
+            s = provision.slot(home, 'slot1')
+            with open(s.overlay, 'wb') as f:
+                f.write(b'controller installed overlay')
+            provision.freeze_slot(s)
+            self.assertFalse(os.path.exists(s.overlay))
+            self.assertEqual(provision.slot_base(s), os.path.join(home.base_dir, 'slot1.qcow2'))
+            self.assertTrue(provision.is_read_only(provision.slot_base(s)))
+            with open(home.base_path, 'rb') as f:
+                self.assertEqual(f.read(), b'immutable shared base')
+            with self.assertRaises(provision.ProvisionError):
+                provision.freeze_slot(s)
+
+    def test_slot_image_checksum_is_checked_before_boot(self):
+        with tempfile.TemporaryDirectory() as root:
+            home = provision.Home(root)
+            os.makedirs(home.base_dir)
+            os.makedirs(home.slot_dir)
+            s = provision.slot(home, 'slot2')
+            with open(s.overlay, 'wb') as f:
+                f.write(b'configured slot')
+            provision.freeze_slot(s)
+            os.chmod(provision.slot_base(s), 0o644)
+            with open(provision.slot_base(s), 'wb') as f:
+                f.write(b'changed')
+            provision.freeze(provision.slot_base(s))
+            with self.assertRaises(provision.ProvisionError):
+                provision.verify_slot_base(s)
+
+
+    def test_cli_freeze_slot_and_missing_recorded_image(self):
+        with tempfile.TemporaryDirectory() as root:
+            home = provision.Home(root)
+            os.makedirs(home.base_dir)
+            os.makedirs(home.slot_dir)
+            s = provision.slot(home, 'slot1')
+            with open(s.overlay, 'wb') as f:
+                f.write(b'configured')
+            self.assertEqual(provision.main(['--home', root, 'freeze-slot', 'slot1']), 0)
+            configured = provision.slot_base(s)
+            self.assertNotEqual(configured, home.base_path)
+            os.remove(configured)
+            with self.assertRaises(provision.ProvisionError):
+                provision.verify_slot_base(s)

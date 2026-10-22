@@ -41,6 +41,10 @@ if command -v cppcheck >/dev/null 2>&1; then
         tests/test_jobs.c tests/test_build_project.c tests/test_selfbuild.c \
         tests/test_prefs_model.c tests/test_run_ctl.c tests/test_session.c tests/test_quit_application.c tests/test_fsutil.c tests/test_jsonargs.c \
         || status=1
+    # Harness sources have no app includes or helpers (ADR-0009).
+    cppcheck --enable=warning,performance,portability --error-exitcode=1 \
+        --inline-suppr --std=c99 --suppress=missingIncludeSystem \
+        -I . harness/native/contract.c harness/native/run.c harness/tests/test_contract.c harness/tests/test_run.c || status=1
     # The starter compiles against its own Toolbox model, not tests/toolbox.
     cppcheck --enable=warning,performance,portability --error-exitcode=1 \
         --inline-suppr --std=c99 --suppress=missingIncludeSystem \
