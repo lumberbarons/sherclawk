@@ -23,3 +23,6 @@ repository and meant to be extracted later, so it imports nothing from
 
 Disk images, installation media and the MPW distribution stay outside the
 repository, under `$OS9_HARNESS_HOME`.
+
+Native controller qualification is recorded in
+[`docs/verification.md`](docs/verification.md).
