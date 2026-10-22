@@ -172,7 +172,10 @@ Require fresh boot readiness after every recovery.
 
 Before replacing the shared base, archive/remove configured slot bases after
 all runtime overlays have been reset; they retain a backing-file dependency on
-that shared base. Rebuild them using the controller procedure afterwards.
+that shared base. A successful `freeze` retires their manifest records so
+`init` can create overlays from the replacement shared base. Without that
+explicit replacement, a missing recorded slot image remains an error. Rebuild
+the configured slots using the controller procedure afterwards.
 
 Examples: installing the native controller in Startup Items
 (`Macintosh HD:System Folder:Startup Items`), or updating MPW. The base is

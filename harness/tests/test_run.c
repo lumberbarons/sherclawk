@@ -37,11 +37,27 @@ static void setup(Fake *f,HRun *run) {
     h_run_init(run,"slot1",f->request.boot);
 }
 static void steps(HRun *r,HRunHost *h,int n) { while(n--)h_run_step(r,h); }
+static void test_stop_after_terminal_report(int report_kind)
+{
+    static HRun run;
+    Fake f;
+    HRunHost h=host(&f);
+    setup(&f,&run); steps(&run,&h,3);
+    f.report=report_kind; steps(&run,&h,2);
+    assert(run.state==H_OBSERVE && !f.published); /* report still awaits process exit */
+    f.stop=1; steps(&run,&h,2);
+    assert(!strcmp(f.result,"stopped") && run.state==H_QUARANTINED);
+    assert(f.published==1 && !f.cleanup && f.present);
+    f.present=0; f.now=f.request.deadline; steps(&run,&h,4);
+    assert(!strcmp(f.result,"stopped") && f.published==1 && !f.cleanup);
+}
 int main(void)
 {
     static HRun run;
     Fake f;
     HRunHost h=host(&f);
+    test_stop_after_terminal_report(1);
+    test_stop_after_terminal_report(2);
     setup(&f,&run); f.request.boot[0]='a'; steps(&run,&h,8);
     assert(!f.claimed && !f.launched); /* stale readiness */
     setup(&f,&run); f.claimed=1; steps(&run,&h,8);

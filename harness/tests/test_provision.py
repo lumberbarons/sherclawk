@@ -192,6 +192,36 @@ class PromoteTest(unittest.TestCase):
             self.assertEqual(f.read(), b"older base")
         self.assertTrue(os.path.exists(self.home.work_path))
 
+    def test_replacement_retires_archived_configured_slots_before_init(self):
+        os.makedirs(self.home.slot_dir)
+        for name in provision.SLOTS:
+            s = provision.slot(self.home, name)
+            with open(s.overlay, "wb") as f:
+                f.write(b"old configured slot")
+            provision.freeze_slot(s)
+            configured = provision.slot_base(s)
+            os.rename(configured, configured + ".archived")
+        provision.promote_work(self.home, qemu_version=lambda: "10.1.2")
+        self.assertEqual(provision.read_manifest(self.home)["controller_slots"], {})
+        qemu_img = fake_tool(self.tmp.name, "qemu-img", 'for last; do :; done\n: > "$last"')
+        for name in provision.SLOTS:
+            s = provision.slot(self.home, name)
+            self.assertEqual(provision.slot_base(s), self.home.base_path)
+            provision.create_overlay(s, qemu_img=qemu_img)
+            self.assertTrue(os.path.exists(s.overlay))
+
+    def test_refuses_to_retire_a_configured_image_that_still_exists(self):
+        os.makedirs(self.home.slot_dir)
+        s = provision.slot(self.home, "slot1")
+        with open(s.overlay, "wb") as f:
+            f.write(b"configured slot")
+        provision.freeze_slot(s)
+        before = provision.read_manifest(self.home)
+        with self.assertRaises(provision.ProvisionError):
+            provision.promote_work(self.home, qemu_version=lambda: "10.1.2")
+        self.assertEqual(provision.read_manifest(self.home), before)
+        self.assertTrue(os.path.exists(self.home.work_path))
+
     def test_refuses_while_a_slot_overlay_still_names_the_base(self):
         s = provision.slot(self.home, "slot2")
         os.makedirs(self.home.slot_dir)
@@ -286,3 +316,8 @@ class ControllerImageTest(unittest.TestCase):
             os.remove(configured)
             with self.assertRaises(provision.ProvisionError):
                 provision.verify_slot_base(s)
+            with open(home.base_path, 'wb') as f:
+                f.write(b'shared base still exists')
+            provision.freeze(home.base_path)
+            with self.assertRaises(provision.ProvisionError):
+                provision.create_overlay(s)

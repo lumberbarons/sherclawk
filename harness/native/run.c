@@ -44,6 +44,7 @@ void h_run_step(HRun *r,const HRunHost *h)
         present=h->present(h->ctx);
         if (result == 1) {
             if (present == 0 || (strcmp(r->report.outcome,"passed") && strcmp(r->report.outcome,"failed"))) r->state=H_PUBLISH;
+            else if (h->stopped(h->ctx,&expected)) terminal(r,"stopped");
             else if (present < 0) terminal(r,"unknown");
         } else if (h->stopped(h->ctx,&expected)) terminal(r,"stopped");
         else if (present != 1) terminal(r,"unknown");

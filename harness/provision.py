@@ -218,10 +218,13 @@ def promote_work(home, qemu_version=qemu_version):
             raise ProvisionError("%s still overlays the base; `reset %s` first" % (s.overlay, name))
     os.replace(home.work_path, home.base_path)
     freeze(home.base_path)
+    # Explicit base replacement retires the archived slots; a missing image
+    # remains an error until this transition succeeds.
     write_manifest(home, {
         "qemu": qemu_version(),
         "base_sha256": sha256(home.base_path),
         "original_sha256": sha256(home.original_path),
+        "controller_slots": {},
     })
 
 
