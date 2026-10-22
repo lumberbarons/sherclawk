@@ -83,6 +83,50 @@ class GuestCliTest(unittest.TestCase):
         self.assertIn("no relative", err)
         self.assertEqual(self.server.commands("input-send-event"), [])
 
+    def test_input_without_click_types_without_touching_the_pointing_device(self):
+        self.assertEqual(self.run_cli("input", "ab")[0], 0)
+        self.assertEqual(self.server.commands("query-mice"), [])
+        self.assertEqual(len(self.server.commands("send-key")), 2)
+
+    def test_input_click_is_not_sent_when_the_text_cannot_be_typed(self):
+        rc, _o, err = self.run_cli("input", "--click", "ok\u2603")
+        self.assertEqual(rc, 1)
+        self.assertIn("nothing typed", err)
+        self.assertEqual(self.server.commands("input-send-event"), [])
+
+    def test_locate_does_not_calibrate(self):
+        # No template is stored; recovering the position must not need one.
+        self.server.on_hmp("screendump", lambda c, line: "Error")
+        saved, qmp.CAPTURE_TIMEOUT = qmp.CAPTURE_TIMEOUT, 0.1
+        self.addCleanup(setattr, qmp, "CAPTURE_TIMEOUT", saved)
+        self.run_cli("locate")
+        moves = self.server.commands("input-send-event")
+        # slam_topleft only: calibrate would have followed with diff steps
+        self.assertTrue(all(e["events"][0]["data"]["value"] == -700 for e in moves))
+
+    def test_a_reset_seen_in_a_failing_command_still_forgets_the_pointer(self):
+        self.state().set_pos((10, 20))
+
+        def key_then_fail(conn, a):
+            conn.send({"event": "RESET"})
+            raise fake_qmp.Fail("boom")
+        self.server.on("send-key", key_then_fail)
+        rc, _o, _e = self.run_cli("key", "esc")
+        self.assertEqual(rc, 1)
+        self.assertIsNone(self.state().pos())
+
+    def test_ppm2png_converts_without_a_guest(self):
+        src = os.path.join(self.work, "a.ppm")
+        with open(src, "wb") as f:
+            f.write(ppm())
+        dst = os.path.join(self.work, "a.png")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = guest.main(["ppm2png", src, dst])
+        self.assertEqual(rc, 0)
+        with open(dst, "rb") as f:
+            self.assertEqual(f.read(4), b"\x89PNG")
+
     def test_keys_do_not_touch_the_pointing_device(self):
         self.run_cli("key", "esc")
         self.assertEqual(self.server.commands("query-mice"), [])

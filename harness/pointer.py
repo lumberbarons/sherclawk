@@ -1,6 +1,6 @@
 """Pointer tracking for the relative-mouse OS 9 guests.
 
-Three routes, all driven by screenshots because the guest pointer's gain
+Routes, all driven by screenshots because the guest pointer's gain
 varies with speed and QEMU never reports its position:
 
 * Pointer: template-free closed loop. Park the pointer in the corner, keep
@@ -19,6 +19,7 @@ import qmp
 import screen
 
 STATE_VERSION = 1
+REACH = 8           # pixels from the target that still counts as arriving
 MAX_MOVE = 120      # mickeys per closed-loop attempt
 NEAR_RADIUS = 160   # search this far around the expected pointer before the whole screen
 
@@ -31,12 +32,26 @@ class GuestState:
         self.incarnation = incarnation
 
     def _load(self):
+        """The persisted record, or {} for anything missing, unreadable or
+        not shaped as this code wrote it."""
         try:
             with open(self.path) as f:
                 d = json.load(f)
-            return d if isinstance(d, dict) and d.get("version") == STATE_VERSION else {}
         except (OSError, ValueError):
             return {}
+        if not isinstance(d, dict) or d.get("version") != STATE_VERSION:
+            return {}
+        pos = d.get("pos")
+        if pos is not None and not (isinstance(pos, list) and len(pos) == 2
+                                    and all(type(v) is int for v in pos)):
+            d["pos"] = None
+        offsets = d.get("template")
+        if offsets is not None and not (
+                isinstance(offsets, list) and offsets
+                and all(isinstance(o, list) and len(o) == 2 and all(type(v) is int for v in o)
+                        for o in offsets)):
+            d["template"] = None
+        return d
 
     def _save(self, d):
         d["version"] = STATE_VERSION
@@ -47,9 +62,9 @@ class GuestState:
         recorded against another incarnation of the guest."""
         d = self._load()
         pos = d.get("pos")
-        if d.get("incarnation") != self.incarnation or not isinstance(pos, list) or len(pos) != 2:
+        if d.get("incarnation") != self.incarnation or pos is None:
             return None
-        return (int(pos[0]), int(pos[1]))
+        return (pos[0], pos[1])
 
     def set_pos(self, pos):
         d = self._load()
@@ -65,7 +80,7 @@ class GuestState:
 
     def template(self):
         offsets = self._load().get("template")
-        return [tuple(o) for o in offsets] if offsets else None
+        return [(o[0], o[1]) for o in offsets] if offsets else None
 
     def set_template(self, offsets):
         d = self._load()
@@ -183,13 +198,17 @@ class Pointer:
                 self.q.move(mx // steps, my // steps)
                 self.q.sleep(0.03)
             self.q.sleep(0.4)
-            new = self.find(expected=(x, y))
+            new = self.find(expected=(pos[0] + int(round(mx * gain)), pos[1] + int(round(my * gain))))
             if new is not None and new != pos:
                 moved = max(abs(new[0] - pos[0]), abs(new[1] - pos[1]))
                 asked = max(abs(mx), abs(my))
                 if asked >= 8 and moved:
                     gain = moved / asked
             pos = new
+        if pos is None:
+            raise qmp.QMPError("pointer not found; screen changed too much to track")
+        if abs(x - pos[0]) > REACH or abs(y - pos[1]) > REACH:
+            raise qmp.QMPError("pointer stopped at %s, not near (%d, %d)" % (pos, x, y))
         return pos
 
     def press(self):

@@ -60,6 +60,40 @@ class PointerTest(unittest.TestCase):
             self.assertLessEqual(abs(pos[1] - 120), 2, gain)
             self.assertEqual(g.pos, pos)
 
+    def test_goto_fails_instead_of_returning_a_position_it_did_not_reach(self):
+        g = FakeGuest()
+        g.move = lambda dx, dy: None  # the guest ignores the pointer
+        with self.assertRaisesRegex(qmp.QMPError, "not near"):
+            pointer.Pointer(g).goto(200, 120)
+
+    def test_goto_fails_when_the_pointer_is_lost(self):
+        g = FakeGuest()
+        p = pointer.Pointer(g)
+        real = p.find
+        calls = []
+
+        def find(expected=None):
+            calls.append(expected)
+            return real(expected) if len(calls) == 1 else None
+        p.find = find
+        with self.assertRaisesRegex(qmp.QMPError, "not found"):
+            p.goto(200, 120)
+
+    def test_the_near_search_is_centred_on_where_the_move_should_have_landed(self):
+        g = FakeGuest(gain=1.0)
+        p = pointer.Pointer(g)
+        seen = []
+        real = p.find
+
+        def find(expected=None):
+            seen.append(expected)
+            return real(expected)
+        p.find = find
+        p.goto(200, 120)
+        self.assertIsNone(seen[0])
+        self.assertNotEqual(seen[1], (200, 120))  # the first leg stops short of the target
+        self.assertLessEqual(abs(seen[1][0] - 120), 2)
+
     def test_find_reports_the_corner_while_parked(self):
         g = FakeGuest(start=(0, 0))
         p = pointer.Pointer(g)
@@ -213,6 +247,18 @@ class GuestStateTest(unittest.TestCase):
                         json.dumps({"version": 1, "incarnation": "i", "pos": "x"})):
             with open(self.path, "w") as f:
                 f.write(content)
+            s = pointer.GuestState(self.path, "i")
+            self.assertIsNone(s.pos())
+            self.assertIsNone(s.template())
+
+    def test_malformed_values_in_the_state_file_are_treated_as_missing(self):
+        os.makedirs(os.path.dirname(self.path))
+        for rec in ({"version": 1, "incarnation": "i", "pos": ["a", 1]},
+                    {"version": 1, "incarnation": "i", "pos": [1.5, 2]},
+                    {"version": 1, "incarnation": "i", "template": [1, 2]},
+                    {"version": 1, "incarnation": "i", "template": [["x", 1]]}):
+            with open(self.path, "w") as f:
+                json.dump(rec, f)
             s = pointer.GuestState(self.path, "i")
             self.assertIsNone(s.pos())
             self.assertIsNone(s.template())

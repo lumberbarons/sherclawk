@@ -51,13 +51,19 @@ that run `guest.py --utm`, so the documented UTM workflow is unchanged.
   `reanchor`, or use the closed-loop commands, which do not use stored state.
 - **Near first.** Locating the pointer searches around where it is expected
   before scanning the whole screen.
+- **Arrival is checked.** `pgoto` and its click variants fail, without
+  clicking, if the pointer is lost or stops away from the target.
+- **Text before clicks.** `input --click` validates the text first, so an
+  unmappable character cannot leave a click behind.
+
+`ppm2png <in> <out>` converts a saved screenshot and needs no guest.
 
 ## Pointer commands
 
 | Route | Commands | Use when |
 |---|---|---|
 | Closed loop | `pgoto`, `pclick`, `pdclick`, `phold`, `tap`, `nudge`, `release` | Default. Parks the pointer in the corner, keeps that screen as a baseline and finds the pointer as the arrow-sized blob that differs; works over dialogs, menus and text. |
-| Template | `prepare`, `reanchor`, `locate`, `goto`, `click`, `dclick` | A calibrated arrow outline is located in screenshots. Mislocates over busy artwork. |
+| Template | `prepare`, `calibrate`, `verify`, `reanchor`, `locate`, `goto`, `click`, `dclick` | A calibrated arrow outline is located in screenshots. Mislocates over busy artwork. |
 | Blind | `moveto`, `clicknow`, `dclicknow` | Menus, from the remembered position; verify with a screenshot before clicking. |
 
 Menus need the button held: `phold` on the title, `nudge` down (about 28 moves

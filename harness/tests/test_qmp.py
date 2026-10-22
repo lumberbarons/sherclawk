@@ -297,6 +297,12 @@ class CaptureTest(ServerCase):
         self.assertFalse(os.path.exists(out))
         self.assertFalse(os.path.exists(os.path.dirname(out)) and os.listdir(os.path.dirname(out)))
 
+    def test_a_capture_directory_the_monitor_would_split_is_refused(self):
+        for bad in ("/tmp/My Shots", "/tmp/it's"):
+            with self.assertRaisesRegex(qmp.QMPError, "spaces or quotes"):
+                qmp.Capture(bad)
+        qmp.Capture("/tmp/with space", relative=True)  # a bare name is requested instead
+
     def test_screendump_writes_png_or_ppm_by_extension(self):
         self.serve_screen(ppm())
         q = self.connect()

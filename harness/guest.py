@@ -18,6 +18,7 @@ Commands (the QMP socket takes one client at a time: do not run two at once):
     input [--click] [text]       optional click where the pointer rests, then text
     mice                         list pointing devices
     reset                        system_reset, forgetting the pointer position
+    ppm2png <in> <out>           convert a saved screenshot (no guest needed)
 
   Closed-loop pointer (re-parks the pointer, so it ends within a few pixels):
     pgoto|pclick|pdclick|phold <x> <y>
@@ -26,7 +27,7 @@ Commands (the QMP socket takes one client at a time: do not run two at once):
     release                      let the button up
 
   Template-tracked pointer:
-    prepare | reanchor | locate
+    prepare | calibrate | verify | reanchor | locate
     goto|click|dclick <x> <y>
 
   Blind, from the remembered position (menus):
@@ -47,8 +48,8 @@ UTM_GROUP = os.path.expanduser("~/Library/Group Containers/WDNLXAD4W8.com.utmapp
 UTM_SOCK = os.path.join(UTM_GROUP, "utm-mac9-qmp.sock")
 
 # Pointer commands need a relative device; typing and screenshots do not.
-POINTER_COMMANDS = {"pgoto", "pclick", "pdclick", "phold", "tap", "nudge", "release", "input",
-                    "prepare", "reanchor", "locate", "goto", "click", "dclick",
+POINTER_COMMANDS = {"pgoto", "pclick", "pdclick", "phold", "tap", "nudge", "release",
+                    "prepare", "calibrate", "verify", "reanchor", "locate", "goto", "click", "dclick",
                     "moveto", "clicknow", "dclicknow"}
 
 
@@ -65,9 +66,12 @@ def build_parser():
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("mice")
     sub.add_parser("reset")
-    for name in ("tap", "release", "prepare", "reanchor", "locate", "clicknow", "dclicknow"):
+    for name in ("tap", "release", "prepare", "calibrate", "verify", "reanchor", "locate", "clicknow", "dclicknow"):
         sub.add_parser(name)
     sub.add_parser("screendump").add_argument("out")
+    p = sub.add_parser("ppm2png", help="convert a saved PPM; needs no guest")
+    p.add_argument("src")
+    p.add_argument("dst")
     sub.add_parser("hmp").add_argument("line")
     sub.add_parser("key").add_argument("qcodes", nargs="+")
     sub.add_parser("type").add_argument("text")
@@ -133,7 +137,9 @@ def run(args, q, state):
     elif cmd == "type":
         q.type_text(args.text)
     elif cmd == "input":
+        qmp.plan_text(args.text)  # refuse unmappable text before any click
         if args.click:
+            q.use_relative_mouse()
             pointer.Pointer(q).click()
         q.type_text(args.text)
     elif cmd == "mice":
@@ -161,11 +167,13 @@ def run(args, q, state):
         q.button(False)
     elif cmd == "prepare":
         prepared_cursor(q, state)
+    elif cmd == "calibrate":
+        print("calibrated at", pointer.Cursor(q, state, log=print).calibrate())
+    elif cmd == "verify":
+        c = pointer.Cursor(q, state, log=print)
+        print("verify:", c.verify_template())
     elif cmd == "locate":
-        c = pointer.Cursor(q, state)
-        if not c.template:
-            c.calibrate()
-        print(c.recover())
+        print(pointer.Cursor(q, state).recover())
     elif cmd == "reanchor":
         c = pointer.Cursor(q, state, log=print)
         if not c.template:
@@ -207,12 +215,16 @@ def run(args, q, state):
 def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
+        if args.cmd == "ppm2png":
+            w, h, rgb = screen.read_ppm(args.src)
+            qmp.atomic_write(args.dst, screen.encode_png(w, h, rgb))
+            return 0
         q, state = open_guest(args)
         try:
             run(args, q, state)
+        finally:
             if q.resets:  # the guest reset under us: what we knew of the pointer is stale
                 state.invalidate()
-        finally:
             q.close()
     except (qmp.QMPError, screen.ImageError, provision.ProvisionError) as e:
         print("guest: %s" % e, file=sys.stderr)

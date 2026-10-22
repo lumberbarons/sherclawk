@@ -116,6 +116,9 @@ class Capture:
     """
 
     def __init__(self, directory, relative=False):
+        if not relative and any(c.isspace() or c in "\"'" for c in directory):
+            # The monitor splits its command line on whitespace.
+            raise QMPError("capture directory %r must not contain spaces or quotes" % directory)
         self.directory = directory
         self.relative = relative
 
