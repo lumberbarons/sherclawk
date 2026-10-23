@@ -15,14 +15,16 @@ Build all six applications before booting or reserving a guest:
 ./build.sh HarnessChecks_APPL
 ```
 
-Publish those applications fork-aware to the existing `Retro68:` export. Use
-`tools/deploy-to-share.sh` with explicit `SHARE_HOST` and `APP` for Sherclawk
-consumers; the controller and helpers use the same MacBinary or
-APPL/resource-fork/Finder-metadata transport. Never restart AFP.
-Create `Retro68:Harness:slot1:` and `Retro68:Harness:slot2:` on the export.
-For concurrent guests, publish separate fork-preserved diagnostic copies into
-`Retro68:Harness:Apps:slot1:` and `Retro68:Harness:Apps:slot2:`; sharing the same
-AFP executable path can cause an in-use launch failure. Keep those applications
+Publish those applications fork-aware to the existing `Retro68:` export.
+`harness/publish.py` owns the transport and verification: within a run it
+publishes the selected application into a private
+`Retro68:Harness:<slot>-g<generation>:<run>:` workspace, and its lease-free
+`install` command is what `tools/deploy-to-share.sh` uses for the shipping
+application. Never restart AFP. Create `Retro68:Harness:slot1:` and
+`Retro68:Harness:slot2:` on the export. Legacy manual copies can still live in
+`Retro68:Harness:Apps:slot1:` and `Retro68:Harness:Apps:slot2:`; for
+concurrent guests prefer per-run publication, because sharing the same AFP
+executable path can cause an in-use launch failure. Keep those applications
 outside evidence mailboxes that rotate during recovery.
 Each mailbox has one writer; exclusive ownership is the reservation manager's
 job (#71), not a protection provided by these files.
@@ -198,6 +200,7 @@ quarantining case, preserve evidence, reset/init/launch the slot, and require
 fresh boot readiness before proceeding (`--previous-boot` and
 `--ready-timeout 180`). The runner observes an advancing heartbeat before it
 publishes a request; a static readiness file is insufficient. Missing final results time out as
-unknown and are never replayed. The runner requires an already-owned guest;
-it does not implement #71's reservation or #72's remote publication/evidence
-manager. Record actual guest results separately from host-test evidence.
+unknown and are never replayed. The runner requires an already-owned guest and
+drives it directly; it does not use the reservation (`manage.py`) or the
+lease-aware publication (`publish.py`) managers. Record actual guest results separately from
+host-test evidence.

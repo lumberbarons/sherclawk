@@ -222,11 +222,13 @@ by `tools/check.sh`; the starter's `io.c`, `png.c` and `selfrender.c` have their
 own Toolbox model in `tests/template/`; `tools/lint.sh` adds shellcheck, cppcheck and ruff for the
 same sources, and `.github/workflows/ci.yml` runs those checks on `ubuntu-24.04`
 for pushes to main and pull requests. Python helpers: `tools/make-art.py`
-(icon and window art), `tools/netatalk_meta.py` (fork-aware publication),
-`tools/embed-project-template.py` (starter template),
+(icon and window art), `harness/netatalk_meta.py` (fork metadata, used by the
+harness publisher), `tools/embed-project-template.py` (starter template),
 and `tools/guest-input.py` and `tools/utm_qmp.py` (thin wrappers that drive the
 UTM guest through the harness's `harness/guest.py`; see
-[driving a guest](../harness/docs/driving.md)).
+[driving a guest](../harness/docs/driving.md)). Diagnostic runs are published
+and collected by `harness/publish.py`
+([publication](../harness/docs/publication.md)).
 
 ```bash
 APP=SherclawkHandoffCheck tools/deploy-to-share.sh

@@ -90,7 +90,8 @@ python3 harness/manage.py suite "$token" --owner agent-a \
 
 `COMMAND` is shell-split, not passed to a shell. `suite` is the lease-scoped
 runner; the registered native diagnostic suite (#73) layers its own registry
-and evidence on top.
+and evidence on top, and per-run publication and evidence are
+`publish.py` ([publication.md](publication.md)).
 
 ## Lease rules
 

@@ -1,6 +1,7 @@
 #!/bin/bash
-# Publish Sherclawk with its own creator/bundle flag and the exact validated
-# netatalk resource-fork layout. Never restart AFP during a guest session.
+# Publish a built Sherclawk application with its creator/bundle flag and the
+# exact validated netatalk resource-fork/xattr layout, through the harness
+# publisher. Never restart AFP during a guest session.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 # Required: the AFP server (ssh target) that carries the share. There is no
@@ -9,10 +10,8 @@ SHARE_HOST="${SHARE_HOST:?set SHARE_HOST to the AFP server hostname}"
 SHARE_DIR="${SHARE_DIR:-/srv/retro68}"
 APP="${APP:-Sherclawk}"
 BUILD_TARGET="${BUILD_TARGET:-${APP}_APPL}" "$HERE/build.sh"
-python3 "$HERE/tools/netatalk_meta.py" sidecar "$HERE/build" "$APP" "$HERE/build/._$APP"
-scp -q "$HERE/build/$APP.APPL" "$SHARE_HOST:/tmp/$APP"
-scp -q "$HERE/build/._$APP" "$SHARE_HOST:/tmp/._$APP"
-scp -q "$HERE/tools/netatalk_meta.py" "$SHARE_HOST:/tmp/sherclawk-meta.py"
-# shellcheck disable=SC2029  # paths expand locally so ssh sees the final command
-ssh "$SHARE_HOST" "sudo -n install -o macos9 -g macos9 -m 666 /tmp/$APP '$SHARE_DIR/$APP' && sudo -n install -o macos9 -g macos9 -m 666 /tmp/._$APP '$SHARE_DIR/._$APP' && sudo -n python3 /tmp/sherclawk-meta.py xattr '$SHARE_DIR/$APP'"
+python3 "$HERE/harness/publish.py" install \
+    --build "$HERE/build" --target "$APP" \
+    --share-host "$SHARE_HOST" --share-dir "$SHARE_DIR" \
+    --dest "$SHARE_DIR/$APP"
 echo "Published $APP to $SHARE_HOST:$SHARE_DIR"
