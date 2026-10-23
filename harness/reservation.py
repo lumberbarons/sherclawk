@@ -494,6 +494,15 @@ class Manager:
         if row and row["state"] == "active":
             self._revoke(conn, row, "expired")
 
+    def lease(self, token, owner):
+        """Validate an active lease read-only; raises LeaseError when it is not.
+
+        Publication and evidence callers use this before every guest-touching
+        boundary so a revoked, reassigned or expired lease cannot continue.
+        """
+        with self._read() as conn:
+            return self._validate_locked(conn, token, owner)
+
     def reserve(self, owner, ttl=LEASE_SECONDS):
         """Claim a free slot, boot it and return an active lease."""
         if not owner or not owner.strip():

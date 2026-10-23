@@ -11,6 +11,11 @@ repository and meant to be extracted later, so it imports nothing from
   slots: reserve, renew, run, suite, screenshot, input, release, status and
   recovered/quarantined state, with SQLite transactions and an OS lock.
   See [`docs/reservations.md`](docs/reservations.md).
+- `publish.py` — lease-aware publication of one built application into a
+  fresh, never-reused `Retro68:Harness:<slot>-g<generation>:<run>:`
+  workspace, with the exact netatalk fork/xattr layout verified before the
+  mailbox request and retained per-run evidence.
+  See [`docs/publication.md`](docs/publication.md).
 - `guest.py` — the public command line for driving a guest over QMP:
   screenshots, keys, text and pointer control, for a slot, any QMP socket or
   the UTM VM. `qmp.py` (bounded protocol, input and capture), `screen.py`

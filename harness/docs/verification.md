@@ -37,7 +37,31 @@ and returned `ACCEPTED two-slot reservation manager`:
 
 Guest images and the raw acceptance evidence stay outside the repository.
 
+# Publication transport probe — October 23, 2026
+
+Verified working tree on top of `c8d983b` (issue #72, ADR-0009). `tools/check.sh`
+(all C fault suites, 207 harness Python tests including the new publication
+suites) and `tools/lint.sh` passed.
+
+The real transport was probed against the live AFP host without a guest:
+`harness/publish.py install` published two synthetic artifacts (a diagnostic
+and `Sherclawk`) into a scratch `Harness/publishprobe*` directory with a
+never-reused `/tmp` staging tree. An independent server-side inspection then
+confirmed the data fork SHA-256, the `._` sidecar (AppleDouble v2 magic, exact
+`Netatalk        ` filler, FinderInfo + resource entries), the 402-byte
+Metadata xattr with the file's own dev/ino, and creator `????` for the
+diagnostic versus `APPLShCk` for Sherclawk. Through the mounted export, the
+guest-visible `com.apple.FinderInfo` read `APPL????`/`APPLShCk` and the
+com.apple.ResourceFork bytes matched the local resource fork hash.
+
+The server-side check failed closed on a removed sidecar and on a truncated
+Metadata xattr, and a re-install repaired both to a clean check. The scratch
+directory was then removed. End-to-end publication through a real reservation
+with guest execution remains for #73/#74; this probe qualifies the transport.
+
 # Native controller acceptance — October 22, 2026
+
+
 
 Verified source: `b06d335`, based on main `813adf2` (issue #70, ADR-0009).
 The six harness applications and shipping application built with Retro68 in

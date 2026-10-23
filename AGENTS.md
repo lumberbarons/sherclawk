@@ -111,7 +111,9 @@ cp config.example.h config.local.h  # optional local config; gitignored
 - `harness/` is the OS 9 guest harness (ADR-0009): stdlib-only Python with its own
   tests under `harness/tests/` (run by `tools/check.sh`, linted by `tools/lint.sh`) and
   provisioning docs in `harness/docs/`. `harness/manage.py` owns exclusive two-slot
-  leases, QMP access and recovery; see `harness/docs/reservations.md`. It imports
+  leases, QMP access and recovery; see `harness/docs/reservations.md`.
+  `harness/publish.py` owns lease-aware per-run publication, fork metadata and
+  retained evidence; see `harness/docs/publication.md`. It imports
   nothing from `tools/` or `src/`; guest disk images and installation media stay
   outside the repository.
 - `tests/` uses `tests/toolbox/` stubs to compile app sources with host `cc`;
