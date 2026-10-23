@@ -33,8 +33,15 @@ static int path(const char *s, int directory)
 }
 int h_registered(const char *s)
 {
-    return !strcmp(s, "SherclawkWriteCheck") || !strcmp(s, "SherclawkInspectCheck") ||
-        !strcmp(s, "HarnessAcceptance");
+    static const char *names[] = {
+        "SherclawkWriteCheck", "SherclawkSearchCheck", "SherclawkEditCheck",
+        "SherclawkInspectCheck", "SherclawkProjectCheck", "SherclawkScrollCheck",
+        "SherclawkHandoffCheck", "SherclawkSelfBuildCheck",
+        "SherclawkSelfBuildStopCheck", "HarnessAcceptance"
+    };
+    unsigned int i;
+    for (i = 0; i < sizeof(names)/sizeof(*names); i++) if (!strcmp(s, names[i])) return 1;
+    return 0;
 }
 static int valid(const HRequest *r)
 {

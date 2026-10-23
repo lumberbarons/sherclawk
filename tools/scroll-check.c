@@ -4,15 +4,24 @@
 #define main SherclawkMain
 #include "app/main.c"
 #undef main
+#include "harness/native/diagnostic.h"
 
 static FILE *check_log;
 static int failures;
+
+static void Check(const char *name, int ok)
+{
+    harness_check(ok, name);
+    fprintf(check_log, "%s %s\n", ok ? "PASS" : "FAIL", name);
+    if (!ok) failures++;
+}
 
 static void CheckPosition(const char *name, short expected)
 {
     long actual = (long)(*gResponseTE)->viewRect.top - (*gResponseTE)->destRect.top;
     short value = GetControlValue(gResponseScroll);
     int ok = actual == expected && value == expected;
+    harness_check(ok, name);
     fprintf(check_log, "%s %s: text=%ld control=%d expected=%d\n",
             ok ? "PASS" : "FAIL", name, actual, value, expected);
     if (!ok) failures++;
@@ -21,14 +30,19 @@ static void CheckPosition(const char *name, short expected)
 int main(void)
 {
     static char text[CHAT_TRANSCRIPT_CAP];
+    char logpath[256];
     short maximum, lh;
     int i;
     InitGraf(&qd.thePort); InitFonts(); InitWindows(); InitMenus();
     TEInit(); InitDialogs(NULL); InitCursor();
+    if (harness_begin("SherclawkScrollCheck") < 0) return 1;
+    if (harness_workspace()) tools_set_workspace(harness_workspace());
     RunInit();
     UIInit();
-    check_log = fopen("Retro68:SherclawkScrollCheck.log", "w");
-    if (!check_log || !gResponseTE || !gResponseScroll) return 1;
+    snprintf(logpath, sizeof(logpath), "%sSherclawkScrollCheck.log",
+             tools_workspace());
+    check_log = fopen(logpath, "w");
+    if (!check_log || !gResponseTE || !gResponseScroll) return harness_finish(1);
 
     /* Exercise the main screen's two-pane focus cycle and read-only transcript
      * with the guest TextEdit Manager, rather than a host UI stub. */
@@ -37,13 +51,13 @@ int main(void)
         memset(&event, 0, sizeof(event));
         event.what = keyDown; event.message = 0x09;
         HandleEvent(&event);
-        if (gFocusedTE != gResponseTE) failures++;
+        Check("focus response pane", gFocusedTE == gResponseTE);
         event.message = 'x'; HandleEvent(&event);
-        if ((*gResponseTE)->teLength) failures++;
+        Check("response transcript is read-only", !(*gResponseTE)->teLength);
         event.message = 0x09; HandleEvent(&event);
-        if (gFocusedTE != gPromptTE) failures++;
+        Check("focus prompt pane", gFocusedTE == gPromptTE);
         event.message = 'x'; HandleEvent(&event);
-        if ((*gPromptTE)->teLength != 1) failures++;
+        Check("prompt accepts text", (*gPromptTE)->teLength == 1);
         TESetText("", 0, gPromptTE);
         fprintf(check_log, "two-pane focus and read-only transcript checked\n");
     }
@@ -54,11 +68,11 @@ int main(void)
     CheckPosition("loaded at top", 0);
     maximum = GetControlMaximum(gResponseScroll);
     lh = PaneLineHeight(gResponseTE);
-    if (maximum <= PanePageHeight(gResponseTE)) failures++;
+    Check("transcript exceeds one page", maximum > PanePageHeight(gResponseTE));
     ResponseScrollTo(maximum);
     CheckPosition("reply revealed at bottom", maximum);
-    if ((long)(*gResponseTE)->destRect.top + (*gResponseTE)->nLines * lh !=
-        (*gResponseTE)->viewRect.bottom) failures++;
+    Check("bottom alignment", (long)(*gResponseTE)->destRect.top +
+          (*gResponseTE)->nLines * lh == (*gResponseTE)->viewRect.bottom);
     ScrollActionProc(gResponseScroll, kControlUpButtonPart);
     CheckPosition("up arrow", maximum - lh);
     ScrollActionProc(gResponseScroll, kControlDownButtonPart);
@@ -86,7 +100,8 @@ int main(void)
     ResponseScrollTo(maximum);
     ResponseSetText("Short reply", 11);
     CheckPosition("short replacement clears old offset", 0);
-    if (GetControlMaximum(gResponseScroll) != 0) failures++;
+    Check("short replacement resets the maximum",
+          GetControlMaximum(gResponseScroll) == 0);
     ResponseSetText(text, strlen(text));
     ResponseScrollTo(GetControlMaximum(gResponseScroll));
     CheckPosition("next transcript follows bottom", maximum);
@@ -112,5 +127,5 @@ int main(void)
     fprintf(check_log, "RESULT failures=%d\n", failures);
     fclose(check_log); FlushVol(NULL, 0);
     UIDispose();
-    return failures ? 1 : 0;
+    return harness_finish(failures);
 }

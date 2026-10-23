@@ -113,7 +113,9 @@ cp config.example.h config.local.h  # optional local config; gitignored
   provisioning docs in `harness/docs/`. `harness/manage.py` owns exclusive two-slot
   leases, QMP access and recovery; see `harness/docs/reservations.md`.
   `harness/publish.py` owns lease-aware per-run publication, fork metadata and
-  retained evidence; see `harness/docs/publication.md`. It imports
+  retained evidence; see `harness/docs/publication.md`. `harness/suite.py` runs the
+  checks named by the consumer-owned `tools/native-suite.json` as one unattended
+  suite; see `harness/docs/suite.md`. It imports
   nothing from `tools/` or `src/`; guest disk images and installation media stay
   outside the repository.
 - `tests/` uses `tests/toolbox/` stubs to compile app sources with host `cc`;

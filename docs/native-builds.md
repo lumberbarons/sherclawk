@@ -110,6 +110,12 @@ Queue paths, record formats and lock names are unchanged, so earlier queues,
 claimed jobs and artifacts stay readable and are never deleted or replayed.
 General queue service is not implemented.
 
+`SHERCLAWK_BUILD_QUEUE` is a build-time path relative to the workspace root.
+The `SherclawkSelfBuildCheck` and `SherclawkSelfBuildStopCheck` targets override
+it to `buildjobs`, so a harness run uses the private queue that `publish.py`
+creates inside its run workspace instead of the shared `Worker01:buildjobs`.
+Manual launches keep the same checks usable and create that queue on demand.
+
 A build that cannot start says why instead of waiting, and never leaves an
 uncertain job: `NATIVE_EXECUTOR_UNAVAILABLE` (the ToolServer channel could not
 be set up at launch, or ToolServer could not be found or launched, so nothing

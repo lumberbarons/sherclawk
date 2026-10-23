@@ -35,6 +35,23 @@ class ContractTest(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(contract.ContractError):
                 contract.write_request(dataclasses.replace(r, **{field: value}))
 
+    def test_every_suite_diagnostic_is_registered_and_unknown_names_fail(self):
+        suite = ("SherclawkWriteCheck", "SherclawkSearchCheck", "SherclawkEditCheck",
+                 "SherclawkInspectCheck", "SherclawkProjectCheck", "SherclawkScrollCheck",
+                 "SherclawkHandoffCheck", "SherclawkSelfBuildCheck",
+                 "SherclawkSelfBuildStopCheck")
+        for name in suite + ("HarnessAcceptance",):
+            with self.subTest(name=name):
+                r = dataclasses.replace(
+                    request(), diagnostic=name,
+                    application="Retro68:Harness:r:" + name)
+                self.assertEqual(contract.read_request(contract.write_request(r)), r)
+        for name in ("SherclawkBuildCheck", "SherclawkWhateverCheck"):
+            with self.subTest(name=name), self.assertRaises(contract.ContractError):
+                contract.write_request(dataclasses.replace(
+                    request(), diagnostic=name,
+                    application="Retro68:Harness:r:" + name))
+
     def test_named_pass_and_deliberate_failure(self):
         for checks, outcome in (([(True, "write file")], "passed"),
                                 ([(True, "write file"), (False, "read back")], "failed")):

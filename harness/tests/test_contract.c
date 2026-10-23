@@ -13,7 +13,25 @@ int main(void)
     HReport report;
     char buf[H_REPORT_CAP], name[H_NAME_CAP];
     unsigned int i;
+    static const char *diagnostics[] = {
+        "SherclawkWriteCheck", "SherclawkSearchCheck", "SherclawkEditCheck",
+        "SherclawkInspectCheck", "SherclawkProjectCheck", "SherclawkScrollCheck",
+        "SherclawkHandoffCheck", "SherclawkSelfBuildCheck",
+        "SherclawkSelfBuildStopCheck", "HarnessAcceptance"
+    };
     assert(h_request_parse(request, strlen(request), &r));
+    for (i = 0; i < sizeof(diagnostics)/sizeof(*diagnostics); i++) {
+        other = r;
+        strcpy(other.diagnostic, diagnostics[i]);
+        snprintf(other.application, sizeof(other.application),
+                 "Retro68:Harness:r:%s", diagnostics[i]);
+        assert(h_request_format(&other, buf, sizeof(buf)) > 0);
+        assert(h_request_parse(buf, strlen(buf), &other));
+    }
+    other = r;
+    strcpy(other.diagnostic, "SherclawkBuildCheck");
+    strcpy(other.application, "Retro68:Harness:r:SherclawkBuildCheck");
+    assert(h_request_format(&other, buf, sizeof(buf)) < 0);
     assert(!h_request_parse(request, strlen(request)-1, &other));
     strcpy(buf, request); strcat(buf, "junk\r");
     assert(!h_request_parse(buf, strlen(buf), &other));

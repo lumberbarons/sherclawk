@@ -574,6 +574,19 @@ class CollectTest(Base):
         self.assertEqual(record["paths"]["workspace"], run.workspace)
         self.assertIn("finished_mono", record["timings"])
 
+    def test_collect_polls_the_caller_while_waiting(self):
+        _lease, run = self.publish()
+        calls = []
+
+        def poll():
+            calls.append(1)
+            if len(calls) == 2:
+                self.publish_result(run)
+
+        report = run.collect(timeout=5, on_poll=poll)
+        self.assertEqual(report.outcome, "passed")
+        self.assertEqual(len(calls), 2)
+
     def test_collect_timeout_preserves_evidence_and_never_passes(self):
         _lease, run = self.publish()
         with self.assertRaises(publish.RunTimeout) as caught:

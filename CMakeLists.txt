@@ -76,9 +76,9 @@ foreach(slot 1 2)
 endforeach()
 sherclawk_app(SherclawkWriteCheck tools/write-check.c ${HARNESS_SUPPORT} ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
 sherclawk_app(SherclawkCalibrateCheck tools/calibrate-check.c hello.r)
-sherclawk_app(SherclawkSearchCheck tools/search-check.c ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
-sherclawk_app(SherclawkEditCheck tools/edit-check.c ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
-sherclawk_app(SherclawkProjectCheck tools/project-check.c ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
+sherclawk_app(SherclawkSearchCheck tools/search-check.c ${HARNESS_SUPPORT} ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
+sherclawk_app(SherclawkEditCheck tools/edit-check.c ${HARNESS_SUPPORT} ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
+sherclawk_app(SherclawkProjectCheck tools/project-check.c ${HARNESS_SUPPORT} ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
 # Compile the exact model-facing starter as well as the app that embeds it.
 set(TEMPLATE_DIR templates/ppc-toolbox)
 add_application(SherclawkTemplate ${TEMPLATE_DIR}/main.c ${TEMPLATE_DIR}/scene.c ${TEMPLATE_DIR}/io.c ${TEMPLATE_DIR}/png.c ${TEMPLATE_DIR}/selfrender.c ${TEMPLATE_DIR}/app.r CREATOR SHTP)
@@ -93,10 +93,10 @@ sherclawk_app(SherclawkRunCheck ${BUILD_CHECK_SRC})
 target_compile_definitions(SherclawkRunCheck PRIVATE RUN_CHECK=1)
 sherclawk_app(SherclawkQuitCheck ${BUILD_CHECK_SRC})
 target_compile_definitions(SherclawkQuitCheck PRIVATE RUN_CHECK=1 QUIT_CHECK=1)
-sherclawk_app(SherclawkSelfBuildCheck ${BUILD_CHECK_SRC})
-target_compile_definitions(SherclawkSelfBuildCheck PRIVATE RUN_CHECK=1 SELF_BUILD_CHECK=1)
-sherclawk_app(SherclawkSelfBuildStopCheck ${BUILD_CHECK_SRC})
-target_compile_definitions(SherclawkSelfBuildStopCheck PRIVATE RUN_CHECK=1 SELF_BUILD_CHECK=1 SELF_BUILD_STOP_CHECK=1)
+sherclawk_app(SherclawkSelfBuildCheck ${BUILD_CHECK_SRC} ${HARNESS_SUPPORT})
+target_compile_definitions(SherclawkSelfBuildCheck PRIVATE RUN_CHECK=1 SELF_BUILD_CHECK=1 SHERCLAWK_BUILD_QUEUE=\"buildjobs\")
+sherclawk_app(SherclawkSelfBuildStopCheck ${BUILD_CHECK_SRC} ${HARNESS_SUPPORT})
+target_compile_definitions(SherclawkSelfBuildStopCheck PRIVATE RUN_CHECK=1 SELF_BUILD_CHECK=1 SELF_BUILD_STOP_CHECK=1 SHERCLAWK_BUILD_QUEUE=\"buildjobs\")
 sherclawk_app(SherclawkToolServerCheck tools/toolserver-check.c tools/toolserver-check.r)
 set(NATIVE_BUILD_CHECK_SRC tools/native-build-check.c src/native/toolserver.c src/native/ae_dispatch.c tools/toolserver-check.r)
 sherclawk_app(SherclawkNativeBuildCheck ${NATIVE_BUILD_CHECK_SRC})
@@ -104,7 +104,10 @@ sherclawk_app(SherclawkNativeBuildErrorCheck ${NATIVE_BUILD_CHECK_SRC})
 target_compile_definitions(SherclawkNativeBuildErrorCheck PRIVATE NATIVE_BUILD_ERROR=1)
 sherclawk_app(SherclawkInspectCheck tools/inspect-check.c ${HARNESS_SUPPORT} ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
 add_custom_target(HarnessChecks_APPL DEPENDS HarnessController_APPL HarnessAcceptance_APPL
-    HarnessInstall1_APPL HarnessInstall2_APPL SherclawkWriteCheck_APPL SherclawkInspectCheck_APPL)
+    HarnessInstall1_APPL HarnessInstall2_APPL SherclawkWriteCheck_APPL
+    SherclawkSearchCheck_APPL SherclawkEditCheck_APPL SherclawkInspectCheck_APPL
+    SherclawkProjectCheck_APPL SherclawkScrollCheck_APPL SherclawkHandoffCheck_APPL
+    SherclawkSelfBuildCheck_APPL SherclawkSelfBuildStopCheck_APPL)
 sherclawk_app(SherclawkViewImageCheck tools/view-image-check.c ${TOOLS_SRC} src/tools/view_image.c src/agent/json.c src/agent/text.c hello.r)
 sherclawk_app(SherclawkCatalogCheck tools/catalog-check.c ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
 sherclawk_app(SherclawkTrashCheck tools/trash-check.c ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
@@ -112,8 +115,8 @@ sherclawk_app(SherclawkCopyCheck tools/copy-check.c ${TOOLS_SRC} src/agent/json.
 sherclawk_app(SherclawkMCPGuardCheck tools/mcp-guard-check.c ${TOOLS_SRC} src/agent/json.c src/agent/text.c hello.r)
 # These two diagnostics #include ../main.c themselves, so APP_SRC carries the
 # app modules they do not name directly.
-sherclawk_app(SherclawkScrollCheck tools/scroll-check.c ${APP_SRC})
-sherclawk_app(SherclawkHandoffCheck tools/handoff-check.c ${APP_SRC})
+sherclawk_app(SherclawkScrollCheck tools/scroll-check.c ${APP_SRC} ${HARNESS_SUPPORT})
+sherclawk_app(SherclawkHandoffCheck tools/handoff-check.c ${APP_SRC} ${HARNESS_SUPPORT})
 
 # Main-window controls use the OS 9 Appearance Manager's default-button ring.
 foreach(app SherclawkLargeTextCheck Sherclawk SherclawkScrollCheck SherclawkHandoffCheck SherclawkMCPAgentCheck)

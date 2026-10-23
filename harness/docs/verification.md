@@ -1,3 +1,28 @@
+# Unattended suite host verification — October 23, 2026
+
+Verified the working tree on top of `14bed6d` (issue #73, ADR-0009).
+`tools/check.sh` passed the ASan/UBSan C suites, the native controller suites,
+247 stdlib Python harness tests (including the new suite/registry, failure,
+reset, session and interactive tests) and the shipped
+`tools/native-suite.json` validation. `tools/lint.sh` passed shellcheck,
+cppcheck and ruff.
+
+`./build.sh HarnessChecks_APPL` built the controller, installer, acceptance
+fixture and all nine registered checks with Retro68 in Docker:
+`SherclawkWriteCheck`, `SherclawkSearchCheck`, `SherclawkEditCheck`,
+`SherclawkInspectCheck`, `SherclawkProjectCheck`, `SherclawkScrollCheck`,
+`SherclawkHandoffCheck`, `SherclawkSelfBuildCheck` and
+`SherclawkSelfBuildStopCheck`. `suite.py validate --build build` accepted all
+nine artifacts; both self-build targets compiled with the private `buildjobs`
+queue name.
+
+A guest run of all nine checks was not performed for this record: the host had
+no mounted `Retro68` export or configured share host during verification.
+Host tests prove the runner's completion, reset, evidence and no-replay rules;
+the end-to-end guest qualification (including a MacRelix-free ToolServer run
+and a fresh-boot reset between self-build checks) remains for the guest pass
+before the epic closes.
+
 # Reservation manager acceptance — October 22, 2026
 
 Verified working tree on top of `c5657aa` (issue #71, ADR-0009). QEMU
