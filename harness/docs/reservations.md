@@ -181,6 +181,9 @@ OS9_HARNESS_SHARE="$HOME/Retro68Share" \
     python3 harness/tests/guest_reservations.py
 ```
 
+Run it only when no agent holds a slot: the initial clean step invalidates
+leases and recovers both slots.
+
 Evidence from a passing run is recorded in
 [`verification.md`](verification.md). It never restarts AFP and never
 force-quits an unverified process.

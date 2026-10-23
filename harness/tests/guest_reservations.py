@@ -11,7 +11,9 @@ explicit recovery. Evidence stays under ``$OS9_HARNESS_HOME/evidence``.
         python3 harness/tests/guest_reservations.py
 
 This is not part of host discovery: it needs real guests and takes a few
-minutes. It never restarts AFP and never force-quits an unverified process.
+minutes. Run it only when no agent holds a slot, because the initial clean
+step invalidates leases and recovers both slots. It never restarts AFP and
+never force-quits an unverified process.
 """
 import argparse
 import os
