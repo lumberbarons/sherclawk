@@ -157,6 +157,12 @@ class OverlayTest(unittest.TestCase):
         with open(s.overlay, "rb") as f:
             self.assertEqual(f.read(), b"guest state")
 
+    def test_qemu_img_failure_is_reported_with_stderr(self):
+        broken = fake_tool(self.tmp.name, "qemu-img-broken",
+                           'echo "backing file changed" >&2\nexit 3')
+        with self.assertRaisesRegex(provision.ProvisionError, "backing file changed"):
+            provision.create_overlay(provision.slot(self.home, "slot1"), qemu_img=broken)
+
     def test_freeze_removes_every_write_bit(self):
         os.chmod(self.base, 0o644)
         provision.freeze(self.base)

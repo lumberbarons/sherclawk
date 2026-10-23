@@ -1,3 +1,42 @@
+# Reservation manager acceptance — October 22, 2026
+
+Verified working tree on top of `c5657aa` (issue #71, ADR-0009). QEMU
+10.1.2 `mac99` slots were booted concurrently from their immutable configured
+images with QEMU from Homebrew; the `Retro68` export was mounted on the host
+so fresh controller readiness could be read and stale staging could be
+cleared. `tools/check.sh` (including the new reservation host tests),
+`tools/check-transport.sh` and `tools/lint.sh` passed.
+
+The opt-in acceptance ran
+`OS9_HARNESS_SHARE="$HOME/Retro68Share" python3 harness/tests/guest_reservations.py`
+and returned `ACCEPTED two-slot reservation manager`:
+
+- Concurrent reserve calls returned distinct slots, distinct 128-bit
+  tokens and distinct fresh 32-hex boot IDs; every QEMU process was alive
+  after an advancing controller heartbeat.
+- A further reservation was refused while every slot was held.
+- Each slot produced a distinct live screenshot through the lease-checked QMP
+  proxy.
+- Releasing one slot revoked its lease first, stopped and verified the exact
+  QEMU pid, reset its overlay, retained a JSON evidence record plus a PPM
+  screenshot, and made the slot assignable again.
+- Re-releasing the old token was a no-op; stale `renew`, `screenshot` and
+  `input` calls failed after release and after reassignment, and the new
+  owner's QEMU stayed alive.
+- The reassigned slot had a later generation, a different pid and a different
+  boot ID.
+- Making the slot directory unwritable produced a failed overlay reset and
+  quarantined the slot with a reason in `status`; the old QEMU had already
+  been terminated. Restoring the directory and running `recover --slot`
+  cleared the quarantine.
+- An earlier interrupted boot had left `Harness/slot1/ready.tmp`; the manager
+  removed that stale staging file before rebooting, and the slot published a
+  fresh advancing heartbeat. The controller-side fix is tracked as #256.
+- Every slot was free and stopped at the end. Evidence remains under
+  `$OS9_HARNESS_HOME/evidence`, outside git.
+
+Guest images and the raw acceptance evidence stay outside the repository.
+
 # Native controller acceptance — October 22, 2026
 
 Verified source: `b06d335`, based on main `813adf2` (issue #70, ADR-0009).

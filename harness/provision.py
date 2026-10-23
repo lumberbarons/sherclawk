@@ -171,7 +171,11 @@ def create_overlay(s, qemu_img=QEMU_IMG):
     if os.path.exists(s.overlay):
         raise ProvisionError("%s already exists; `reset` it explicitly" % s.overlay)
     os.makedirs(s.home.slot_dir, exist_ok=True)
-    subprocess.run(overlay_argv(base, s.overlay, qemu_img), check=True)
+    result = subprocess.run(overlay_argv(base, s.overlay, qemu_img),
+                            capture_output=True, text=True)
+    if result.returncode:
+        raise ProvisionError("qemu-img could not create %s: %s"
+                             % (s.overlay, (result.stderr or result.stdout).strip()))
 
 
 def read_manifest(home):

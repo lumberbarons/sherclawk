@@ -22,6 +22,8 @@ base/golden-work.qcow2    writable working copy, present only while preparing a 
 slots/<slot>.qcow2        overlay on the base, one per slot
 run/<slot>.{qmp,pid,log}  QMP socket, pid file and QEMU log
 manifest.json             emulator version and base/original checksums
+manager.sqlite3           exclusive lease state (reservations.md)
+locks/, evidence/         OS locks and retained release/recovery evidence
 ```
 
 `provision.py info` prints the emulator version, the manifest and every slot
@@ -167,6 +169,10 @@ Install and seal each private slot identity using the
 [controller provisioning procedure](contract.md#build-and-install). Runtime
 overlays then use the immutable configured slot base; `reset` preserves it.
 Require fresh boot readiness after every recovery.
+
+Reserve a guest exclusively through [`manage.py`](reservations.md); it boots
+the slot, waits for a fresh controller heartbeat and owns the QMP socket for
+the lease. `provision.py launch` remains the unmanaged provisioning tool.
 
 ## Changing the base later
 
