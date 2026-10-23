@@ -76,7 +76,7 @@ python3 harness/publish.py run \
 3. Verifies server-side that the data fork and resource fork match the built
    hashes and that the Finder type/creator record is complete and current.
 4. Publishes each `--fixture NAME=LOCALFILE` as a bounded file in the
-   workspace.
+   workspace (a single 1..31 byte HFS name, at most 1 MiB).
 5. Publishes the closed `HARNESS/1` request into the slot mailbox last.
 
 Then it waits for the controller's closed `result-<run>` (bounded by
@@ -116,7 +116,8 @@ python3 harness/publish.py install --build build --target Sherclawk \
 `install` is the lease-free transport `tools/deploy-to-share.sh` uses for the
 shipping application: stage, install both forks, write the xattr, verify, and
 fail closed on mismatch. It accepts any built application name, not only
-registered diagnostics.
+registered diagnostics. The destination's parent directory must already
+exist; `install` creates no directories (a run creates its own workspace).
 
 ## Host tests
 
