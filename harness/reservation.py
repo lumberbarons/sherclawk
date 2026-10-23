@@ -3,9 +3,9 @@
 One manager installs on the host, outside every worktree, and keeps its state
 in ``$OS9_HARNESS_HOME/manager.sqlite3`` behind an OS file lock.  A reservation
 is a slot, a random lease token, an owner and a monotonically expiring
-deadline.  Every operation re-checks the token and generation under both the
-global state lock and a per-slot lock, so a stale owner cannot renew, run,
-type, capture or release against a slot that has since been reassigned.
+deadline.  Every operation re-checks the token, owner and manager epoch under
+both the global state lock and a per-slot lock, so a stale owner cannot renew,
+run, type, capture or release against a slot that has since been reassigned.
 
 Recovery is deliberate: revoke the lease in SQLite first, collect bounded
 evidence, stop and verify the exact QEMU process, reset the overlay, and only
@@ -42,11 +42,21 @@ EVIDENCE_QMP_TIMEOUT = 3.0
 LOG_TAIL_BYTES = 8192
 DB_NAME = "manager.sqlite3"
 SCHEMA_VERSION = "1"
+POLL_SECONDS = 1.0
+TIMEOUT_RETURNCODE = 124  # the timeout(1) convention for a command that ran out of time
 SLOT_STATES = ("free", "launching", "active", "recovering", "quarantined")
 
 
 class ReservationError(Exception):
     """A reservation request or guest operation could not be carried out."""
+
+
+class UsageError(ReservationError):
+    """The request itself is malformed: a bad argument, range or empty input."""
+
+
+class CommandTimeout(ReservationError):
+    """A host command under a lease outlived its own bound."""
 
 
 class ConfigError(ReservationError):
@@ -124,12 +134,17 @@ class Effects:
     def boot_id(self):
         """A value that changes when the host restarts, never when it sleeps."""
         if sys.platform == "darwin":
-            try:
-                out = subprocess.run(["sysctl", "-n", "kern.boottime"],
-                                     capture_output=True, text=True, timeout=5).stdout.strip()
-                return out
-            except (OSError, subprocess.SubprocessError):
-                return ""
+            # kern.boottime is adjusted when the system clock is stepped, so it
+            # can change without a reboot; the boot session UUID cannot.
+            for key in ("kern.bootsessionuuid", "kern.boottime"):
+                try:
+                    out = subprocess.run(["sysctl", "-n", key], capture_output=True,
+                                         text=True, timeout=5).stdout.strip()
+                except (OSError, subprocess.SubprocessError):
+                    continue
+                if out:
+                    return out
+            return ""
         try:
             with open("/proc/sys/kernel/random/boot_id") as f:
                 return f.read().strip()
@@ -210,7 +225,10 @@ class Effects:
         return True
 
     def open_qmp(self, slot, timeout=None, capture_dir=None):
-        capture = qmp.Capture(capture_dir or os.path.join(self.home.path, "shots"))
+        # The capture directory is only scratch space (QEMU rejects whitespace
+        # in it); screenshots are written to their destination afterwards, so
+        # the default must not depend on where the harness home lives.
+        capture = qmp.Capture(capture_dir) if capture_dir else None
         return qmp.QMP(slot.qmp, timeout=timeout or self.qmp_timeout, capture=capture)
 
     def qmp_alive(self, slot, timeout=2.0):
@@ -237,6 +255,7 @@ class Lease:
     boot_clock: int
     pid: int
     state: str
+    ttl: int = LEASE_SECONDS
 
     def expires_in(self, mono, wall):
         return max(0.0, min(self.expires_mono - mono, self.expires_wall - wall))
@@ -256,7 +275,8 @@ class Lease:
 def _row_lease(row):
     return Lease(row["slot"], row["token"], row["owner"], row["generation"],
                  row["expires_mono"], row["expires_wall"], row["boot"] or "",
-                 row["boot_clock"] or 0, row["pid"] or 0, row["state"])
+                 row["boot_clock"] or 0, row["pid"] or 0, row["state"],
+                 int(row["ttl"] or LEASE_SECONDS))
 
 
 def _expired(lease, mono, wall):
@@ -268,7 +288,7 @@ class Manager:
 
     def __init__(self, home=None, share=None, clock=None, effects=None,
                  ready_timeout=READY_TIMEOUT, stop_timeout=STOP_TIMEOUT,
-                 renew_interval=RENEW_SECONDS):
+                 renew_interval=RENEW_SECONDS, poll_interval=POLL_SECONDS):
         self.home = home if isinstance(home, provision.Home) else provision.Home(home)
         self.clock = clock or Clock()
         self.effects = effects or Effects(self.home, share=share, clock=self.clock)
@@ -278,6 +298,7 @@ class Manager:
         self.ready_timeout = ready_timeout
         self.stop_timeout = stop_timeout
         self.renew_interval = max(0.01, float(renew_interval))
+        self.poll_interval = max(0.01, float(poll_interval))
         self.evidence_dir = os.path.join(self.home.path, "evidence")
         self.lock_dir = os.path.join(self.home.path, "locks")
         os.makedirs(self.evidence_dir, exist_ok=True)
@@ -348,6 +369,7 @@ class Manager:
                 boot TEXT,
                 boot_clock INTEGER,
                 last_boot TEXT,
+                ttl INTEGER,
                 started_wall REAL,
                 updated_wall REAL,
                 quarantine TEXT)""")
@@ -358,6 +380,9 @@ class Manager:
                 owner TEXT,
                 reason TEXT NOT NULL,
                 released_wall REAL NOT NULL)""")
+            columns = {r["name"] for r in conn.execute("PRAGMA table_info(slots)")}
+            if "ttl" not in columns:
+                conn.execute("ALTER TABLE slots ADD COLUMN ttl INTEGER")
             for key, value in (("schema", SCHEMA_VERSION),
                                ("epoch", secrets.token_hex(16)),
                                ("host_boot", ""),
@@ -405,13 +430,15 @@ class Manager:
                      (wall, row["slot"]))
         self._touch(conn)
 
-    def _quarantine(self, slot_name, reason):
+    def _quarantine(self, slot_name, reason, generation=None):
+        """Quarantine a slot; with a generation, only if that claim still owns it."""
         mono, wall = self._now()
         with self._txn() as conn:
             conn.execute("""UPDATE slots SET state='quarantined', token=NULL, owner=NULL,
                             expires_mono=NULL, expires_wall=NULL, epoch=NULL,
-                            quarantine=?, updated_wall=? WHERE slot=?""",
-                         (str(reason)[:400], wall, slot_name))
+                            quarantine=?, updated_wall=?
+                            WHERE slot=? AND (? IS NULL OR generation=?)""",
+                         (str(reason)[:400], wall, slot_name, generation, generation))
             self._touch(conn)
 
     def _recover_after_restart(self):
@@ -454,6 +481,8 @@ class Manager:
             raise LeaseError("lease belongs to another owner")
         if row["state"] != "active":
             raise LeaseError("lease is not active (%s)" % row["state"])
+        if row["epoch"] != self._meta(conn).get("epoch"):
+            raise LeaseError("lease predates a manager restart")
         lease = _row_lease(row)
         mono, wall = self._now()
         if _expired(lease, mono, wall):
@@ -468,9 +497,9 @@ class Manager:
     def reserve(self, owner, ttl=LEASE_SECONDS):
         """Claim a free slot, boot it and return an active lease."""
         if not owner or not owner.strip():
-            raise ReservationError("reserve needs a non-empty owner")
+            raise UsageError("reserve needs a non-empty owner")
         if not 1 <= ttl <= LEASE_SECONDS:
-            raise ReservationError("lease seconds must be within 1..%d" % LEASE_SECONDS)
+            raise UsageError("lease seconds must be within 1..%d" % LEASE_SECONDS)
         self._require_share()
         self._reap_expired()
 
@@ -527,11 +556,12 @@ class Manager:
                         raise LeaseError("reservation was revoked while booting")
                     conn.execute("""UPDATE slots SET state='active', boot=?, boot_clock=?,
                                     last_boot=?, expires_mono=?, expires_wall=?,
-                                    updated_wall=? WHERE token=?""",
-                                 (boot, boot_clock, boot, mono + ttl, wall + ttl, wall, token))
+                                    ttl=?, updated_wall=? WHERE token=?""",
+                                 (boot, boot_clock, boot, mono + ttl, wall + ttl, ttl,
+                                  wall, token))
                     self._touch(conn)
                 return Lease(slot.name, token, owner, generation, mono + ttl, wall + ttl,
-                             boot, boot_clock, pid, "active")
+                             boot, boot_clock, pid, "active", ttl)
         except BaseException as exc:
             self._fail_reservation(slot, token, lease, str(exc))
             raise
@@ -542,7 +572,7 @@ class Manager:
     def renew(self, token, owner, ttl=LEASE_SECONDS):
         """Extend an active lease; expired or stale tokens are refused."""
         if not 1 <= ttl <= LEASE_SECONDS:
-            raise ReservationError("lease seconds must be within 1..%d" % LEASE_SECONDS)
+            raise UsageError("lease seconds must be within 1..%d" % LEASE_SECONDS)
         slot_name = self._slot_for_token(token)
         error = None
         lease = None
@@ -561,10 +591,10 @@ class Manager:
                     else:
                         mono, wall = self._now()
                         conn.execute("""UPDATE slots SET expires_mono=?, expires_wall=?,
-                                        updated_wall=? WHERE token=?""",
-                                     (mono + ttl, wall + ttl, wall, token))
+                                        ttl=?, updated_wall=? WHERE token=?""",
+                                     (mono + ttl, wall + ttl, ttl, wall, token))
                         lease = dataclasses.replace(lease, expires_mono=mono + ttl,
-                                                    expires_wall=wall + ttl)
+                                                    expires_wall=wall + ttl, ttl=ttl)
                         self._touch(conn)
                 else:
                     error = LeaseError("unknown or stale lease token")
@@ -701,14 +731,22 @@ class Manager:
                 raise RecoveryError("%s answers QMP with no verified pid" % slot_name)
             if pid:
                 info = self.effects.process(pid)
-                if info.alive:
-                    if not self._is_our_qemu(slot, info):
+                if info.alive and not self._is_our_qemu(slot, info):
+                    # A live pid whose command line is readable and is not this
+                    # slot's QEMU was reused by an unrelated process. Automatic
+                    # recovery still quarantines; an operator's explicit
+                    # recover may discard the stale pid (never signalling it)
+                    # once nothing answers on the slot's QMP socket.
+                    if not (force_reset and info.command.strip()
+                            and not self.effects.qmp_alive(slot)):
                         raise RecoveryError(
                             "pid %d is not %s's QEMU: %s" % (pid, slot_name, info.command[:160]))
-                    path = self._safe_evidence(slot, lease, reason, "before_stop",
-                                               meta, generation, owner,
-                                               {"pid_command": info.command}, summary)
-                    del path
+                    summary["stale_pid"] = pid
+                    summary["stopped"] = True
+                elif info.alive:
+                    self._safe_evidence(slot, lease, reason, "before_stop",
+                                        meta, generation, owner,
+                                        {"pid_command": info.command}, summary)
                     self.effects.terminate(pid, self.stop_timeout)
                     after = self.effects.process(pid)
                     if after.alive:
@@ -805,8 +843,7 @@ class Manager:
         if phase == "before_stop":
             shot = os.path.join(directory, base + ".ppm")
             try:
-                q = self.effects.open_qmp(slot, timeout=EVIDENCE_QMP_TIMEOUT,
-                                          capture_dir=directory)
+                q = self.effects.open_qmp(slot, timeout=EVIDENCE_QMP_TIMEOUT)
                 try:
                     q.screendump(shot)
                     data["screenshot"] = shot
@@ -836,23 +873,32 @@ class Manager:
             return ""
 
     def _fail_reservation(self, slot, token, lease, reason):
-        """A failed boot is quarantined even when cleanup itself succeeds."""
+        """A failed boot is quarantined even when cleanup itself succeeds.
+
+        If the lease was already revoked, whoever revoked it owns the recovery
+        and may since have reassigned the slot, so leave the slot alone; the
+        quarantine is also bound to this claim's generation for the same reason.
+        """
+        superseded = False
         try:
             with self._slot_lock(slot.name):
                 current = lease
                 with self._txn() as conn:
                     row = self._lease_row(conn, token)
-                    if row is not None:
-                        current = _row_lease(row)
-                        self._revoke(conn, row, "launch_failed")
-                        self._touch(conn)
+                    if row is None:
+                        superseded = True
+                        return
+                    current = _row_lease(row)
+                    self._revoke(conn, row, "launch_failed")
+                    self._touch(conn)
                 with contextlib.suppress(ReservationError):
                     self._recover_slot(slot.name, "launch_failed", current,
                                        lock_held=True, force_reset=True)
         except Exception:
             pass
         finally:
-            self._quarantine(slot.name, reason)
+            if not superseded:
+                self._quarantine(slot.name, reason, lease.generation)
 
     # ---- guest operations ------------------------------------------------
 
@@ -898,7 +944,7 @@ class Manager:
         if text is not None:
             qmp.plan_text(text)  # refuse the whole string before touching anything
         if not text and not keys and not click:
-            raise ReservationError("input needs text, keys or --click")
+            raise UsageError("input needs text, keys or --click")
         with self._leased(token, owner) as lease:
             slot = self._slot(lease.slot)
             q = self.effects.open_qmp(slot)
@@ -916,13 +962,19 @@ class Manager:
                     "typed": len(text or ""), "keys": len(keys), "clicked": click}
 
     def run(self, token, owner, argv, timeout=300):
-        """Run a bounded host command under the lease, renewing every minute."""
+        """Run a bounded host command under the lease.
+
+        The lease is re-read every poll interval so a revoked or expired lease
+        stops the child promptly, and renewed (with the lease's own ttl) a few
+        times per ttl so a short lease neither lapses mid-command nor grows.
+        """
         if not argv:
-            raise ReservationError("run needs a command")
+            raise UsageError("run needs a command")
         if not 1 <= timeout <= 3600:
-            raise ReservationError("command seconds must be within 1..3600")
+            raise UsageError("command seconds must be within 1..3600")
         with self._leased(token, owner) as lease:
             slot_name = lease.slot
+            ttl = lease.ttl
         env = os.environ.copy()
         env.update({
             "OS9_HARNESS_HOME": self.home.path,
@@ -931,27 +983,37 @@ class Manager:
             "OS9_HARNESS_TOKEN": token,
             "OS9_HARNESS_OWNER": owner,
         })
+        renew_every = min(self.renew_interval, max(0.01, ttl / 3.0))
+        poll_every = min(self.poll_interval, renew_every)
         proc = subprocess.Popen(argv, env=env)
         try:
             deadline = self.clock.monotonic() + timeout
-            next_renew = self.clock.monotonic() + self.renew_interval
+            next_renew = self.clock.monotonic() + renew_every
             while True:
                 remaining = deadline - self.clock.monotonic()
                 if remaining <= 0:
-                    raise ReservationError("command exceeded its %d second bound" % timeout)
-                wait = min(remaining, max(0.01, next_renew - self.clock.monotonic()))
+                    raise CommandTimeout("command exceeded its %d second bound" % timeout)
+                wait = min(remaining, poll_every,
+                           max(0.01, next_renew - self.clock.monotonic()))
                 try:
                     return proc.wait(timeout=wait)
                 except subprocess.TimeoutExpired:
                     pass
                 if self.clock.monotonic() >= deadline:
-                    raise ReservationError("command exceeded its %d second bound" % timeout)
+                    raise CommandTimeout("command exceeded its %d second bound" % timeout)
                 if self.clock.monotonic() >= next_renew:
-                    self.renew(token, owner)
-                    next_renew = self.clock.monotonic() + self.renew_interval
+                    ttl = self.renew(token, owner, ttl).ttl
+                    next_renew = self.clock.monotonic() + renew_every
+                else:
+                    self._require_active(token, owner)
         except BaseException:
             self._terminate_child(proc)
             raise
+
+    def _require_active(self, token, owner):
+        """Raise LeaseError unless the lease is still active; changes nothing."""
+        with self._read() as conn:
+            self._validate_locked(conn, token, owner)
 
     def _terminate_child(self, proc):
         if proc.poll() is not None:
@@ -970,9 +1032,15 @@ class Manager:
         """Run bounded commands in sequence under one lease and renew between them."""
         results = []
         for name, argv, timeout in steps:
-            code = self.run(token, owner, argv, timeout)
-            results.append({"name": name, "command": list(argv), "returncode": code})
-            if code != 0 and stop_on_failure:
+            step = {"name": name, "command": list(argv)}
+            try:
+                step["returncode"] = self.run(token, owner, argv, timeout)
+            except CommandTimeout:
+                # A step that outlives its bound fails the step, not the suite.
+                step["returncode"] = TIMEOUT_RETURNCODE
+                step["timeout"] = True
+            results.append(step)
+            if step["returncode"] != 0 and stop_on_failure:
                 break
         return {"steps": results,
                 "passed": all(step["returncode"] == 0 for step in results)

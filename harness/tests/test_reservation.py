@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
@@ -476,6 +477,157 @@ class ReservationTest(Base):
         self.assertFalse(result["passed"])
         self.assertEqual([step["name"] for step in result["steps"]], ["first", "second"])
 
+    def test_failed_boot_does_not_quarantine_a_slot_reassigned_meanwhile(self):
+        """A revoked, recovered and re-reserved slot is not the failed boot's."""
+        manager = self.manager
+        original = self.effects.wait_ready
+
+        def supersede(slot, previous_boot=None, timeout=reservation.READY_TIMEOUT):
+            with manager._txn() as conn:
+                row = conn.execute("SELECT * FROM slots WHERE slot='slot1'").fetchone()
+                manager._revoke(conn, row, "restart")
+                conn.execute("""UPDATE slots SET state='active', token='c' || ?, owner='carol',
+                                generation=generation + 1, epoch=?, ttl=600,
+                                expires_mono=?, expires_wall=? WHERE slot='slot1'""",
+                             ("0" * 31, manager._meta(conn)["epoch"],
+                              self.clock.mono + 600, self.clock.wall_time + 600))
+            return original(slot, previous_boot, timeout)
+
+        self.effects.wait_ready = supersede
+        with self.assertRaises(reservation.LeaseError):
+            manager.reserve("alice")
+        slot = manager.status()["slots"][0]
+        self.assertEqual(slot["state"], "active")
+        self.assertEqual(slot["owner"], "carol")
+        self.assertIsNone(slot["quarantine"])
+
+    def test_run_renews_with_the_leases_own_ttl(self):
+        clock = reservation.Clock()
+        home = provision.Home(os.path.join(self.tmp.name, "ttl-state"))
+        manager = reservation.Manager(home=home, clock=clock,
+                                      effects=FakeEffects(home, self.share, clock),
+                                      renew_interval=60)
+        lease = manager.reserve("alice", ttl=3)
+        self.assertEqual(lease.ttl, 3)
+        renewals = []
+        original = manager.renew
+
+        def renew(token, owner, ttl=reservation.LEASE_SECONDS):
+            renewals.append(ttl)
+            return original(token, owner, ttl)
+
+        manager.renew = renew
+        code = manager.run(lease.token, "alice",
+                           [sys.executable, "-c", "import time; time.sleep(2.5)"],
+                           timeout=10)
+        self.assertEqual(code, 0)
+        self.assertGreaterEqual(len(renewals), 1)
+        self.assertEqual(set(renewals), {3})
+        remaining = manager.status()["slots"][0]["expires_in"]
+        self.assertLessEqual(remaining, 3)
+
+    def test_run_stops_the_child_promptly_when_the_lease_is_revoked(self):
+        clock = reservation.Clock()
+        home = provision.Home(os.path.join(self.tmp.name, "revoke-state"))
+        effects = FakeEffects(home, self.share, clock)
+        manager = reservation.Manager(home=home, clock=clock, effects=effects,
+                                      renew_interval=300, poll_interval=0.05)
+        lease = manager.reserve("alice")
+        children = []
+        real_popen = reservation.subprocess.Popen
+
+        def popen(*args, **kw):
+            children.append(real_popen(*args, **kw))
+            return children[-1]
+
+        timer = threading.Timer(0.3, manager.release, (lease.token, "alice"))
+        started = time.monotonic()
+        timer.start()
+        self.addCleanup(timer.cancel)
+        with mock.patch.object(reservation.subprocess, "Popen", popen):
+            with self.assertRaises(reservation.LeaseError):
+                manager.run(lease.token, "alice",
+                            [sys.executable, "-c", "import time; time.sleep(60)"],
+                            timeout=120)
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertIsNotNone(children[0].poll())
+
+    def test_lease_from_an_older_manager_epoch_is_refused(self):
+        a = self.manager.reserve("alice")
+        with self.manager._txn() as conn:
+            self.manager._set_meta(conn, "epoch", "rotated")
+        with self.assertRaisesRegex(reservation.LeaseError, "restart"):
+            self.manager.renew(a.token, "alice")
+        with self.assertRaisesRegex(reservation.LeaseError, "restart"):
+            self.manager.screenshot(a.token, "alice")
+
+    def test_explicit_recover_clears_a_reused_pid_but_never_signals_it(self):
+        a = self.manager.reserve("alice")
+        self.effects.command_overrides[a.pid] = "/usr/bin/sleep 999"
+        summary = self.manager.release(a.token, "alice")
+        self.assertTrue(summary["quarantined"])
+        self.effects.qmp_live = True
+        self.assertTrue(self.manager.recover("slot1")["quarantined"])
+        self.assertEqual(self.manager.status()["slots"][0]["state"], "quarantined")
+        self.effects.qmp_live = False
+        recovered = self.manager.recover("slot1")
+        self.assertFalse(recovered["quarantined"])
+        self.assertEqual(recovered["stale_pid"], a.pid)
+        self.assertEqual(self.manager.status()["slots"][0]["state"], "free")
+        self.assertNotIn(a.pid, self.effects.terminated)
+        self.assertTrue(self.effects.process(a.pid).alive)
+
+    def test_a_slow_step_fails_the_step_and_the_suite_keeps_going(self):
+        clock = reservation.Clock()
+        home = provision.Home(os.path.join(self.tmp.name, "suite-state"))
+        manager = reservation.Manager(home=home, clock=clock,
+                                      effects=FakeEffects(home, self.share, clock),
+                                      poll_interval=0.05)
+        lease = manager.reserve("alice")
+        result = manager.suite(lease.token, "alice", [
+            ("first", [sys.executable, "-c", "pass"], 5),
+            ("slow", [sys.executable, "-c", "import time; time.sleep(30)"], 1),
+            ("third", [sys.executable, "-c", "pass"], 5),
+        ], stop_on_failure=False)
+        self.assertFalse(result["passed"])
+        self.assertEqual([step["returncode"] for step in result["steps"]],
+                         [0, reservation.TIMEOUT_RETURNCODE, 0])
+        self.assertTrue(result["steps"][1]["timeout"])
+
+    def test_usage_errors_are_distinct_from_guest_failures(self):
+        with self.assertRaises(reservation.UsageError):
+            self.manager.reserve("  ")
+        with self.assertRaises(reservation.UsageError):
+            self.manager.reserve("alice", ttl=0)
+        lease = self.manager.reserve("alice")
+        with self.assertRaises(reservation.UsageError):
+            self.manager.input(lease.token, "alice")
+        with self.assertRaises(reservation.UsageError):
+            self.manager.run(lease.token, "alice", [])
+
+    def test_qemu_capture_directory_is_independent_of_the_harness_home(self):
+        home = provision.Home(os.path.join(self.tmp.name, "with space", "state"))
+        effects = reservation.Effects(home)
+        slot = provision.slot(home, "slot1")
+        with mock.patch.object(reservation.qmp, "QMP") as fake:
+            effects.open_qmp(slot)
+        self.assertIsNone(fake.call_args.kwargs["capture"])
+
+    def test_macos_host_identity_prefers_the_boot_session_uuid(self):
+        effects = reservation.Effects(self.home)
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv[-1])
+            out = {"kern.bootsessionuuid": "UUID-1\n",
+                   "kern.boottime": "{ sec = 1 }\n"}[argv[-1]]
+            return mock.Mock(stdout=out)
+
+        with mock.patch.object(reservation.sys, "platform", "darwin"), \
+                mock.patch.object(reservation.subprocess, "run", run):
+            self.assertEqual(effects.boot_id(), "UUID-1")
+        self.assertEqual(calls, ["kern.bootsessionuuid"])
+
 
 class CliTest(unittest.TestCase):
     class Stub:
@@ -534,6 +686,32 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("suite passed", out)
         self.assertEqual(stub.calls[0][0][1], ["echo", "hi"])
+
+    def test_usage_errors_exit_two(self):
+        class Bad(self.Stub):
+            def reserve(self, owner, ttl):
+                raise reservation.UsageError("lease seconds must be within 1..600")
+
+        code, _out, err = self.invoke(Bad(), ["reserve", "--owner", "alice"])
+        self.assertEqual(code, 2)
+        self.assertIn("lease seconds", err)
+
+    def test_unbalanced_step_quotes_are_a_usage_error(self):
+        code, _out, err = self.invoke(
+            self.Stub(), ["suite", "t", "--owner", "alice", "--step", "one::echo 'hi"])
+        self.assertEqual(code, 2)
+        self.assertIn("--step command", err)
+
+    def test_a_timed_out_step_is_reported_as_a_timeout(self):
+        class Slow(self.Stub):
+            def suite(self, token, owner, steps, stop_on_failure):
+                return {"steps": [{"name": "slow", "command": ["x"], "returncode": 124,
+                                   "timeout": True}], "passed": False}
+
+        code, out, _err = self.invoke(
+            Slow(), ["suite", "t", "--owner", "alice", "--step", "slow::x"])
+        self.assertEqual(code, 1)
+        self.assertIn("timeout", out)
 
 
 if __name__ == "__main__":

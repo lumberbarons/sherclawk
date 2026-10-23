@@ -1,10 +1,10 @@
 # Exclusive guest reservations
 
-`harness/manage.py` is the host manager for the two OS 9 QEMU slots. It gives
+`harness/manage.py` is the host manager for the OS 9 QEMU slots. It gives
 each caller an exclusive lease before a guest is booted, keeps the QMP socket
-private, and refuses every later operation when the token, owner, generation,
-manager epoch or deadline no longer matches. Two agents in different worktrees
-can reserve different slots; neither can type into, capture, renew or release
+private, and refuses every later operation when the token, owner, manager
+epoch or deadline no longer matches. Agents in different worktrees can reserve
+different slots; neither can type into, capture, renew or release
 the other's guest.
 
 One manager installs per host, outside every worktree. Source lives in this
@@ -15,7 +15,7 @@ immutable images and [`contract.md`](contract.md) for the native controller.
 
 ## Prerequisites
 
-- Both slots provisioned and configured with the native controller, with
+- Every slot provisioned and configured with the native controller, with
   `base/os9-mpw.qcow2` and `base/slotN.qcow2` present and read-only.
 - QEMU on `PATH` and `qemu-img` available.
 - The `Retro68` export **mounted on the host and writable**, because the
@@ -54,17 +54,23 @@ it out of shared logs if other users can read them. `status` never prints
 tokens.
 
 Exit codes are `0` success, `2` for a stale/expired lease, no capacity or bad
-usage, and `3` for a guest, host or recovery failure.
+usage (including a malformed `--step`), and `3` for a guest, host or recovery
+failure. `suite` exits `1` when a step fails. `run` returns the child's own
+status, so `2` and `3` are ambiguous there; a manager error is the one that
+prints a `manage:` line on stderr.
 
 ### `run` and `suite`
 
-`run` executes one host command under the lease and renews every 60 seconds
-while it runs. It passes the lease to the child through
+`run` executes one host command under the lease. It re-reads the lease every
+second and renews it with the lease's own TTL at least every 60 seconds (more
+often for a short TTL, so a short lease neither lapses mid-command nor grows
+to the default). It passes the lease to the child through
 `OS9_HARNESS_TOKEN`, `OS9_HARNESS_OWNER`, `OS9_HARNESS_SLOT`,
 `OS9_HARNESS_HOME` and `OS9_HARNESS_SHARE`; the child drives the guest through
 `manage.py`, never through the private QMP socket. Commands are bounded by
 `--timeout` (1..3600 seconds), and a lost lease or a timeout terminates the
-child rather than leaving it running against a recovery:
+child rather than leaving it running against a recovery; a revoked or expired
+lease is noticed within about a second:
 
 ```bash
 python3 harness/manage.py run "$token" --owner agent-a --timeout 120 -- \
@@ -72,7 +78,9 @@ python3 harness/manage.py run "$token" --owner agent-a --timeout 120 -- \
 ```
 
 `suite` runs named commands in sequence under one lease, renewing between
-steps and stopping at the first failure unless `--keep-going` is given:
+steps and stopping at the first failure unless `--keep-going` is given. A step
+that outlives `--timeout` fails that step (return code 124, reported as
+`timeout`); a lost lease still aborts the suite:
 
 ```bash
 python3 harness/manage.py suite "$token" --owner agent-a \
@@ -86,11 +94,12 @@ and evidence on top.
 
 ## Lease rules
 
-- Two slots, `slot1` and `slot2`. Their identities (MAC, QMP socket, overlay,
+- The slots are `slot1` and `slot2`. Their identities (MAC, QMP socket, overlay,
   pid file, log) are fixed by `provision.py` and are never shared.
 - Every reservation gets a fresh random 128-bit token and an incremented
-  generation. Ownership checks require the token, the owner string, the
-  generation and the manager epoch.
+  generation. Ownership checks require the token, the owner string and the
+  current manager epoch; the generation is bound to the token and recorded for
+  audit and evidence.
 - Default lease is **600 seconds**. `renew` extends it from the current time
   by at most 600 seconds. Idle reservations do not renew themselves; `run` and
   `suite` renew every minute while they are active.
@@ -117,7 +126,10 @@ Release and expiry follow the same path, in this order:
 3. Read the pid from the lease, the state row and the slot pid file. If they
    disagree, or the process command line is not this slot's overlay under
    `qemu-system-ppc`, the slot is quarantined and the process is **not**
-   signalled. The manager never kills a process it cannot identify.
+   signalled. The manager never kills a process it cannot identify. If the
+   recorded pid has since been reused by an unrelated process, an explicit
+   `recover --slot` discards the stale pid (still without signalling it) once
+   nothing answers on the slot's QMP socket and then resets the slot.
 4. Send `SIGTERM`, wait for the exact pid to disappear, and quarantine if it
    does not. There is no `SIGKILL` fallback for a guest.
 5. Delete the writable overlay and create a fresh one on the recorded base.
@@ -134,7 +146,10 @@ serialised per slot with an OS lock; reserve itself is serialised across
 processes with the global manager lock and SQLite transactions.
 
 A quarantined slot is skipped by `reserve` and keeps its reason in `status`.
-Clear it only after fixing the cause:
+A boot that fails (no fresh readiness, an early exit, an unwritable staging
+file) quarantines its slot even when cleanup succeeds, unless the lease was
+already revoked and recovered by someone else, in which case the slot belongs
+to that recovery. Clear a quarantine only after fixing the cause:
 
 ```bash
 python3 harness/manage.py status --json
@@ -146,7 +161,8 @@ epoch, invalidates every lease and recovers every non-quarantined slot.
 
 ## Manager restart and host restart
 
-The manager records the host boot identity (`kern.boottime` on macOS,
+The manager records the host boot identity (`kern.bootsessionuuid` on macOS,
+which a clock step cannot change, falling back to `kern.boottime`;
 `/proc/sys/kernel/random/boot_id` on Linux) and the last monotonic time. A new
 identity, or a monotonic clock that moved backwards, means the host or manager
 restarted: every previous lease is invalidated, tracked instances are stopped
@@ -172,7 +188,7 @@ Host suites (no QEMU, VM or network) run with the rest of the harness tests:
 python3 -m unittest discover -s harness/tests
 ```
 
-The opt-in guest acceptance boots both slots, releases and reassigns one,
+The opt-in guest acceptance boots every slot, releases and reassigns one,
 proves stale-token refusal, verified termination and readiness gating, and
 deliberately fails an overlay reset to demonstrate quarantine and recovery:
 
@@ -182,7 +198,7 @@ OS9_HARNESS_SHARE="$HOME/Retro68Share" \
 ```
 
 Run it only when no agent holds a slot: the initial clean step invalidates
-leases and recovers both slots.
+leases and recovers every slot.
 
 Evidence from a passing run is recorded in
 [`verification.md`](verification.md). It never restarts AFP and never

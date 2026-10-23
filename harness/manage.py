@@ -12,8 +12,11 @@ the guest. Readiness is read from the mounted ``Retro68`` export, so set
     manage.py screenshot "$token" --owner agent-a --out shot.png
     manage.py release "$token" --owner agent-a
 
-Exit codes: 0 success, 2 stale lease/expired/capacity/usage, 3 guest, host or
-recovery failure. Stdlib only; no imports from tools/ or src/ (ADR-0009).
+Exit codes: 0 success, 1 a failed ``suite`` step, 2 stale lease/expired/
+capacity/usage, 3 guest, host or recovery failure. ``run`` returns the child's
+own status, so 2 and 3 are ambiguous there; a manager error is the one that
+prints a ``manage:`` line on stderr. Stdlib only; no imports from tools/ or
+src/ (ADR-0009).
 """
 import argparse
 import json
@@ -97,14 +100,17 @@ def parse_steps(raw_steps):
     steps = []
     for raw in raw_steps:
         if "::" not in raw:
-            raise reservation.ReservationError("--step must be NAME::COMMAND")
+            raise reservation.UsageError("--step must be NAME::COMMAND")
         name, command = raw.split("::", 1)
-        argv = shlex.split(command)
+        try:
+            argv = shlex.split(command)
+        except ValueError as exc:
+            raise reservation.UsageError("--step command: %s" % exc)
         if not name.strip() or not argv:
-            raise reservation.ReservationError("--step needs a name and a command")
+            raise reservation.UsageError("--step needs a name and a command")
         steps.append((name.strip(), argv))
     if not steps:
-        raise reservation.ReservationError("suite needs at least one --step")
+        raise reservation.UsageError("suite needs at least one --step")
     return steps
 
 
@@ -140,8 +146,9 @@ def emit(args, result):
             result["typed"], result["keys"], result["clicked"]))
     elif args.command == "suite":
         for step in result["steps"]:
-            print("%-20s %s" % (step["name"], "ok" if step["returncode"] == 0
-                                else "exit %d" % step["returncode"]))
+            outcome = ("ok" if step["returncode"] == 0 else
+                       "timeout" if step.get("timeout") else "exit %d" % step["returncode"])
+            print("%-20s %s" % (step["name"], outcome))
         print("suite %s" % ("passed" if result["passed"] else "failed"))
 
 
@@ -188,7 +195,8 @@ def main(argv=None):
     except reservation.LeaseError as exc:
         print("manage: %s" % exc, file=sys.stderr)
         return 2
-    except (reservation.NoCapacity, reservation.ConfigError) as exc:
+    except (reservation.NoCapacity, reservation.ConfigError, reservation.UsageError,
+            qmp.KeymapError) as exc:
         print("manage: %s" % exc, file=sys.stderr)
         return 2
     except reservation.RecoveryError as exc:

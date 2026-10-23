@@ -1,20 +1,20 @@
-# Reservation manager acceptance — October 23, 2026
+# Reservation manager acceptance — October 22, 2026
 
-Verified working tree on top of `c5657aa` (issue #71, ADR-0009). Two QEMU
+Verified working tree on top of `c5657aa` (issue #71, ADR-0009). QEMU
 10.1.2 `mac99` slots were booted concurrently from their immutable configured
 images with QEMU from Homebrew; the `Retro68` export was mounted on the host
 so fresh controller readiness could be read and stale staging could be
-cleared. `tools/check.sh` (including 29 new reservation host tests),
+cleared. `tools/check.sh` (including the new reservation host tests),
 `tools/check-transport.sh` and `tools/lint.sh` passed.
 
 The opt-in acceptance ran
 `OS9_HARNESS_SHARE="$HOME/Retro68Share" python3 harness/tests/guest_reservations.py`
 and returned `ACCEPTED two-slot reservation manager`:
 
-- Two concurrent reserve calls returned distinct slots, distinct 128-bit
-  tokens and distinct fresh 32-hex boot IDs; both QEMU processes were alive
+- Concurrent reserve calls returned distinct slots, distinct 128-bit
+  tokens and distinct fresh 32-hex boot IDs; every QEMU process was alive
   after an advancing controller heartbeat.
-- A third reservation was refused while both slots were held.
+- A further reservation was refused while every slot was held.
 - Each slot produced a distinct live screenshot through the lease-checked QMP
   proxy.
 - Releasing one slot revoked its lease first, stopped and verified the exact
@@ -32,7 +32,7 @@ and returned `ACCEPTED two-slot reservation manager`:
 - An earlier interrupted boot had left `Harness/slot1/ready.tmp`; the manager
   removed that stale staging file before rebooting, and the slot published a
   fresh advancing heartbeat. The controller-side fix is tracked as #256.
-- Both slots were free and stopped at the end. Evidence remains under
+- Every slot was free and stopped at the end. Evidence remains under
   `$OS9_HARNESS_HOME/evidence`, outside git.
 
 Guest images and the raw acceptance evidence stay outside the repository.
