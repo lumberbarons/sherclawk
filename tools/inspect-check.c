@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "diagnostic-tools.h"
+#include "harness/native/diagnostic.h"
 static FILE *logfile;
 static AgentCall call;
 static char result[AGENT_RESULT_CAP];
@@ -39,6 +40,7 @@ static void execute(void)
 }
 static void check(int ok, const char *name)
 {
+    harness_check(ok, name);
     fprintf(logfile, "%s %s\n", ok ? "PASS" : "FAIL", name);
     if (!ok) failures++;
     fflush(logfile);
@@ -69,7 +71,7 @@ static OSErr spec_for(const char *relative, int folder, FSSpec *spec)
     Str255 name;
     size_t n;
     (void)folder;
-    if (snprintf(full, sizeof(full), "%s%s", SHERCLAWK_WORKSPACE, relative) >= (int)sizeof(full)) return paramErr;
+    if (snprintf(full, sizeof(full), "%s%s", tools_workspace(), relative) >= (int)sizeof(full)) return paramErr;
     n = strlen(full);
     if (n > 255) return paramErr;
     name[0] = (unsigned char)n; memcpy(name + 1, full, n);
@@ -210,13 +212,17 @@ static int direct_volume(int vref, XVolumeParam *pb, Str255 name)
 /* ------------------------------------------------------------------ */
 int main(void)
 {
+    char logpath[256];
     char folder[80], sample_path[160], alias_path[160];
     char alias2_path[180], resource_path[180], nofork_path[180], cursor[64], field_value[800];
     FSSpec sample_spec, folder_spec;
     short ref, previous;
     int i, pages, total, self_seen, front_seen, font_id = -1, chicago_seen = 0;
     InitGraf(&qd.thePort); InitFonts(); InitWindows(); InitMenus(); TEInit(); InitDialogs(NULL); InitCursor();
-    logfile = fopen(SHERCLAWK_WORKSPACE "SherclawkInspectCheck.log", "w");
+    if (harness_begin("SherclawkInspectCheck") < 0) return 1;
+    if (harness_workspace()) tools_set_workspace(harness_workspace());
+    snprintf(logpath,sizeof(logpath),"%sSherclawkInspectCheck.log",tools_workspace());
+    logfile = fopen(logpath, "w");
     if (!logfile) return 1;
     snprintf(folder, sizeof(folder), "Sherclawk Inspect %08lx", (unsigned long)TickCount());
     check(!folder_create(folder), "fixture folder");
@@ -496,5 +502,5 @@ int main(void)
 
     fprintf(logfile, "RESULT failures=%d\n", failures);
     fclose(logfile);
-    return failures ? 1 : 0;
+    return harness_finish(failures);
 }

@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "diagnostic-tools.h"
+#include "harness/native/diagnostic.h"
 static FILE *logfile;
 static int records, failures;
 static AgentCall call;
@@ -28,6 +29,7 @@ static int journal(void *ctx, const char *event, const char *json)
 }
 static void check(int condition, const char *name)
 {
+    harness_check(condition, name);
     fprintf(logfile,"%s %s\n",condition ? "PASS" : "FAIL",name);
     if (!condition) failures++;
     fflush(logfile);
@@ -47,15 +49,18 @@ int main(void)
     FSSpec spec;
     CInfoPBRec pb;
     Str255 native;
-    char full[256], raw[4097], revision[80];
+    char full[256], raw[4097], revision[80], logpath[256];
     JsonToken tokens[128];
     short ref;
     long dir, size;
     OSErr err;
     InitGraf(&qd.thePort);InitFonts();InitWindows();InitMenus();TEInit();InitDialogs(NULL);InitCursor();
-    logfile=fopen(SHERCLAWK_WORKSPACE "SherclawkWriteCheck.log","w");if(!logfile)return 1;
+    if (harness_begin("SherclawkWriteCheck") < 0) return 1;
+    if (harness_workspace()) tools_set_workspace(harness_workspace());
+    snprintf(logpath,sizeof(logpath),"%sSherclawkWriteCheck.log",tools_workspace());
+    logfile=fopen(logpath,"w");if(!logfile)return 1;
     snprintf(folder,sizeof(folder),"Sherclawk Write %08lx",(unsigned long)TickCount());
-    snprintf(full,sizeof(full),"%s%s",SHERCLAWK_WORKSPACE,folder);
+    snprintf(full,sizeof(full),"%s%s",tools_workspace(),folder);
     native[0]=(unsigned char)strlen(full);memcpy(native+1,full,native[0]);
     err=FSMakeFSSpec(0,0,native,&spec);
     if(err!=fnfErr || FSpDirCreate(&spec,smSystemScript,&dir)) { fclose(logfile);return 1; }
@@ -64,7 +69,7 @@ int main(void)
     check(strstr(result,"CREATED")!=NULL && records==3,"created with intent/staged/committed records");
     json_parse(result,strlen(result),tokens,128);
     json_string(result,tokens,json_member(result,tokens,0,"revision"),revision,sizeof(revision));
-    snprintf(full,sizeof(full),"%s%s",SHERCLAWK_WORKSPACE,path);
+    snprintf(full,sizeof(full),"%s%s",tools_workspace(),path);
     native[0]=(unsigned char)strlen(full);memcpy(native+1,full,native[0]);
     err=FSMakeFSSpec(0,0,native,&spec);
     memset(&pb,0,sizeof(pb));pb.hFileInfo.ioNamePtr=spec.name;pb.hFileInfo.ioVRefNum=spec.vRefNum;pb.hFileInfo.ioDirID=spec.parID;
@@ -85,5 +90,5 @@ int main(void)
     strcpy(call.name,"write_text");strcpy(call.arguments,"{\"path\":\":escape.c\",\"text\":\"x\"}");tools_execute_recorded(&call,result,sizeof(result),journal,NULL);
     check(strstr(result,"PATH")!=NULL,"path escape refused");
     fprintf(logfile,"RESULT failures=%d fixture=%s\n",failures,folder);fflush(logfile);FlushVol(NULL,0);fclose(logfile);
-    return failures ? 1 : 0;
+    return harness_finish(failures);
 }

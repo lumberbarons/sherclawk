@@ -257,6 +257,12 @@ run_test test-template
 
 # The OS 9 guest harness (ADR-0009) keeps its own stdlib-only suites; they
 # need no QEMU, VM or network.
+build_test test-harness-contract "${WARN[@]}" -I"$HERE" \
+    "$HERE/harness/tests/test_contract.c" "$HERE/harness/native/contract.c"
+run_test test-harness-contract
+build_test test-harness-run "${WARN[@]}" -I"$HERE" \
+    "$HERE/harness/tests/test_run.c" "$HERE/harness/native/run.c" "$HERE/harness/native/contract.c"
+run_test test-harness-run
 python3 -I -m unittest discover -s "$HERE/harness/tests"
 
 echo

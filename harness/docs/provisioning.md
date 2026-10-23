@@ -17,6 +17,7 @@ State is kept outside every worktree, in `$OS9_HARNESS_HOME` (default
 ```
 base/os9-original.qcow2   verbatim, read-only copy of the original QEMU disk
 base/os9-mpw.qcow2        frozen base: original plus MPW (read-only)
+base/slotN.qcow2          optional immutable controller-configured slot base
 base/golden-work.qcow2    writable working copy, present only while preparing a base
 slots/<slot>.qcow2        overlay on the base, one per slot
 run/<slot>.{qmp,pid,log}  QMP socket, pid file and QEMU log
@@ -160,7 +161,21 @@ reaches the guest:
 
 [Driving a guest](driving.md) covers `guest.py`, which wraps all of this.
 
+## Controller startup
+
+Install and seal each private slot identity using the
+[controller provisioning procedure](contract.md#build-and-install). Runtime
+overlays then use the immutable configured slot base; `reset` preserves it.
+Require fresh boot readiness after every recovery.
+
 ## Changing the base later
+
+Before replacing the shared base, archive/remove configured slot bases after
+all runtime overlays have been reset; they retain a backing-file dependency on
+that shared base. A successful `freeze` retires their manifest records so
+`init` can create overlays from the replacement shared base. Without that
+explicit replacement, a missing recorded slot image remains an error. Rebuild
+the configured slots using the controller procedure afterwards.
 
 Examples: installing the native controller in Startup Items
 (`Macintosh HD:System Folder:Startup Items`), or updating MPW. The base is

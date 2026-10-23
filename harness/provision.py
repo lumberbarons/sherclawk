@@ -129,8 +129,41 @@ def freeze(path):
     os.chmod(path, os.stat(path).st_mode & ~0o222)
 
 
+def slot_base(s):
+    configured = os.path.join(s.home.base_dir, s.name + ".qcow2")
+    return configured if os.path.exists(configured) or s.name in read_manifest(s.home).get("controller_slots", {}) else s.home.base_path
+
+
+def verify_slot_base(s):
+    base = slot_base(s)
+    if base == s.home.base_path:
+        return
+    want = read_manifest(s.home).get("controller_slots", {}).get(s.name)
+    if not want or not os.path.exists(base) or not is_read_only(base) or sha256(base) != want:
+        raise ProvisionError("configured slot image changed or is not recorded: %s" % base)
+
+
+def freeze_slot(s):
+    """Seal the stopped, controller-configured overlay as an immutable slot base.
+
+    This preserves its shared backing file and installed private slot identity.
+    `init` then makes a new runtime overlay; reset never removes the slot base.
+    """
+    dest = os.path.join(s.home.base_dir, s.name + ".qcow2")
+    if pid_of(s):
+        raise ProvisionError("shut the guest down cleanly before freezing its slot")
+    if os.path.exists(dest) or not os.path.exists(s.overlay):
+        raise ProvisionError("slot base already exists or no configured overlay")
+    os.replace(s.overlay, dest)
+    freeze(dest)
+    slots = read_manifest(s.home).get("controller_slots", {})
+    slots[s.name] = sha256(dest)
+    write_manifest(s.home, {"controller_slots": slots})
+
+
 def create_overlay(s, qemu_img=QEMU_IMG):
-    base = s.home.base_path
+    base = slot_base(s)
+    verify_slot_base(s)
     if not os.path.exists(base):
         raise ProvisionError("no base image at %s; run `freeze` first" % base)
     if not is_read_only(base):
@@ -179,14 +212,19 @@ def promote_work(home, qemu_version=qemu_version):
         s = slot(home, name)
         if pid_of(s):
             raise ProvisionError("stop every guest before freezing")
+        if os.path.exists(os.path.join(home.base_dir, name + ".qcow2")):
+            raise ProvisionError("configured slot bases still name the shared base")
         if os.path.exists(s.overlay):
             raise ProvisionError("%s still overlays the base; `reset %s` first" % (s.overlay, name))
     os.replace(home.work_path, home.base_path)
     freeze(home.base_path)
+    # Explicit base replacement retires the archived slots; a missing image
+    # remains an error until this transition succeeds.
     write_manifest(home, {
         "qemu": qemu_version(),
         "base_sha256": sha256(home.base_path),
         "original_sha256": sha256(home.original_path),
+        "controller_slots": {},
     })
 
 
@@ -238,7 +276,8 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("info", help="print emulator version, base checksums and slot identities")
     sub.add_parser("freeze", help="make the working image the immutable base and record it")
-    for name, text in (("init", "create the slot overlay"),
+    for name, text in (("freeze-slot", "seal a stopped controller-configured slot image"),
+                       ("init", "create the slot overlay"),
                        ("stop", "stop the slot's QEMU"),
                        ("reset", "stop the slot and delete its overlay")):
         sub.add_parser(name, help=text).add_argument("slot")
@@ -262,6 +301,8 @@ def main(argv=None):
             print()
         elif args.cmd == "freeze":
             promote_work(home)
+        elif args.cmd == "freeze-slot":
+            freeze_slot(slot(home, args.slot))
         elif args.cmd == "init":
             create_overlay(slot(home, args.slot))
         elif args.cmd == "stop":
@@ -273,7 +314,9 @@ def main(argv=None):
                 os.remove(s.overlay)
         elif args.cmd == "launch":
             verify_base(home)
-            print(launch(slot(home, args.slot), args.display, args.cdrom))
+            s = slot(home, args.slot)
+            verify_slot_base(s)
+            print(launch(s, args.display, args.cdrom))
         elif args.cmd == "launch-work":
             print(launch(slot(home, args.slot), args.display, args.cdrom, drive=home.work_path))
     except ProvisionError as e:
