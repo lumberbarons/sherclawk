@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Prepare or validate one HARNESS/1 mailbox exchange on a mounted share.
 
-This is the contract pilot CLI, not the reservation manager (#71). Build and
-publish diagnostics before touching a guest; never retry an uncertain launch.
+This is the contract pilot CLI; exclusive guest ownership belongs to
+`manage.py`/`reservation.py` (#71). Build and publish diagnostics before
+touching a guest; never retry an uncertain launch.
 """
 import argparse
 import dataclasses

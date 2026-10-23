@@ -7,6 +7,10 @@ repository and meant to be extracted later, so it imports nothing from
 
 - `provision.py` — immutable base image, per-slot copy-on-write overlays,
   slot identities and the headless QEMU launcher.
+- `manage.py` and `reservation.py` — host-wide exclusive leases over the two
+  slots: reserve, renew, run, suite, screenshot, input, release, status and
+  recovered/quarantined state, with SQLite transactions and an OS lock.
+  See [`docs/reservations.md`](docs/reservations.md).
 - `guest.py` — the public command line for driving a guest over QMP:
   screenshots, keys, text and pointer control, for a slot, any QMP socket or
   the UTM VM. `qmp.py` (bounded protocol, input and capture), `screen.py`

@@ -110,8 +110,10 @@ cp config.example.h config.local.h  # optional local config; gitignored
   queue's `worker-lock` and `STOP` names are kept for existing queues.
 - `harness/` is the OS 9 guest harness (ADR-0009): stdlib-only Python with its own
   tests under `harness/tests/` (run by `tools/check.sh`, linted by `tools/lint.sh`) and
-  provisioning docs in `harness/docs/`. It imports nothing from `tools/` or `src/`;
-  guest disk images and installation media stay outside the repository.
+  provisioning docs in `harness/docs/`. `harness/manage.py` owns exclusive two-slot
+  leases, QMP access and recovery; see `harness/docs/reservations.md`. It imports
+  nothing from `tools/` or `src/`; guest disk images and installation media stay
+  outside the repository.
 - `tests/` uses `tests/toolbox/` stubs to compile app sources with host `cc`;
   most `tools/*-check.c` are Mac GUI diagnostics built by CMake, not host
   programs. `tools/native-process-check.c` is the exception: a guest source
