@@ -40,11 +40,11 @@ Guest images and the raw acceptance evidence stay outside the repository.
 # Publication transport probe — October 23, 2026
 
 Verified working tree on top of `c8d983b` (issue #72, ADR-0009). `tools/check.sh`
-(all C fault suites, 207 harness Python tests including the new publication
-suites) and `tools/lint.sh` passed.
+(all C fault suites and the harness Python tests, including the new
+publication suites) and `tools/lint.sh` passed.
 
 The real transport was probed against the live AFP host without a guest:
-`harness/publish.py install` published two synthetic artifacts (a diagnostic
+`harness/publish.py install` published synthetic artifacts (a diagnostic
 and `Sherclawk`) into a scratch `Harness/publishprobe*` directory with a
 never-reused `/tmp` staging tree. An independent server-side inspection then
 confirmed the data fork SHA-256, the `._` sidecar (AppleDouble v2 magic, exact

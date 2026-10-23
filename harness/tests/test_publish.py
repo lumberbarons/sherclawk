@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -108,8 +109,9 @@ class FakeRemote:
         self.staged[path] = data
         return path
 
-    def make_dir(self, path):
-        self._note("make_dir", path)
+    def make_dir(self, *paths):
+        for path in paths:
+            self._note("make_dir", path)
 
     def install(self, staged, dest):
         self._note("install", staged, dest)
@@ -160,12 +162,21 @@ class Base(unittest.TestCase):
         self.manager = reservation.Manager(home=self.home, clock=self.clock,
                                            effects=self.effects)
         self.remote = FakeRemote()
+        self.heartbeat_error = None
         self.publisher = publish.Publisher(home=self.home, share=self.share,
                                            share_host="share-host", remote=self.remote,
-                                           manager=self.manager, clock=self.clock)
+                                           manager=self.manager, clock=self.clock,
+                                           wait_ready=self.read_heartbeat)
         self.build = BuildTree("SherclawkWriteCheck")
         self.addCleanup(self.build.close)
         self.artifact = publish.locate_artifact(self.build.path, "SherclawkWriteCheck")
+
+    def read_heartbeat(self, mailbox, slot):
+        """The live-heartbeat check, reading the static fake readiness file."""
+        if self.heartbeat_error:
+            raise contract.ContractError(self.heartbeat_error)
+        with open(os.path.join(mailbox, "ready"), "rb") as f:
+            return contract.read_ready_clock(f.read(129), slot)
 
     def lease(self, owner="alice"):
         return self.manager.reserve(owner)
@@ -244,6 +255,34 @@ class SourceStateTest(unittest.TestCase):
                 f.write("two\n")
             self.assertTrue(publish.source_state(tmp)["dirty"])
 
+    def test_build_tree_inside_a_checkout_is_attributed_to_it(self):
+        if not shutil.which("git"):
+            self.skipTest("git is not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = os.path.realpath(tmp)
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                       GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True, env=env)
+            with open(os.path.join(repo, "file"), "w") as f:
+                f.write("one\n")
+            subprocess.run(["git", "add", "file"], cwd=repo, check=True, env=env)
+            subprocess.run(["git", "commit", "-q", "-m", "one"], cwd=repo, check=True, env=env)
+            build = os.path.join(repo, "elsewhere", "build")
+            os.makedirs(build)
+            state = publish.source_state(build, built_at=time.time() + 60)
+            self.assertEqual(state["repo"], repo)
+            self.assertEqual(len(state["revision"]), 40)
+            self.assertFalse(state["artifact_predates_head"])
+            self.assertFalse(state["artifact_predates_changes"])
+            # Built before HEAD was committed, and an untracked source is newer.
+            state = publish.source_state(build, built_at=1.0)
+            self.assertTrue(state["artifact_predates_head"])
+            with open(os.path.join(repo, "new.c"), "w") as f:
+                f.write("int x;\n")
+            state = publish.source_state(build, built_at=time.time() - 60)
+            self.assertTrue(state["dirty"])
+            self.assertTrue(state["artifact_predates_changes"])
+
 
 class LeaseGateTest(Base):
     def test_begin_rejects_a_stale_token_before_creating_evidence(self):
@@ -292,7 +331,8 @@ class PublicationTest(Base):
         self.assertLess(ops.index("install"), ops.index("set_metadata"))
         self.assertLess(ops.index("set_metadata"), ops.index("inspect"))
         dirs = [call[1] for call in self.remote.calls if call[0] == "make_dir"]
-        self.assertEqual(dirs, ["/srv/retro68/Harness/%s/%s" % (run.reservation, run.short),
+        self.assertEqual(dirs, ["/srv/retro68/Harness/%s" % run.reservation,
+                                "/srv/retro68/Harness/%s/%s" % (run.reservation, run.short),
                                 "/srv/retro68/Harness/%s/%s/buildjobs" % (run.reservation, run.short)])
         dests = [call[2] for call in self.remote.calls if call[0] == "install"]
         app = "/srv/retro68/Harness/%s/%s/SherclawkWriteCheck" % (run.reservation, run.short)
@@ -355,16 +395,23 @@ class PublicationTest(Base):
             run.publish_fixture(".hidden", b"x")
         with self.assertRaises(publish.UsageError):
             run.publish_fixture("scenario", b"x" * (publish.FIXTURE_MAX + 1))
+        for bad in ("a/b", "a/../../x", "SherclawkWriteCheck", "buildjobs",
+                    "SherclawkWriteCheck.log"):
+            with self.assertRaises(publish.UsageError, msg=bad):
+                run.publish_fixture(bad, b"x")
+        run.publish_fixture("my file", b"spaced")  # a legal HFS name, not a staging leaf
         run.publish_fixture("scenario", b"pass\r")
+        with self.assertRaises(publish.UsageError):
+            run.publish_fixture("scenario", b"again")
         record = self.evidence(run)
-        self.assertEqual(record["fixtures"], [{
+        self.assertEqual(record["fixtures"][1:], [{
             "name": "scenario",
             "bytes": 5,
             "sha256": netatalk_meta.sha256(b"pass\r"),
             "guest": run.workspace + "scenario",
             "remote": "/srv/retro68/Harness/%s/%s/scenario" % (run.reservation, run.short),
         }])
-        self.assertEqual(self.remote.files[record["fixtures"][0]["remote"]], b"pass\r")
+        self.assertEqual(self.remote.files[record["fixtures"][1]["remote"]], b"pass\r")
 
     def test_fixture_installation_failure_publishes_no_request(self):
         _lease, run = self.begin()
@@ -394,6 +441,15 @@ class RequestTest(Base):
         with self.assertRaises(publish.PublicationError) as caught:
             run.publish_request()
         self.assertIn("boot", str(caught.exception))
+        self.assertFalse(os.path.exists(os.path.join(run.mailbox_share, "request")))
+
+    def test_request_needs_a_live_heartbeat(self):
+        _lease, run = self.begin()
+        run.publish_application()
+        self.heartbeat_error = "no advancing fresh controller heartbeat"
+        with self.assertRaises(publish.PublicationError) as caught:
+            run.publish_request()
+        self.assertIn("heartbeat", str(caught.exception))
         self.assertFalse(os.path.exists(os.path.join(run.mailbox_share, "request")))
 
     def test_request_rejects_an_expired_lease(self):
@@ -435,7 +491,8 @@ class RequestTest(Base):
         remotes = [FakeRemote(), FakeRemote()]
         publishers = [
             publish.Publisher(home=self.home, share=self.share, share_host="share-host",
-                              remote=remotes[index], manager=self.manager, clock=self.clock)
+                              remote=remotes[index], manager=self.manager, clock=self.clock,
+                              wait_ready=self.read_heartbeat)
             for index in range(2)]
         runs = [publishers[0].begin(lease_a.token, "alice", self.artifact),
                 publishers[1].begin(lease_b.token, "bob", self.artifact)]
@@ -523,9 +580,33 @@ class CollectTest(Base):
             run.collect(timeout=0.2)
         self.assertIn("unknown", str(caught.exception))
         record = self.evidence(run)
-        self.assertEqual(record["phase"], "failed")
+        self.assertEqual(record["phase"], "unknown")
         self.assertEqual(record["error"], str(caught.exception))
         self.assertNotIn("result", record)
+
+    def test_failed_collection_still_retains_screenshot_and_logs(self):
+        lease, run = self.publish()
+        slot = provision.slot(self.home, lease.slot)
+        os.makedirs(os.path.dirname(slot.log), exist_ok=True)
+        with open(slot.log, "wb") as f:
+            f.write(b"qemu log line\n")
+        with open(os.path.join(run.mailbox_share, "log-" + lease.boot[:20]), "wb") as f:
+            f.write(b"controller trace\n")
+        with self.assertRaises(publish.RunTimeout):
+            run.collect(timeout=0.2)
+        record = self.evidence(run)
+        self.assertTrue(os.path.exists(record["captures"]["screenshot"]))
+        self.assertTrue(os.path.exists(os.path.join(run.evidence_dir, "qemu.log")))
+        self.assertTrue(os.path.exists(os.path.join(run.evidence_dir, "controller.log")))
+        # An invalid closed result is retained the same way.
+        lease, run = self.begin("bob")
+        run.publish_application()
+        run.publish_request(seconds=120)
+        with open(run.result_path(), "wb") as f:
+            f.write(b"not a result")
+        with self.assertRaises(publish.PublicationError):
+            run.collect(timeout=5)
+        self.assertTrue(os.path.exists(self.evidence(run)["captures"]["screenshot"]))
 
     def test_collect_after_expiry_still_settles_with_available_evidence(self):
         lease, run = self.publish()
@@ -536,7 +617,9 @@ class CollectTest(Base):
         record = self.evidence(run)
         self.assertEqual(record["phase"], "settled")
         self.assertNotIn("screenshot", record["captures"])
-        self.assertIn("screenshot_error", record["captures"])
+        self.assertIn("lease not held", record["captures"]["shared_evidence_skipped"])
+        self.assertNotIn("qemu", record["logs"])
+        self.assertFalse(os.path.exists(os.path.join(run.evidence_dir, "qemu.log")))
 
     def test_repeated_launches_keep_separate_evidence(self):
         lease_a, run_a = self.publish()
@@ -605,6 +688,11 @@ class RemoteTest(unittest.TestCase):
             "sudo -n install -d -o macos9 -g macos9 -m 0755 '/srv/retro68/Harness/run one'",
             "sudo -n install -o macos9 -g macos9 -m 0666 '/tmp/stage data' /srv/retro68/app"])
 
+    def test_every_directory_level_is_named_for_the_owner(self):
+        self.remote.make_dir("/srv/a", "/srv/a/b")
+        self.assertEqual(self.commands(),
+                         ["sudo -n install -d -o macos9 -g macos9 -m 0755 /srv/a /srv/a/b"])
+
     def test_metadata_and_inspection_run_the_staged_script(self):
         self.remote.stage_bytes("meta", b"# script\n")
         self.remote.set_metadata("/srv/retro68/app")
@@ -633,6 +721,12 @@ class RemoteTest(unittest.TestCase):
         self.assertIn("rm -rf %s" % stage, self.commands())
         self.remote.cleanup()
         self.assertEqual(len([c for c in self.commands() if "rm -rf" in c]), 1)
+
+    def test_cleanup_forgets_the_uploaded_script_with_its_directory(self):
+        first = self.remote.meta_script()
+        self.remote.cleanup()
+        self.assertEqual(self.remote.meta_script(), first)  # same fake stage name
+        self.assertEqual(len([c for c in self.commands() if "mktemp" in c]), 2)
 
 
 class CliTest(unittest.TestCase):
@@ -704,6 +798,8 @@ class CliTest(unittest.TestCase):
             self.run_id = "a" * 32
             self.workspace = "Retro68:Harness:slot1-g1:aaaa:"
             self.evidence_path = "/tmp/evidence.json"
+            self.evidence_dir = "/tmp/evidence"
+            self.state = "begun"
 
         def publish_application(self):
             self.calls.append("application")
@@ -768,6 +864,42 @@ class CliTest(unittest.TestCase):
         self.assertEqual(run.calls[1], ("fixture", "scenario", b"pass\r"))
         self.assertEqual(run.calls[2], ("request", publish.REQUEST_SECONDS))
         self.assertEqual(json.loads(out)["result"]["outcome"], "passed")
+
+    def test_run_validates_fixtures_and_seconds_before_publishing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "f.txt")
+            with open(path, "wb") as f:
+                f.write(b"x")
+            for argv in (self.run_argv(fixture="my:file=" + path),
+                         self.run_argv(fixture="a/b=" + path),
+                         self.run_argv(fixture="SherclawkInspectCheck=" + path),
+                         self.run_argv(seconds="0"),
+                         self.run_argv(seconds="601")):
+                run = self.StubRun()
+                code, _out, err = self.invoke(argv, publisher=self.StubPublisher(run))
+                self.assertEqual(code, 2, err)
+                self.assertEqual(run.calls, [])
+            argv = self.run_argv(fixture="a=" + path) + ["--fixture", "a=" + path]
+            run = self.StubRun()
+            code, _out, _err = self.invoke(argv, publisher=self.StubPublisher(run))
+            self.assertEqual(code, 2)
+
+    def test_failures_after_begin_name_the_retained_evidence(self):
+        run = self.StubRun(error=publish.RemoteError("ssh failed"))
+        _code, _out, err = self.invoke(self.run_argv(), publisher=self.StubPublisher(run))
+        self.assertIn("evidence retained under /tmp/evidence", err)
+
+    def test_install_must_be_named_for_the_target(self):
+        build = BuildTree("Sherclawk")
+        self.addCleanup(build.close)
+        remote = FakeRemote()
+        code, _out, err = self.invoke(
+            ["install", "--build", build.path, "--target", "Sherclawk",
+             "--share-host", "share-host", "--dest", "/srv/retro68/Other"],
+            remote=remote)
+        self.assertEqual(code, 2)
+        self.assertIn("must be named Sherclawk", err)
+        self.assertEqual(remote.ops(), [])
 
     def test_run_maps_lease_publication_and_result_outcomes(self):
         run = self.StubRun(error=reservation.LeaseError("lease expired"))

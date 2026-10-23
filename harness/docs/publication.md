@@ -3,8 +3,8 @@
 `harness/publish.py` publishes one built application into a fresh private run
 workspace on the existing `Retro68:` export, publishes the mailbox request
 last, and retains evidence that identifies the exact source, artifact and run.
-It is lease-aware: every guest-touching boundary re-checks the reservation, so
-an expired or reassigned lease cannot publish, and the share host is the only
+It is lease-aware: every publishing step re-checks the reservation, so an
+expired or reassigned lease cannot publish, and the share host is the only
 place the netatalk sidecar and Metadata xattr can be written.
 
 Sherclawk supplies the built artifact and the registered target name; the
@@ -69,7 +69,10 @@ python3 harness/publish.py run \
 
 `run` publishes in this order, and stops at the first failure:
 
-1. Creates the run workspace and its `buildjobs:` queue.
+0. Validates the seconds and every fixture (name, size, duplicates, names the
+   workspace reserves) before touching the share host.
+1. Creates the run workspace and its `buildjobs:` queue, naming every
+   directory level for the share owner.
 2. Stages the data fork and sidecar under a never-reused `/tmp` scratch
    directory on the share host, installs both into the workspace and writes
    the complete netatalk Metadata xattr.
@@ -77,17 +80,26 @@ python3 harness/publish.py run \
    hashes and that the Finder type/creator record is complete and current.
 4. Publishes each `--fixture NAME=LOCALFILE` as a bounded file in the
    workspace (a single 1..31 byte HFS name, at most 1 MiB).
-5. Publishes the closed `HARNESS/1` request into the slot mailbox last.
+5. Requires an advancing controller heartbeat for the slot (a static `ready`
+   file is not liveness), then publishes the closed `HARNESS/1` request into
+   the slot mailbox last.
 
 Then it waits for the controller's closed `result-<run>` (bounded by
 `--seconds + 15`, override with `--wait`), captures a final screenshot under
 the lease, copies the QEMU log tail, the controller trace and the guest
-diagnostic log, and writes the run evidence. Exit codes are `0` passed, `1` a
+diagnostic log, and writes the run evidence. Retention also runs when the wait
+times out or the result is invalid, since those are the runs that need it.
+The result is keyed by the run, so it is read even after the lease lapsed, but
+the screenshot and QEMU log belong to the slot (possibly another owner's by
+then) and are skipped, with a note in `captures`, unless the lease is still
+held. Exit codes are `0` passed, `1` a
 closed non-pass, `2` stale lease or usage, `3` publication or host failure.
 `--no-screenshot` skips the capture.
 
-A failed or missing result is never a pass: a timeout reports `unknown`,
-malformed evidence is refused, and nothing is replayed.
+A failed or missing result is never a pass: a timeout reports `unknown`
+(also the evidence `phase`), malformed evidence is refused, and nothing is
+replayed. Every failure after the run began names its evidence directory on
+stderr.
 
 ## Evidence
 
@@ -96,7 +108,11 @@ Every run writes `evidence.json` under
 change, so a crashed or failed run still identifies itself, and repeated
 launches accumulate side by side with nothing deleted:
 
-- source revision and dirty state of the checkout that built the artifact
+- source revision and dirty state of the checkout containing the build
+  directory, as of publication. Git cannot say which commit produced a binary,
+  so `artifact_predates_head` and `artifact_predates_changes` flag a build older
+  than the commit or the uncommitted changes; treat either as a possible
+  mismatch
 - both artifact fork hashes, sizes and local paths
 - slot, generation (decimal and 32-hex), owner, guest boot ID and boot clock
 - manager epoch and host boot identity
@@ -116,7 +132,10 @@ python3 harness/publish.py install --build build --target Sherclawk \
 `install` is the lease-free transport `tools/deploy-to-share.sh` uses for the
 shipping application: stage, install both forks, write the xattr, verify, and
 fail closed on mismatch. It accepts any built application name, not only
-registered diagnostics. The destination's parent directory must already
+registered diagnostics, but the destination must be named for the target.
+Files are installed before they are verified, so a failed verification leaves
+the destination unverified, possibly over an earlier good copy; do not launch
+it until a publication succeeds. The destination's parent directory must already
 exist; `install` creates no directories (a run creates its own workspace).
 
 ## Host tests

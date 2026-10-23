@@ -51,6 +51,7 @@ STAGE_LEAF = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 REQUEST_SECONDS = 120
 WAIT_GRACE = 15.0
 POLL_SECONDS = 0.25
+HEARTBEAT_SECONDS = 10
 FIXTURE_MAX = 1 << 20
 LOG_TAIL_BYTES = 8192
 
@@ -91,6 +92,7 @@ class Artifact:
     resource_sha256: str
     data_bytes: int
     resource_bytes: int
+    built_at: float = 0.0
 
     def record(self):
         return {
@@ -102,6 +104,7 @@ class Artifact:
             "resource_sha256": self.resource_sha256,
             "data_bytes": self.data_bytes,
             "resource_bytes": self.resource_bytes,
+            "built_at": self.built_at,
         }
 
 
@@ -126,25 +129,51 @@ def locate_artifact(build_dir, target, diagnostics=contract.DIAGNOSTICS, registe
             raise ArtifactError("empty %s fork for %s at %s" % (fork, target, path))
     return Artifact(target, build_dir, data, resource,
                     netatalk_meta.sha256_file(data), netatalk_meta.sha256_file(resource),
-                    os.path.getsize(data), os.path.getsize(resource))
+                    os.path.getsize(data), os.path.getsize(resource),
+                    max(os.path.getmtime(data), os.path.getmtime(resource)))
 
 
-def source_state(repo_dir):
-    """The revision and dirty state that produced the artifact, best effort."""
-    state = {"repo": repo_dir, "revision": None, "dirty": None, "error": None}
+def _git(path, *args):
+    done = subprocess.run(["git", "-C", path] + list(args),
+                          capture_output=True, text=True, timeout=10)
+    if done.returncode:
+        raise OSError((done.stderr or done.stdout).strip() or "not a git checkout")
+    return done.stdout.strip()
+
+
+def source_state(build_dir, built_at=None):
+    """The checkout holding the build tree, as it is now, best effort.
+
+    Git cannot say which commit produced a binary, so this records the
+    checkout's HEAD and dirty state at publish time and, when ``built_at`` is
+    given, whether HEAD was committed after the artifact was built
+    (``artifact_predates_head``) or tracked changes are newer than it
+    (``artifact_predates_changes``).  Either means the artifact may not match
+    the recorded source.  The checkout is found from the build directory, so a
+    build tree anywhere inside a repository is attributed to that repository.
+    """
+    state = {"repo": None, "revision": None, "dirty": None, "built_at": built_at,
+             "artifact_predates_head": None, "artifact_predates_changes": None,
+             "error": None}
     try:
-        revision = subprocess.run(["git", "-C", repo_dir, "rev-parse", "HEAD"],
-                                  capture_output=True, text=True, timeout=10)
-        if revision.returncode:
-            raise OSError((revision.stderr or revision.stdout).strip() or "not a git checkout")
-        status = subprocess.run(["git", "-C", repo_dir, "status", "--porcelain",
-                                 "--untracked-files=no"],
-                                capture_output=True, text=True, timeout=10)
-        if status.returncode:
-            raise OSError((status.stderr or status.stdout).strip())
-        state["revision"] = revision.stdout.strip()
-        state["dirty"] = bool(status.stdout.strip())
-    except (OSError, subprocess.SubprocessError) as exc:
+        top = _git(build_dir, "rev-parse", "--show-toplevel")
+        state["repo"] = top
+        revision = _git(top, "rev-parse", "HEAD")
+        status = _git(top, "status", "--porcelain")
+        state["revision"] = revision
+        state["dirty"] = bool(status)
+        if built_at:
+            committed = float(_git(top, "log", "-1", "--format=%ct"))
+            state["artifact_predates_head"] = committed > built_at
+            newer = False
+            for line in status.splitlines():
+                path = os.path.join(top, line[3:].split(" -> ")[-1].strip('"'))
+                try:
+                    newer = newer or os.path.getmtime(path) > built_at
+                except OSError:
+                    newer = True  # a deleted or renamed source cannot be older
+            state["artifact_predates_changes"] = newer
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
         state["error"] = str(exc)[:200]
     return state
 
@@ -233,9 +262,14 @@ class Remote:
             raise RemoteError("invalid staging leaf %r" % (leaf,))
         return leaf
 
-    def make_dir(self, path):
+    def make_dir(self, *paths):
+        """Create each directory explicitly, so every level gets the owner.
+
+        ``install -d`` only applies owner and mode to the directories named on
+        its command line, not to parents it creates on the way.
+        """
         self.ssh("sudo -n install -d -o %s -g %s -m 0755 %s"
-                 % (self.user, self.group, shlex.quote(path)))
+                 % (self.user, self.group, " ".join(shlex.quote(p) for p in paths)))
 
     def install(self, staged, dest):
         self.ssh("sudo -n install -o %s -g %s -m 0666 %s %s"
@@ -267,7 +301,7 @@ class Remote:
         return payload["state"]
 
     def cleanup(self):
-        stage, self._stage = self._stage, None
+        stage, self._stage, self._script = self._stage, None, None
         if stage:
             with contextlib.suppress(PublicationError):
                 self.ssh("rm -rf %s" % shlex.quote(stage), check=False)
@@ -277,8 +311,15 @@ def publish_artifact(remote, artifact, dest, leaf_prefix="publish"):
     """Stage, install and verify one artifact at an exact remote path.
 
     Verifies the data fork, the resource-fork sidecar and the complete
-    netatalk Metadata record server-side; any mismatch raises.
+    netatalk Metadata record server-side; any mismatch raises.  The files are
+    installed in place before they are verified, so a failure leaves the
+    destination unverified (possibly replacing an earlier good copy): the error
+    names it and it must not be launched until a publication succeeds.  The
+    destination must be named for the target, because the sidecar's Finder
+    icon state and the verification both key on the name.
     """
+    if os.path.basename(dest) != artifact.target:
+        raise UsageError("destination %s must be named %s" % (dest, artifact.target))
     with open(artifact.data, "rb") as f:
         data = f.read()
     sidecar = netatalk_meta.sidecar_bytes(artifact.build_dir, artifact.target)
@@ -293,7 +334,8 @@ def publish_artifact(remote, artifact, dest, leaf_prefix="publish"):
                                    expect_data_sha256=artifact.data_sha256,
                                    expect_resource_sha256=artifact.resource_sha256)
     if found:
-        raise PublicationError("published application failed verification at %s: %s"
+        raise PublicationError("published application failed verification at %s "
+                               "(left unverified; do not launch it): %s"
                                % (dest, "; ".join(found)))
     return state
 
@@ -306,14 +348,38 @@ def valid_fixture_name(name):
         raw = name.encode("ascii")
     except UnicodeEncodeError:
         return False
-    return all(32 <= byte <= 126 for byte in raw) and ":" not in name
+    return all(32 <= byte <= 126 for byte in raw) and ":" not in name and "/" not in name
+
+
+def fixture_problem(name, target, data=None):
+    """Why a fixture cannot be published into a run workspace, or None.
+
+    The one rule for the CLI (before anything is published) and the run, so a
+    bad name never costs a publication; names the run itself owns are refused.
+    """
+    if not valid_fixture_name(name):
+        return "fixture name %r is not a single 1..31 byte HFS name" % (name,)
+    if name in (target, QUEUE_NAME, target + ".log"):
+        return "fixture name %r is reserved by the run workspace" % name
+    if data is not None:
+        if not isinstance(data, (bytes, bytearray)):
+            return "fixture %s must be bytes" % name
+        if len(data) > FIXTURE_MAX:
+            return "fixture %s is larger than %d bytes" % (name, FIXTURE_MAX)
+    return None
+
+
+def check_seconds(seconds):
+    if not isinstance(seconds, int) or not 1 <= seconds <= 600:
+        raise UsageError("request seconds must be within 1..600")
 
 
 class Publisher:
     """Lease-aware publication into private run workspaces on the export."""
 
     def __init__(self, home=None, share=None, share_host=None, share_dir=None,
-                 clock=None, remote=None, manager=None, evidence_dir=None):
+                 clock=None, remote=None, manager=None, evidence_dir=None,
+                 wait_ready=None):
         self.clock = clock or reservation.Clock()
         self.home = home if isinstance(home, provision.Home) else provision.Home(home)
         share = share if share is not None else os.environ.get("OS9_HARNESS_SHARE")
@@ -330,6 +396,10 @@ class Publisher:
         self.manager = manager or reservation.Manager(home=self.home, share=self.share,
                                                       clock=self.clock)
         self.evidence_dir = evidence_dir or os.path.join(self.home.path, "evidence")
+        # (mailbox, slot) -> (boot, clock); admits only an advancing heartbeat.
+        self.wait_ready = wait_ready or (
+            lambda mailbox, slot: harness_mailbox.wait_ready(mailbox, slot,
+                                                             timeout=HEARTBEAT_SECONDS))
 
     def require_ready(self):
         if not self.share:
@@ -406,7 +476,7 @@ class Run:
 
     def start(self):
         os.makedirs(self.evidence_dir, exist_ok=True)
-        self.source = source_state(os.path.dirname(self.artifact.build_dir))
+        self.source = source_state(self.artifact.build_dir, self.artifact.built_at)
         self.emulator = self._emulator_config()
         try:
             self.manager_info = self.publisher.manager.status()["manager"]
@@ -459,8 +529,10 @@ class Run:
         """Publish the exact artifact into the run workspace and verify it."""
         def body():
             remote = self.publisher.remote
-            remote.make_dir(self.publisher.remote_path(self.workspace))
-            remote.make_dir(self.publisher.remote_path(self.queue))
+            remote.make_dir(
+                self.publisher.remote_path("%s%s:" % (HARNESS_ROOT, self.reservation)),
+                self.publisher.remote_path(self.workspace),
+                self.publisher.remote_path(self.queue))
             self.verification = publish_artifact(
                 remote, self.artifact, self.publisher.remote_path(self.application),
                 leaf_prefix=self.short)
@@ -468,17 +540,17 @@ class Run:
 
     def publish_fixture(self, name, data):
         """Publish one fixture file into the run workspace."""
-        if not valid_fixture_name(name):
-            raise UsageError("fixture name %r is not a single 1..31 byte HFS name" % (name,))
-        if not isinstance(data, (bytes, bytearray)):
-            raise UsageError("fixture %s must be bytes" % name)
+        problem = fixture_problem(name, self.artifact.target, data)
+        if problem:
+            raise UsageError(problem)
+        if any(entry["name"] == name for entry in self.fixtures):
+            raise UsageError("fixture %s is already published in this run" % name)
         data = bytes(data)
-        if len(data) > FIXTURE_MAX:
-            raise UsageError("fixture %s is larger than %d bytes" % (name, FIXTURE_MAX))
 
         def body():
             remote = self.publisher.remote
-            staged = remote.stage_bytes("fixture-%s-%s" % (self.short, name), data)
+            staged = remote.stage_bytes("fixture-%s-%d" % (self.short, len(self.fixtures)),
+                                        data)
             dest = self.publisher.remote_path(self.workspace + name)
             remote.install(staged, dest)
             self.fixtures.append({"name": name, "bytes": len(data),
@@ -488,8 +560,7 @@ class Run:
 
     def publish_request(self, seconds=REQUEST_SECONDS):
         """Publish the mailbox request last, after every artifact is verified."""
-        if not 1 <= seconds <= 600:
-            raise UsageError("request seconds must be within 1..600")
+        check_seconds(seconds)
         if self.request is not None:
             raise PublicationError("this run's request is already published")
         if not self.application_published:
@@ -503,8 +574,10 @@ class Run:
                     "before a new run" % self.mailbox_guest)
             with contextlib.suppress(OSError):
                 os.remove(request_path + ".tmp")  # a dead publish's staging, not evidence
-            with open(os.path.join(self.mailbox_share, "ready"), "rb") as f:
-                boot, clock = contract.read_ready_clock(f.read(129), self.lease.slot)
+            try:
+                boot, clock = self.publisher.wait_ready(self.mailbox_share, self.lease.slot)
+            except contract.ContractError as exc:
+                raise PublicationError("guest %s is not alive: %s" % (self.lease.slot, exc))
             if boot != self.lease.boot:
                 raise PublicationError(
                     "guest boot changed from %s to %s; re-reserve the slot"
@@ -554,13 +627,40 @@ class Run:
                     raise PublicationError("invalid result: %s" % exc)
             raise RunTimeout("no closed result within %.1f seconds; unknown; evidence "
                              "retained under %s" % (timeout, self.evidence_dir))
-        report = self._step("collect", wait, require_lease=False)
+        try:
+            report = self._step("collect", wait, require_lease=False)
+        except Exception as exc:
+            # The failed runs are the ones whose screenshot and logs matter.
+            if isinstance(exc, RunTimeout):
+                self.state = "unknown"
+            self._retain(screenshot)
+            raise
         self.report = report
         self.state = "settled"
-        self._capture(screenshot)
-        self._copy_logs()
-        self._write_evidence()
+        self._retain(screenshot)
         return report
+
+    def _retain(self, screenshot):
+        """Keep the screenshot and log tails, whatever the run's outcome.
+
+        The result is keyed by this run, so it is read even after the lease
+        lapsed; the screenshot and the QEMU log belong to the slot, which may
+        by then be another owner's, so they need the lease still held.
+        """
+        try:
+            self._require_lease()
+            held = True
+        except reservation.ReservationError as exc:
+            held = False
+            self.captures["shared_evidence_skipped"] = (
+                "lease not held at collection: %s" % str(exc)[:200])
+        try:
+            if held:
+                self._capture(screenshot)
+            self._copy_logs(held)
+        except (OSError, provision.ProvisionError) as exc:
+            self.captures["retention_error"] = str(exc)[:300]
+        self._write_evidence()
 
     def _capture(self, screenshot):
         if not screenshot:
@@ -572,10 +672,11 @@ class Run:
         except (reservation.ReservationError, qmp.QMPError, OSError, ValueError) as exc:
             self.captures["screenshot_error"] = str(exc)[:300]
 
-    def _copy_logs(self):
-        slot = provision.slot(self.publisher.home, self.lease.slot)
-        self.logs["qemu"] = slot.log
-        self._copy_log(slot.log, "qemu.log")
+    def _copy_logs(self, held=True):
+        if held:
+            slot = provision.slot(self.publisher.home, self.lease.slot)
+            self.logs["qemu"] = slot.log
+            self._copy_log(slot.log, "qemu.log")
         if self.lease.boot:
             trace = os.path.join(self.mailbox_share, "log-" + self.lease.boot[:20])
             self.logs["controller"] = trace
@@ -720,7 +821,8 @@ def emit(args, result):
         print("phase %s" % result["phase"])
 
 
-def parse_fixtures(raw):
+def parse_fixtures(raw, target):
+    """Read and validate every fixture before anything is published."""
     fixtures = []
     for spec in raw:
         if "=" not in spec:
@@ -728,19 +830,32 @@ def parse_fixtures(raw):
         name, path = spec.split("=", 1)
         try:
             with open(path, "rb") as f:
-                fixtures.append((name, f.read()))
+                data = f.read(FIXTURE_MAX + 1)
         except OSError as exc:
             raise UsageError("cannot read fixture %s: %s" % (path, exc))
+        problem = fixture_problem(name, target, data)
+        if problem:
+            raise UsageError(problem)
+        if any(name == other for other, _ in fixtures):
+            raise UsageError("fixture %s is given twice" % name)
+        fixtures.append((name, data))
     return fixtures
+
+
+def _report_evidence(run):
+    if run is not None:
+        print("publish: evidence retained under %s (phase %s)"
+              % (run.evidence_dir, run.state), file=sys.stderr)
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    run = None
     try:
         if args.command == "verify":
             artifact = locate_artifact(args.build, args.target)
             result = artifact.record()
-            result["source"] = source_state(os.path.dirname(artifact.build_dir))
+            result["source"] = source_state(artifact.build_dir, artifact.built_at)
             emit(args, result)
             return 0
         if args.command == "install":
@@ -758,7 +873,8 @@ def main(argv=None):
                         "problems": netatalk_meta.problems(state)})
             return 0
         artifact = locate_artifact(args.build, args.target)
-        fixtures = parse_fixtures(args.fixture)
+        check_seconds(args.seconds)
+        fixtures = parse_fixtures(args.fixture, artifact.target)
         publisher = Publisher(home=args.home, share=args.share,
                               share_host=args.share_host, share_dir=args.share_dir)
         run = publisher.begin(args.token, args.owner, artifact)
@@ -775,10 +891,12 @@ def main(argv=None):
     except (UsageError, reservation.UsageError, reservation.LeaseError,
             reservation.NoCapacity, reservation.ConfigError, ConfigError) as exc:
         print("publish: %s" % exc, file=sys.stderr)
+        _report_evidence(run)
         return 2
     except (PublicationError, reservation.ReservationError, provision.ProvisionError,
             contract.ContractError, qmp.QMPError, OSError, ValueError) as exc:
         print("publish: %s" % exc, file=sys.stderr)
+        _report_evidence(run)
         return 3
 
 
