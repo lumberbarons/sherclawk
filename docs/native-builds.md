@@ -113,8 +113,11 @@ General queue service is not implemented.
 `SHERCLAWK_BUILD_QUEUE` is a build-time path relative to the workspace root.
 The `SherclawkSelfBuildCheck` and `SherclawkSelfBuildStopCheck` targets override
 it to `buildjobs`, so a harness run uses the private queue that `publish.py`
-creates inside its run workspace instead of the shared `Worker01:buildjobs`.
-Manual launches keep the same checks usable and create that queue on demand.
+creates inside its run workspace (`<run workspace>buildjobs:`). Queue paths are
+workspace-relative, so the name only needs to match what `publish.py` creates
+and collects. A manual launch creates `buildjobs` on demand directly under the
+workspace root, leaving `Worker01:buildjobs` untouched, so the checks run the
+shipped code with a different queue name than the application uses.
 
 A build that cannot start says why instead of waiting, and never leaves an
 uncertain job: `NATIVE_EXECUTOR_UNAVAILABLE` (the ToolServer channel could not

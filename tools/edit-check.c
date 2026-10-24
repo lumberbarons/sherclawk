@@ -38,7 +38,8 @@ static void check(int condition, const char *name)
 }
 static void execute(void)
 {
-    if (stopped) { failures++; return; }
+    /* The failed step was already named; skip the rest of the run's steps. */
+    if (stopped) { fprintf(logfile,"SKIP %s after a stopped step\n",call.name);fflush(logfile);return; }
     {
         uint32_t started=(uint32_t)TickCount(),maximum=0;int r;
         /* Start directly: the acceptance harness services and times each step. */
@@ -57,7 +58,7 @@ static void execute(void)
             fprintf(logfile,"STEP phase=%s ticks=%lu free_heap=%ld\n",phase,(unsigned long)elapsed,(long)FreeMem());
         }
         stopped=r;
-        if(stopped) { failures++; harness_check(0,"tool step completed"); }
+        if(stopped)check(0,"tool step completed");
         fprintf(logfile,"TIMING tool=%s total_ticks=%lu maximum_step_ticks=%lu free_heap=%ld\n",call.name,
             (unsigned long)((uint32_t)TickCount()-started),(unsigned long)maximum,(long)FreeMem());
     }
@@ -80,7 +81,7 @@ static void create_fixture(const char *name, const char *text)
 {
     static char quoted[AGENT_ARGUMENT_CAP-400];
     snprintf(path,sizeof(path),"%s:%s",folder,name);strcpy(call.name,"write_text");
-    if(json_quote(text,quoted,sizeof(quoted))<0) { failures++;return; }
+    if(json_quote(text,quoted,sizeof(quoted))<0) { check(0,"fixture text quoted");return; }
     snprintf(call.arguments,sizeof(call.arguments),"{\"path\":\"%s\",\"text\":%s}",path,quoted);execute();
     check(strstr(result,"CREATED")!=NULL,"fixture created");
 }
@@ -91,7 +92,7 @@ static void read_page(int offset)
 static void edit(const char *revision, const char *old, const char *text)
 {
     static char qo[2048], qn[4096];
-    if(json_quote(old,qo,sizeof(qo))<0 || json_quote(text,qn,sizeof(qn))<0) { failures++;return; }
+    if(json_quote(old,qo,sizeof(qo))<0 || json_quote(text,qn,sizeof(qn))<0) { check(0,"edit arguments quoted");return; }
     strcpy(call.name,"edit_text");
     snprintf(call.arguments,sizeof(call.arguments),"{\"path\":\"%s\",\"expected_revision\":\"%s\",\"old_text\":%s,\"new_text\":%s}",path,revision,qo,qn);execute();
 }

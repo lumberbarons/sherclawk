@@ -4,9 +4,11 @@
 unattended pass: one exclusive reservation, one private publication run per
 check, a retained suite summary, and a reset between checks that leave the
 guest in an uncertain state.  It owns the runner and the report contract
-(ADR-0009); the **registry is consumer data**, and no Sherclawk diagnostic name
-appears in harness code.  Sherclawk's registry is
-[`tools/native-suite.json`](../../tools/native-suite.json).
+(ADR-0009); the **registry is consumer data**.  The only diagnostic names in
+harness code are the controller's launch allowlist (`DIAGNOSTICS` in
+`harness/contract.py`, mirrored by `h_diagnostics` in `harness/native/contract.c`
+and kept in step by a test), and the registry's targets must be a subset of it.
+Sherclawk's registry is [`tools/native-suite.json`](../../tools/native-suite.json).
 
 ```bash
 ./build.sh HarnessChecks_APPL

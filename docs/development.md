@@ -350,7 +350,12 @@ APP=SherclawkSelfBuildCheck tools/deploy-to-share.sh
 APP=SherclawkSelfBuildStopCheck tools/deploy-to-share.sh
 ```
 
-Run with the queue unowned and ToolServer idle. It checks independent and starter
+Run with the queue unowned and ToolServer idle. These two targets are compiled
+with the queue name `buildjobs`, so a manual run creates and uses
+`Retro68:buildjobs` (the workspace root's `buildjobs`) and never touches
+`Worker01:buildjobs`, which the application itself uses; check for orphaned
+locks in the former. They therefore exercise the same code with a different
+queue name than the shipped application. It checks independent and starter
 projects with multiple sources, explicit native ownership, resource structure,
 compiler failures, revision-bound edits and fresh build IDs. Evidence is recorded
 in `Retro68:SherclawkSelfBuildCheck.log`; acceptance is recorded in the

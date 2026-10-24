@@ -1,6 +1,7 @@
 """Request/report acceptance: no VM, dependencies or API key."""
 import dataclasses
 import os
+import re
 import sys
 import unittest
 
@@ -36,11 +37,7 @@ class ContractTest(unittest.TestCase):
                 contract.write_request(dataclasses.replace(r, **{field: value}))
 
     def test_every_suite_diagnostic_is_registered_and_unknown_names_fail(self):
-        suite = ("SherclawkWriteCheck", "SherclawkSearchCheck", "SherclawkEditCheck",
-                 "SherclawkInspectCheck", "SherclawkProjectCheck", "SherclawkScrollCheck",
-                 "SherclawkHandoffCheck", "SherclawkSelfBuildCheck",
-                 "SherclawkSelfBuildStopCheck")
-        for name in suite + ("HarnessAcceptance",):
+        for name in contract.DIAGNOSTICS:
             with self.subTest(name=name):
                 r = dataclasses.replace(
                     request(), diagnostic=name,
@@ -51,6 +48,14 @@ class ContractTest(unittest.TestCase):
                 contract.write_request(dataclasses.replace(
                     request(), diagnostic=name,
                     application="Retro68:Harness:r:" + name))
+
+    def test_the_native_allowlist_matches_the_python_allowlist(self):
+        path = os.path.join(os.path.dirname(__file__), "..", "native", "contract.c")
+        with open(path, encoding="utf-8") as f:
+            table = re.search(r"h_diagnostics\[\]\s*=\s*\{(.*?)\}", f.read(), re.S)
+        self.assertIsNotNone(table, "h_diagnostics table not found in contract.c")
+        self.assertEqual(tuple(re.findall(r'"([^"]+)"', table.group(1))),
+                         contract.DIAGNOSTICS)
 
     def test_named_pass_and_deliberate_failure(self):
         for checks, outcome in (([(True, "write file")], "passed"),

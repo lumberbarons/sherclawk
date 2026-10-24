@@ -305,7 +305,7 @@ int main(void)
     goto done;
 #endif
     snprintf(args,sizeof(args),"{\"path\":\"%s:extra.c\"}",folder); invoke("read_text",args);
-    if(json_parse(result,strlen(result),t,64)<1 || json_string(result,t,json_member(result,t,0,"revision"),revision,sizeof(revision))<0){failures++;report_check(0,"read extra.c revision");goto done;}
+    if(json_parse(result,strlen(result),t,64)<1 || json_string(result,t,json_member(result,t,0,"revision"),revision,sizeof(revision))<0){report_check(0,"read extra.c revision");goto done;}
     memset(repair,' ',sizeof(repair)-2);repair[sizeof(repair)-2]='\r';repair[sizeof(repair)-1]=0;
     json_quote(repair,qr,sizeof(qr));
     snprintf(args,sizeof(args),"{\"path\":\"%s:extra.c\",\"expected_revision\":\"%s\",\"old_text\":\"#error deliberate build_project compiler error\\n\",\"new_text\":%s}",folder,revision,qr); invoke("edit_text",args);

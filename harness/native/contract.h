@@ -23,5 +23,8 @@ int h_request_equal(const HRequest *, const HRequest *);
 int h_report_parse(const char *, size_t, const HRequest *, HReport *);
 int h_report_format(const HReport *, char *, size_t);
 int h_report_check(HReport *, int, const char *);
+/* The registered diagnostics; harness/contract.py DIAGNOSTICS must match. */
+extern const char *const h_diagnostics[];
+extern const unsigned int h_diagnostic_count;
 int h_registered(const char *);
 #endif
