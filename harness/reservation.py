@@ -284,13 +284,13 @@ class Lease:
             remaining = min(remaining, self.expires_mono - mono)
         return max(0.0, remaining)
 
-    def public(self, mono, wall):
+    def public(self, mono, wall, mono_source=None):
         return {
             "slot": self.slot,
             "token": self.token,
             "owner": self.owner,
             "generation": self.generation,
-            "expires_in": round(self.expires_in(mono, wall), 3),
+            "expires_in": round(self.expires_in(mono, wall, mono_source), 3),
             "boot": self.boot,
             "pid": self.pid,
         }
@@ -455,7 +455,7 @@ class Manager:
             conn.execute("INSERT OR IGNORE INTO releases VALUES(?,?,?,?,?,?)",
                          (token, row["slot"], row["generation"], row["owner"], reason, wall))
         conn.execute("""UPDATE slots SET state='recovering', token=NULL, owner=NULL,
-                        expires_mono=NULL, expires_wall=NULL, epoch=NULL,
+                        expires_mono=NULL, expires_wall=NULL, mono_source=NULL, epoch=NULL,
                         quarantine=NULL, updated_wall=? WHERE slot=?""",
                      (wall, row["slot"]))
         self._touch(conn)
@@ -465,7 +465,7 @@ class Manager:
         mono, wall = self._now()
         with self._txn() as conn:
             conn.execute("""UPDATE slots SET state='quarantined', token=NULL, owner=NULL,
-                            expires_mono=NULL, expires_wall=NULL, epoch=NULL,
+                            expires_mono=NULL, expires_wall=NULL, mono_source=NULL, epoch=NULL,
                             quarantine=?, updated_wall=?
                             WHERE slot=? AND (? IS NULL OR generation=?)""",
                          (str(reason)[:400], wall, slot_name, generation, generation))
@@ -806,7 +806,7 @@ class Manager:
             summary["reset"] = True
             with self._txn() as conn:
                 conn.execute("""UPDATE slots SET state='free', token=NULL, owner=NULL,
-                                expires_mono=NULL, expires_wall=NULL, epoch=NULL, pid=NULL,
+                                expires_mono=NULL, expires_wall=NULL, mono_source=NULL, epoch=NULL, pid=NULL,
                                 boot=NULL, boot_clock=NULL, last_boot=?, quarantine=NULL,
                                 updated_wall=? WHERE slot=?""",
                              (last_boot, self._now()[1], slot_name))

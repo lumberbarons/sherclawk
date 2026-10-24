@@ -620,6 +620,25 @@ class LeaseKeeperTest(unittest.TestCase):
             keeper.tick()
 
 
+    def test_renews_on_the_monotonic_deadline_when_the_wall_clock_steps_back(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        home = os.path.join(tmp.name, "state")
+        share = os.path.join(tmp.name, "share")
+        os.makedirs(os.path.join(share, "Harness"))
+        clock = FakeClock()
+        effects = ReadyEffects(reservation.provision.Home(home), share, clock)
+        manager = reservation.Manager(home=home, share=share, clock=clock,
+                                      effects=effects)
+        lease = manager.reserve("alice")
+        keeper = suite.LeaseKeeper(manager, lease, interval=10_000)
+        # Wall time looks untouched while the monotonic deadline is 100 s away.
+        clock.advance(lease.ttl - 100, wall=False)
+        keeper.tick()
+        self.assertGreater(manager.lease(lease.token, "alice").expires_in(
+            clock.monotonic(), clock.wall(), clock.source), lease.ttl - 50)
+
+
 class InteractiveTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

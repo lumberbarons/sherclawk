@@ -238,7 +238,8 @@ class LeaseKeeper:
 
     def tick(self):
         now = self.manager.clock.monotonic()
-        remaining = self.lease.expires_in(now, self.manager.clock.wall())
+        remaining = self.lease.expires_in(now, self.manager.clock.wall(),
+                                          self.manager.clock.source)
         if now - self.last < self.interval and remaining > 120:
             return
         self.lease = self.manager.renew(self.lease.token, self.lease.owner)

@@ -394,6 +394,25 @@ class ReservationTest(Base):
             other.lease(a.token, "alice")
         self.assertEqual(other.status()["slots"][0]["expires_in"], 0)
 
+    def test_public_expiry_matches_status_when_the_wall_clock_steps_back(self):
+        a = self.manager.reserve("alice", ttl=100)
+        self.clock.advance(60, wall=False)
+        source = self.clock.source
+        public = a.public(self.clock.monotonic(), self.clock.wall(), source)
+        self.assertEqual(public["expires_in"], 40)
+        self.assertEqual(public["expires_in"],
+                         self.manager.status()["slots"][0]["expires_in"])
+        # Without a matching source only the wall deadline applies.
+        self.assertEqual(a.public(self.clock.monotonic(), self.clock.wall())["expires_in"], 100)
+
+    def test_revoked_slot_drops_the_old_monotonic_source(self):
+        a = self.manager.reserve("alice")
+        self.manager.release(a.token, "alice")
+        with self.manager._txn() as conn:
+            sources = [r["mono_source"] for r in conn.execute(
+                "SELECT mono_source FROM slots WHERE token IS NULL")]
+        self.assertEqual(sources, [None] * len(provision.SLOTS))
+
     def test_same_source_regression_rotates_epoch_only_once(self):
         a = self.manager.reserve("alice")
         epoch = self.manager.status()["manager"]["epoch"]
