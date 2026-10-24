@@ -83,10 +83,29 @@ class ProcessInfo:
 
 
 class Clock:
-    """Injectable time: expiry uses monotonic *and* wall deadlines."""
+    """Injectable time with an explicit identity for the monotonic origin."""
+
+    def __init__(self):
+        # Python 3.9 on macOS can give time.monotonic() a per-process origin.
+        # Read an OS clock directly so different interpreters agree as well.
+        for name in ("CLOCK_UPTIME_RAW", "CLOCK_MONOTONIC"):
+            clock_id = getattr(time, name, None)
+            if clock_id is None or not hasattr(time, "clock_gettime"):
+                continue
+            try:
+                time.clock_gettime(clock_id)
+            except (OSError, ValueError):
+                continue
+            self._read_mono = lambda clock_id=clock_id: time.clock_gettime(clock_id)
+            self.source = "clock_gettime:" + name
+            break
+        else:
+            self._read_mono = time.monotonic
+            # Never compare fallback readings across Clock instances/processes.
+            self.source = "time.monotonic:" + secrets.token_hex(16)
 
     def monotonic(self):
-        return time.monotonic()
+        return self._read_mono()
 
     def wall(self):
         return time.time()
@@ -256,9 +275,14 @@ class Lease:
     pid: int
     state: str
     ttl: int = LEASE_SECONDS
+    mono_source: str = ""
 
-    def expires_in(self, mono, wall):
-        return max(0.0, min(self.expires_mono - mono, self.expires_wall - wall))
+    def expires_in(self, mono, wall, mono_source=None):
+        """Use wall time unless the caller identifies a matching mono origin."""
+        remaining = self.expires_wall - wall
+        if mono_source and mono_source == self.mono_source:
+            remaining = min(remaining, self.expires_mono - mono)
+        return max(0.0, remaining)
 
     def public(self, mono, wall):
         return {
@@ -276,11 +300,11 @@ def _row_lease(row):
     return Lease(row["slot"], row["token"], row["owner"], row["generation"],
                  row["expires_mono"], row["expires_wall"], row["boot"] or "",
                  row["boot_clock"] or 0, row["pid"] or 0, row["state"],
-                 int(row["ttl"] or LEASE_SECONDS))
+                 int(row["ttl"] or LEASE_SECONDS), row["mono_source"] or "")
 
 
-def _expired(lease, mono, wall):
-    return mono >= lease.expires_mono or wall >= lease.expires_wall
+def _expired(lease, mono, wall, mono_source):
+    return lease.expires_in(mono, wall, mono_source) <= 0
 
 
 class Manager:
@@ -364,6 +388,7 @@ class Manager:
                 state TEXT NOT NULL DEFAULT 'free',
                 expires_mono REAL,
                 expires_wall REAL,
+                mono_source TEXT,
                 epoch TEXT,
                 pid INTEGER,
                 boot TEXT,
@@ -383,10 +408,13 @@ class Manager:
             columns = {r["name"] for r in conn.execute("PRAGMA table_info(slots)")}
             if "ttl" not in columns:
                 conn.execute("ALTER TABLE slots ADD COLUMN ttl INTEGER")
+            if "mono_source" not in columns:
+                conn.execute("ALTER TABLE slots ADD COLUMN mono_source TEXT")
             for key, value in (("schema", SCHEMA_VERSION),
                                ("epoch", secrets.token_hex(16)),
                                ("host_boot", ""),
-                               ("last_mono", "0")):
+                               ("last_mono", "0"),
+                               ("last_mono_source", "")):
                 conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES(?, ?)", (key, value))
             for name in provision.SLOTS:
                 conn.execute("INSERT OR IGNORE INTO slots(slot) VALUES(?)", (name,))
@@ -404,9 +432,11 @@ class Manager:
 
     def _touch(self, conn):
         mono, _ = self._now()
-        current = float(self._meta(conn).get("last_mono") or 0)
-        if mono > current:
+        meta = self._meta(conn)
+        current = float(meta.get("last_mono") or 0)
+        if meta.get("last_mono_source") != self.clock.source or mono > current:
             self._set_meta(conn, "last_mono", repr(mono))
+            self._set_meta(conn, "last_mono_source", self.clock.source)
 
     def _slot(self, name):
         return provision.slot(self.home, name)
@@ -451,7 +481,8 @@ class Manager:
             last_mono = float(meta.get("last_mono") or 0)
             if stored_boot and boot and stored_boot != boot:
                 restarted = True
-            if last_mono and mono + 1.0 < last_mono:
+            if (meta.get("last_mono_source") == self.clock.source
+                    and last_mono and mono + 1.0 < last_mono):
                 restarted = True
             self._set_meta(conn, "host_boot", boot or stored_boot)
             self._touch(conn)
@@ -485,7 +516,7 @@ class Manager:
             raise LeaseError("lease predates a manager restart")
         lease = _row_lease(row)
         mono, wall = self._now()
-        if _expired(lease, mono, wall):
+        if _expired(lease, mono, wall, self.clock.source):
             raise LeaseError("lease expired")
         return lease
 
@@ -523,18 +554,20 @@ class Manager:
             mono, wall = self._now()
             epoch = self._meta(conn)["epoch"]
             conn.execute("""UPDATE slots SET generation=?, token=?, owner=?, state='launching',
-                            expires_mono=?, expires_wall=?, epoch=?, pid=NULL, boot=NULL,
+                            expires_mono=?, expires_wall=?, mono_source=?, epoch=?,
+                            pid=NULL, boot=NULL,
                             boot_clock=NULL, started_wall=?, updated_wall=?, quarantine=NULL
                             WHERE slot=? AND state='free'""",
                          (generation, token, owner, mono + self.launch_window(),
-                          wall + self.launch_window(), epoch, wall, wall, row["slot"]))
+                          wall + self.launch_window(), self.clock.source, epoch,
+                          wall, wall, row["slot"]))
             self._touch(conn)
             last_boot = row["last_boot"]
 
         slot = self._slot(row["slot"])
         lease = Lease(slot.name, token, owner, generation,
                       mono + self.launch_window(), wall + self.launch_window(),
-                      "", 0, 0, "launching")
+                      "", 0, 0, "launching", mono_source=self.clock.source)
         pid = 0
         try:
             with self._slot_lock(slot.name):
@@ -565,12 +598,12 @@ class Manager:
                         raise LeaseError("reservation was revoked while booting")
                     conn.execute("""UPDATE slots SET state='active', boot=?, boot_clock=?,
                                     last_boot=?, expires_mono=?, expires_wall=?,
-                                    ttl=?, updated_wall=? WHERE token=?""",
-                                 (boot, boot_clock, boot, mono + ttl, wall + ttl, ttl,
-                                  wall, token))
+                                    mono_source=?, ttl=?, updated_wall=? WHERE token=?""",
+                                 (boot, boot_clock, boot, mono + ttl, wall + ttl,
+                                  self.clock.source, ttl, wall, token))
                     self._touch(conn)
                 return Lease(slot.name, token, owner, generation, mono + ttl, wall + ttl,
-                             boot, boot_clock, pid, "active", ttl)
+                             boot, boot_clock, pid, "active", ttl, self.clock.source)
         except BaseException as exc:
             self._fail_reservation(slot, token, lease, str(exc))
             raise
@@ -595,15 +628,16 @@ class Manager:
                         error = exc
                         if row["state"] == "active" and row["owner"] == owner:
                             mono, wall = self._now()
-                            if _expired(_row_lease(row), mono, wall):
+                            if _expired(_row_lease(row), mono, wall, self.clock.source):
                                 self._expire_locked(conn, _row_lease(row))
                     else:
                         mono, wall = self._now()
                         conn.execute("""UPDATE slots SET expires_mono=?, expires_wall=?,
-                                        ttl=?, updated_wall=? WHERE token=?""",
-                                     (mono + ttl, wall + ttl, ttl, wall, token))
+                                        mono_source=?, ttl=?, updated_wall=? WHERE token=?""",
+                                     (mono + ttl, wall + ttl, self.clock.source, ttl, wall, token))
                         lease = dataclasses.replace(lease, expires_mono=mono + ttl,
-                                                    expires_wall=wall + ttl, ttl=ttl)
+                                                    expires_wall=wall + ttl, ttl=ttl,
+                                                    mono_source=self.clock.source)
                         self._touch(conn)
                 else:
                     error = LeaseError("unknown or stale lease token")
@@ -655,7 +689,7 @@ class Manager:
                     continue
                 lease = _row_lease(row)
                 mono, wall = self._now()
-                if _expired(lease, mono, wall):
+                if _expired(lease, mono, wall, self.clock.source):
                     recoverable.append((row["slot"], lease, "expired"))
                     self._revoke(conn, row, "expired")
             self._touch(conn)
@@ -697,6 +731,7 @@ class Manager:
             epoch = secrets.token_hex(16)
             self._set_meta(conn, "epoch", epoch)
             self._set_meta(conn, "host_boot", self.effects.boot_id())
+            self._set_meta(conn, "last_mono", "0")
             for row in conn.execute("SELECT * FROM slots"):
                 if row["state"] in ("launching", "active", "recovering") and row["token"]:
                     self._revoke(conn, row, reason)
@@ -1072,13 +1107,14 @@ class Manager:
             running_pid = pid or pidfile
             alive = bool(running_pid and self.effects.process(running_pid).alive)
             lease = _row_lease(row) if row["token"] else None
-            expired = bool(lease and _expired(lease, mono, wall))
+            expired = bool(lease and _expired(lease, mono, wall, self.clock.source))
             slots.append({
                 "slot": row["slot"],
                 "state": "expired" if expired else row["state"],
                 "generation": row["generation"],
                 "owner": row["owner"],
-                "expires_in": round(lease.expires_in(mono, wall), 3) if lease else None,
+                "expires_in": round(lease.expires_in(mono, wall, self.clock.source), 3)
+                if lease else None,
                 "boot": row["boot"],
                 "pid": running_pid or None,
                 "pid_alive": alive,

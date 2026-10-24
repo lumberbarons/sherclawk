@@ -105,7 +105,11 @@ publication and evidence are `publish.py`
 - Default lease is **600 seconds**. `renew` extends it from the current time
   by at most 600 seconds. Idle reservations do not renew themselves; `run` and
   `suite` renew every minute while they are active.
-- Expiry uses the earlier of a monotonic deadline and a wall-clock deadline.
+- The wall-clock deadline is the expiry authority across processes. Within a
+  matching monotonic clock source, expiry uses the earlier of the monotonic
+  and wall-clock deadlines. Deadlines from another source (or from older
+  manager databases without a source) are checked against wall time only;
+  renewal records fresh deadlines and the renewing clock's source.
   Host sleep advances the wall deadline (macOS's monotonic clock may not), so
   a slept-through lease expires. On expiry the lease is revoked before the
   slot can be recovered or reassigned.
@@ -165,12 +169,27 @@ epoch, invalidates every lease and recovers every non-quarantined slot.
 
 The manager records the host boot identity (`kern.bootsessionuuid` on macOS,
 which a clock step cannot change, falling back to `kern.boottime`;
-`/proc/sys/kernel/random/boot_id` on Linux) and the last monotonic time. A new
-identity, or a monotonic clock that moved backwards, means the host or manager
-restarted: every previous lease is invalidated, tracked instances are stopped
-and reset, and failures are quarantined. A clean shutdown of the manager
-itself is not a restart — the CLI is stateless and the host identity persists
-— so leases survive between commands.
+`/proc/sys/kernel/random/boot_id` on Linux) and the last monotonic time with
+its source. `Clock` reads `time.clock_gettime(time.CLOCK_UPTIME_RAW)` when
+available, otherwise `CLOCK_MONOTONIC`. These OS clocks have a shared origin
+across host processes, including processes using different Python interpreters.
+This matters on macOS with `/usr/bin/python3` 3.9.6, where
+`time.monotonic()` can start near zero in each new process; comparing those
+readings would mistake an ordinary CLI invocation for a restart and revoke
+live leases. If neither OS clock is available, the manager falls back to
+`time.monotonic()` with an identity unique to that Clock instance, so its
+persisted readings are never compared with another instance's readings.
+
+The database records the source alongside both `last_mono` and each lease's
+`expires_mono`. A source change, including an upgrade from a database without
+source tracking, preserves the epoch and leases and uses wall time for those
+leases. A new host boot identity, or a monotonic clock that moved backwards
+within the same source, means the host or manager restarted: every previous
+lease is invalidated, tracked instances are stopped and reset, and failures
+are quarantined. Recovery resets the saved monotonic
+baseline so subsequent commands do not repeat the restart. A clean shutdown
+of the manager itself is not a restart — the CLI is stateless and the host
+identity persists — so leases survive between commands.
 
 Host sleep is not a restart. Leases lapse through the wall deadline instead.
 
