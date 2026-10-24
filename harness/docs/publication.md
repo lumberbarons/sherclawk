@@ -99,7 +99,8 @@ closed non-pass, `2` stale lease or usage, `3` publication or host failure.
 A failed or missing result is never a pass: a timeout reports `unknown`
 (also the evidence `phase`), malformed evidence is refused, and nothing is
 replayed. Every failure after the run began names its evidence directory on
-stderr.
+stderr. The unattended suite runner (`suite.py`, [suite.md](suite.md)) calls
+the same publication path for every registered check and never retries one.
 
 ## Evidence
 

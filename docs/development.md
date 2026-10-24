@@ -228,7 +228,11 @@ and `tools/guest-input.py` and `tools/utm_qmp.py` (thin wrappers that drive the
 UTM guest through the harness's `harness/guest.py`; see
 [driving a guest](../harness/docs/driving.md)). Diagnostic runs are published
 and collected by `harness/publish.py`
-([publication](../harness/docs/publication.md)).
+([publication](../harness/docs/publication.md)); the unattended suite over
+`tools/native-suite.json` is `harness/suite.py`
+([suite](../harness/docs/suite.md)). The suite checks keep their manual
+`Retro68:<Name>.log` behavior when no harness config is present; under a
+suite each writes into its private run workspace instead.
 
 ```bash
 APP=SherclawkHandoffCheck tools/deploy-to-share.sh
@@ -346,7 +350,12 @@ APP=SherclawkSelfBuildCheck tools/deploy-to-share.sh
 APP=SherclawkSelfBuildStopCheck tools/deploy-to-share.sh
 ```
 
-Run with the queue unowned and ToolServer idle. It checks independent and starter
+Run with the queue unowned and ToolServer idle. These two targets are compiled
+with the queue name `buildjobs`, so a manual run creates and uses
+`Retro68:buildjobs` (the workspace root's `buildjobs`) and never touches
+`Worker01:buildjobs`, which the application itself uses; check for orphaned
+locks in the former. They therefore exercise the same code with a different
+queue name than the shipped application. It checks independent and starter
 projects with multiple sources, explicit native ownership, resource structure,
 compiler failures, revision-bound edits and fresh build IDs. Evidence is recorded
 in `Retro68:SherclawkSelfBuildCheck.log`; acceptance is recorded in the

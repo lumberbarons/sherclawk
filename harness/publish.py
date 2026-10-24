@@ -600,7 +600,7 @@ class Run:
     def result_path(self):
         return os.path.join(self.mailbox_share, contract.filename(self.request, "result"))
 
-    def collect(self, timeout=None, screenshot=True):
+    def collect(self, timeout=None, screenshot=True, on_poll=None):
         """Wait for the closed result, then retain the attributable evidence."""
         if self.request is None:
             raise PublicationError("publish the request before collecting")
@@ -613,6 +613,8 @@ class Run:
         def wait():
             deadline = self.publisher.clock.monotonic() + timeout
             while self.publisher.clock.monotonic() < deadline:
+                if on_poll is not None:
+                    on_poll()
                 try:
                     with open(result_path, "rb") as f:
                         data = f.read(contract.REPORT_CAP)

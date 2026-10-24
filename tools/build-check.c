@@ -24,6 +24,20 @@
 #include <stdio.h>
 #include <string.h>
 #include "diagnostic-tools.h"
+#include "harness/native/diagnostic.h"
+#if defined(SELF_BUILD_STOP_CHECK)
+#define HARNESS_NAME "SherclawkSelfBuildStopCheck"
+#define LOG_NAME "SherclawkSelfBuildStopCheck.log"
+#elif defined(SELF_BUILD_CHECK)
+#define HARNESS_NAME "SherclawkSelfBuildCheck"
+#define LOG_NAME "SherclawkSelfBuildCheck.log"
+#elif defined(QUIT_CHECK)
+#define LOG_NAME "SherclawkQuitCheck.log"
+#elif defined(RUN_CHECK)
+#define LOG_NAME "SherclawkRunCheck.log"
+#else
+#define LOG_NAME "SherclawkBuildCheck.log"
+#endif
 static FILE *logfile;
 static char result[AGENT_RESULT_CAP],folder[64];
 static AgentCall call;
@@ -33,10 +47,22 @@ static int journal(void *ctx,const char *event,const char *json)
     (void)ctx;
     return fprintf(logfile,"{\"event\":\"%s\",\"message\":%s}\n",event,json)<0 || fflush(logfile) || FlushVol(NULL,0) ? -1 : 0;
 }
+static void report_check(int ok,const char *name)
+{
+#ifdef HARNESS_NAME
+    harness_check(ok,name);
+#else
+    (void)name;
+#endif
+    fprintf(logfile,"%s %s\n",ok ? "PASS" : "FAIL",name); fflush(logfile);
+    if(!ok)failures++;
+}
 static void invoke(const char *name,const char *arguments)
 {
+    int ok;
     strcpy(call.id,"buildcheck"); strcpy(call.name,name); strcpy(call.arguments,arguments);
-    if(tools_execute_recorded(&call,result,sizeof(result),journal,NULL) || !strstr(result,"\"status\":\"ok\""))failures++;
+    ok=!tools_execute_recorded(&call,result,sizeof(result),journal,NULL) && strstr(result,"\"status\":\"ok\"");
+    report_check(ok,name);
     fprintf(logfile,"TOOL %s %s\n",name,result); fflush(logfile);
 }
 static void write_file(const char *name,const char *text)
@@ -113,11 +139,11 @@ static int artifact_check(const char *path)
     CloseResFile(file);UseResFile(previous);return ok ? 0 : -1;
 }
 #endif
-static int build(WindowPtr window,int success)
+static int build(WindowPtr window,int success,const char *label)
 {
-    EventRecord event; int r,stop=0;
+    EventRecord event; int r,stop=0,before=failures;
 #ifdef SELF_BUILD_CHECK
-    if(process_check()) {failures++;return 1;}
+    if(process_check()) {report_check(0,label);return 1;}
 #endif
     snprintf(call.arguments,sizeof(call.arguments),"{\"path\":\"%s\"}",folder);
     r=build_project_begin(&call,result,sizeof(result),journal,NULL,(uint32_t)TickCount());
@@ -175,7 +201,7 @@ static int build(WindowPtr window,int success)
 #ifdef RUN_CHECK
     if(!r) {
         JsonToken t[128]; char id[25]; int launched;
-        if(json_parse(result,strlen(result),t,128)<1 || json_string(result,t,json_member(result,t,0,"build_id"),id,sizeof(id))<0) {failures++;return 1;}
+        if(json_parse(result,strlen(result),t,128)<1 || json_string(result,t,json_member(result,t,0,"build_id"),id,sizeof(id))<0) {report_check(0,label);return 1;}
         snprintf(call.arguments,sizeof(call.arguments),"{\"build_id\":\"%s\"}",id);
         launched=run_application_begin(&call,result,sizeof(result),journal,NULL,(uint32_t)TickCount());
         while(launched==2) {
@@ -189,7 +215,7 @@ static int build(WindowPtr window,int success)
             char handle[32];JsonToken reply_tokens[128];int q;
             if(json_parse(result,strlen(result),reply_tokens,128)<1 ||
                json_string(result,reply_tokens,json_member(result,reply_tokens,0,"run_id"),handle,sizeof(handle))<0 ||
-               !strstr(result,"\"quit_supported\":true")) {failures++;return 1;}
+               !strstr(result,"\"quit_supported\":true")) {report_check(0,label);return 1;}
             snprintf(call.arguments,sizeof(call.arguments),"{\"run_id\":\"%s\"}",handle);
             q=quit_application_begin(&call,result,sizeof(result),journal,NULL,(uint32_t)TickCount());
             while(q==2) {
@@ -217,7 +243,7 @@ static int build(WindowPtr window,int success)
                 fprintf(logfile,"PREEXISTING %s\n",result);fflush(logfile);
                 if(q || !strstr(result,"PROCESS_PREEXISTED") || !strstr(result,handle))failures++;
                 if(json_parse(result,strlen(result),reply_tokens,128)<1 ||
-                   json_string(result,reply_tokens,json_member(result,reply_tokens,0,"run_id"),handle,sizeof(handle))<0) {failures++;return 1;}
+                   json_string(result,reply_tokens,json_member(result,reply_tokens,0,"run_id"),handle,sizeof(handle))<0) {report_check(0,label);return 1;}
                 snprintf(call.arguments,sizeof(call.arguments),"{\"run_id\":\"%s\"}",handle);
                 q=quit_application_begin(&call,result,sizeof(result),journal,NULL,(uint32_t)TickCount());
                 fprintf(logfile,"PREEXISTING_QUIT %s\n",result);fflush(logfile);
@@ -228,28 +254,38 @@ static int build(WindowPtr window,int success)
     }
 #endif
 #ifdef SELF_BUILD_STOP_CHECK
+    report_check(failures==before,label);
     return 0;
 #else
+    report_check(failures==before,label);
     return r;
 #endif
 }
 int main(void)
 {
-    char args[640],revision[80],repair[sizeof("#error deliberate build_project compiler error\r")],qr[300]; JsonToken t[64]; WindowPtr window; Rect bounds;
+    char args[640],revision[80],repair[sizeof("#error deliberate build_project compiler error\r")],qr[300],logpath[256]; JsonToken t[64]; WindowPtr window; Rect bounds;
     InitGraf(&qd.thePort); InitFonts(); InitWindows(); InitMenus(); TEInit(); InitDialogs(NULL); InitCursor();
-    #ifdef QUIT_CHECK
-    logfile=fopen(SHERCLAWK_WORKSPACE "SherclawkQuitCheck.log","w");
-#elif defined(SELF_BUILD_STOP_CHECK)
-    logfile=fopen(SHERCLAWK_WORKSPACE "SherclawkSelfBuildStopCheck.log","w");
-#elif defined(SELF_BUILD_CHECK)
-    logfile=fopen(SHERCLAWK_WORKSPACE "SherclawkSelfBuildCheck.log","w");
-#elif defined(RUN_CHECK)
-    logfile=fopen(SHERCLAWK_WORKSPACE "SherclawkRunCheck.log","w");
-#else
-    logfile=fopen(SHERCLAWK_WORKSPACE "SherclawkBuildCheck.log","w");
+#ifdef HARNESS_NAME
+    { int h=harness_begin(HARNESS_NAME); if(h<0)return 1;
+      if(harness_workspace())tools_set_workspace(harness_workspace()); }
 #endif
-    if(!logfile)return 1;
-    if(selfbuild_init()) {fclose(logfile);return 1;}
+    snprintf(logpath,sizeof(logpath),"%s%s",tools_workspace(),LOG_NAME);
+    logfile=fopen(logpath,"w");
+    if(!logfile) {
+#ifdef HARNESS_NAME
+        return harness_finish(1);
+#else
+        return 1;
+#endif
+    }
+    if(selfbuild_init()) {
+        fclose(logfile);
+#ifdef HARNESS_NAME
+        return harness_finish(1);
+#else
+        return 1;
+#endif
+    }
     snprintf(folder,sizeof(folder),"BuildCheck%08lx",(unsigned long)TickCount());
     snprintf(args,sizeof(args),"{\"path\":\"%s\"}",folder); invoke("create_folder",args);
     write_file("project.json","{\"protocol\":2,\"toolchain\":\"mpw-ppc-v2\",\"sources\":[\"main.c\",\"extra.c\"],\"resources\":[\"app.r\"],\"headers\":[\"shared.h\"],\"include_paths\":[\".\"],\"output\":\"independent\"}\n");
@@ -264,35 +300,39 @@ int main(void)
     write_large_source("#error deliberate build_project compiler error\n#include \"shared.h\"\nconst unsigned char *message(void) { return \"\\pTwo source files compiled natively\"; }\n");
     write_file("app.r","#include \"Types.r\"\nresource 'SIZE' (-1) { reserved, acceptSuspendResumeEvents, reserved, canBackground, doesActivateOnFGSwitch, backgroundAndForeground, dontGetFrontClicks, ignoreAppDiedEvents, is32BitCompatible, isHighLevelEventAware, onlyLocalHLEvents, notStationeryAware, dontUseTextEditServices, reserved, reserved, reserved, 524288, 524288 };\n");
     SetRect(&bounds,70,210,570,310); window=NewWindow(NULL,&bounds,(const unsigned char *)"\025Sherclawk build check",true,documentProc,(WindowPtr)-1,false,0);
-    if(build(window,0))goto done;
+    if(build(window,0,"initial build reports the compiler error"))goto done;
 #ifdef SELF_BUILD_STOP_CHECK
     goto done;
 #endif
     snprintf(args,sizeof(args),"{\"path\":\"%s:extra.c\"}",folder); invoke("read_text",args);
-    if(json_parse(result,strlen(result),t,64)<1 || json_string(result,t,json_member(result,t,0,"revision"),revision,sizeof(revision))<0){failures++;goto done;}
+    if(json_parse(result,strlen(result),t,64)<1 || json_string(result,t,json_member(result,t,0,"revision"),revision,sizeof(revision))<0){report_check(0,"read extra.c revision");goto done;}
     memset(repair,' ',sizeof(repair)-2);repair[sizeof(repair)-2]='\r';repair[sizeof(repair)-1]=0;
     json_quote(repair,qr,sizeof(qr));
     snprintf(args,sizeof(args),"{\"path\":\"%s:extra.c\",\"expected_revision\":\"%s\",\"old_text\":\"#error deliberate build_project compiler error\\n\",\"new_text\":%s}",folder,revision,qr); invoke("edit_text",args);
-    if(build(window,1))goto done;
+    if(build(window,1,"repaired independent build"))goto done;
 #ifdef SELF_BUILD_CHECK
     replace("extra.c","Two source files compiled natively","Fresh revision compiled natively");
-    if(build(window,1))goto done;
+    if(build(window,1,"fresh revision independent build"))goto done;
 #endif
     strcat(folder,"s");
     snprintf(args,sizeof(args),"{\"path\":\"%s\"}",folder); invoke("create_project",args);
     replace("project.json","\"sources\":[\"main.c\",","\"sources\":[\"main.c\",\"extra.c\",");
     replace("project.json","\"output\":\"template\"","\"output\":\"starter\"");
     write_file("extra.c","#error deliberate starter compiler error\nint added_source(void) { return 7; }\n");
-    if(build(window,0))goto done;
+    if(build(window,0,"starter build reports the compiler error"))goto done;
     replace("extra.c","#error deliberate starter compiler error\n","");
-    if(build(window,1))goto done;
+    if(build(window,1,"starter repaired build"))goto done;
 #ifdef SELF_BUILD_CHECK
     replace("extra.c","return 7;","return 8;");
-    build(window,1);
+    build(window,1,"starter fresh revision build");
 #endif
 done:
     fprintf(logfile,"RESULT failures=%d project=%s\n",failures,folder); fflush(logfile); FlushVol(NULL,0); fclose(logfile);
     selfbuild_close();
     if(window)DisposeWindow(window);
+#ifdef HARNESS_NAME
+    return harness_finish(failures);
+#else
     return failures ? 1 : 0;
+#endif
 }

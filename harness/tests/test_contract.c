@@ -14,6 +14,20 @@ int main(void)
     char buf[H_REPORT_CAP], name[H_NAME_CAP];
     unsigned int i;
     assert(h_request_parse(request, strlen(request), &r));
+    assert(h_diagnostic_count > 0);
+    for (i = 0; i < h_diagnostic_count; i++) {
+        assert(h_registered(h_diagnostics[i]));
+        other = r;
+        strcpy(other.diagnostic, h_diagnostics[i]);
+        snprintf(other.application, sizeof(other.application),
+                 "Retro68:Harness:r:%s", h_diagnostics[i]);
+        assert(h_request_format(&other, buf, sizeof(buf)) > 0);
+        assert(h_request_parse(buf, strlen(buf), &other));
+    }
+    other = r;
+    strcpy(other.diagnostic, "SherclawkBuildCheck");
+    strcpy(other.application, "Retro68:Harness:r:SherclawkBuildCheck");
+    assert(h_request_format(&other, buf, sizeof(buf)) < 0);
     assert(!h_request_parse(request, strlen(request)-1, &other));
     strcpy(buf, request); strcat(buf, "junk\r");
     assert(!h_request_parse(buf, strlen(buf), &other));

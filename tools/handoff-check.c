@@ -3,12 +3,14 @@
 #define main SherclawkMain
 #include "app/main.c"
 #undef main
+#include "harness/native/diagnostic.h"
 
 static Agent original;
 static FILE *check_log;
 static int failures;
 static void Check(const char *name, int ok)
 {
+    harness_check(ok, name);
     fprintf(check_log, "%s %s\n", ok ? "PASS" : "FAIL", name);
     if (!ok) failures++;
 }
@@ -18,13 +20,20 @@ static int CommitHandoff(void)
 }
 int main(void)
 {
-    char error[256], old_path[256];
+    char error[256], old_path[256], logpath[256];
+    int harness;
+    int result;
     InitGraf(&qd.thePort); InitFonts(); InitWindows(); InitMenus();
     TEInit(); InitDialogs(NULL); InitCursor();
+    harness = harness_begin("SherclawkHandoffCheck");
+    if (harness < 0) return 1;
+    if (harness_workspace()) tools_set_workspace(harness_workspace());
     RunInit();
     UIInit();
-    check_log = fopen("Retro68:SherclawkHandoffCheck.log", "w");
-    if (!check_log) return 1;
+    snprintf(logpath, sizeof(logpath), "%sSherclawkHandoffCheck.log",
+             tools_workspace());
+    check_log = fopen(logpath, "w");
+    if (!check_log) return harness_finish(1);
     fprintf(check_log, "FreeMem after UI=%ld, MaxBlock=%ld\n", (long)FreeMem(), (long)MaxBlock());
     agent_reset(&gAgent, session_journal, &gSession);
     Check("create original journal", !session_open(&gSession, tools_workspace()));
@@ -54,13 +63,18 @@ int main(void)
     session_close(&gSession);
     fprintf(check_log, "RESULT failures=%d\n", failures);
     fclose(check_log); FlushVol(NULL, 0);
-    ShowMessage("Handoff diagnostic", failures ? "FAILED. See SherclawkHandoffCheck.log" : "PASS. Markdown saved, verified, and seeded into a new journal. Encoding and size failures retained original history.");
-    SetStatus("Handoff diagnostic: %d failure(s).", failures);
-    while (!gQuit) {
-        EventRecord event;
-        WaitNextEvent(everyEvent, &event, 10, NULL);
-        SetPort(gWindow); HandleEvent(&event);
+    result = harness_finish(failures);
+    /* Manual mode keeps its visible result and waits for Quit; an unattended
+     * harness run must exit as soon as the report is closed. */
+    if (harness == 0) {
+        ShowMessage("Handoff diagnostic", failures ? "FAILED. See SherclawkHandoffCheck.log" : "PASS. Markdown saved, verified, and seeded into a new journal. Encoding and size failures retained original history.");
+        SetStatus("Handoff diagnostic: %d failure(s).", failures);
+        while (!gQuit) {
+            EventRecord event;
+            WaitNextEvent(everyEvent, &event, 10, NULL);
+            SetPort(gWindow); HandleEvent(&event);
+        }
     }
     UIDispose();
-    return failures ? 1 : 0;
+    return result;
 }

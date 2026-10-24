@@ -9,7 +9,10 @@ import re
 REQUEST_CAP = 1024
 REPORT_CAP = 32768
 CHECK_MAX = 256
-DIAGNOSTICS = ("SherclawkWriteCheck", "SherclawkInspectCheck", "HarnessAcceptance")
+DIAGNOSTICS = ("SherclawkWriteCheck", "SherclawkSearchCheck", "SherclawkEditCheck",
+               "SherclawkInspectCheck", "SherclawkProjectCheck", "SherclawkScrollCheck",
+               "SherclawkHandoffCheck", "SherclawkSelfBuildCheck",
+               "SherclawkSelfBuildStopCheck", "HarnessAcceptance")
 OUTCOMES = ("passed", "failed", "harness_error", "stopped", "unknown")
 
 

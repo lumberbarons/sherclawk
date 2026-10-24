@@ -1,0 +1,86 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "name": "write",
+      "target": "SherclawkWriteCheck",
+      "timeout": 180,
+      "expect": "passed",
+      "reset": "keep",
+      "mode": "automated",
+      "description": "Create-only writes, exact MacRoman/CR bytes, collisions and limits."
+    },
+    {
+      "name": "search",
+      "target": "SherclawkSearchCheck",
+      "timeout": 180,
+      "expect": "passed",
+      "reset": "keep",
+      "mode": "automated",
+      "description": "AFP catalog walking, pagination, cursors and a search/read/edit cycle."
+    },
+    {
+      "name": "edit",
+      "target": "SherclawkEditCheck",
+      "timeout": 300,
+      "expect": "passed",
+      "reset": "keep",
+      "mode": "automated",
+      "description": "Revision-guarded edits, backups, locking and 64 KiB boundaries."
+    },
+    {
+      "name": "inspect",
+      "target": "SherclawkInspectCheck",
+      "timeout": 300,
+      "expect": "passed",
+      "reset": "keep",
+      "mode": "automated",
+      "description": "Catalog, alias, resource, font and file-info inspection."
+    },
+    {
+      "name": "project",
+      "target": "SherclawkProjectCheck",
+      "timeout": 180,
+      "expect": "passed",
+      "reset": "keep",
+      "mode": "automated",
+      "description": "Project template publication, Finder metadata and collisions."
+    },
+    {
+      "name": "scroll",
+      "target": "SherclawkScrollCheck",
+      "timeout": 120,
+      "expect": "passed",
+      "reset": "keep",
+      "mode": "automated",
+      "description": "Main-window focus, TextEdit paging and scroll control geometry."
+    },
+    {
+      "name": "handoff",
+      "target": "SherclawkHandoffCheck",
+      "timeout": 180,
+      "expect": "passed",
+      "reset": "keep",
+      "mode": "automated",
+      "description": "Handoff persistence, journal switching and refusal paths."
+    },
+    {
+      "name": "selfbuild",
+      "target": "SherclawkSelfBuildCheck",
+      "timeout": 600,
+      "expect": "passed",
+      "reset": "reset",
+      "mode": "automated",
+      "description": "Native MPW ToolServer builds in the run's private buildjobs queue."
+    },
+    {
+      "name": "selfbuild-stop",
+      "target": "SherclawkSelfBuildStopCheck",
+      "timeout": 300,
+      "expect": "passed",
+      "reset": "reset",
+      "mode": "automated",
+      "description": "Native Stop, late drain and uncertain build evidence."
+    }
+  ]
+}

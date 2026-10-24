@@ -17,6 +17,7 @@
 #include <AppleEvents.h>
 #include <stdio.h>
 #include <string.h>
+#include "harness/native/diagnostic.h"
 
 static FILE *logfile;
 static int records, failures, stopped;
@@ -30,13 +31,15 @@ static int journal(void *ctx, const char *event, const char *json)
 }
 static void check(int condition, const char *name)
 {
+    harness_check(condition, name);
     fprintf(logfile,"%s %s\n",condition ? "PASS" : "FAIL",name);
     if (!condition) failures++;
     fflush(logfile);
 }
 static void execute(void)
 {
-    if (stopped) { failures++; return; }
+    /* The failed step was already named; skip the rest of the run's steps. */
+    if (stopped) { fprintf(logfile,"SKIP %s after a stopped step\n",call.name);fflush(logfile);return; }
     {
         uint32_t started=(uint32_t)TickCount(),maximum=0;int r;
         /* Start directly: the acceptance harness services and times each step. */
@@ -55,6 +58,7 @@ static void execute(void)
             fprintf(logfile,"STEP phase=%s ticks=%lu free_heap=%ld\n",phase,(unsigned long)elapsed,(long)FreeMem());
         }
         stopped=r;
+        if(stopped)check(0,"tool step completed");
         fprintf(logfile,"TIMING tool=%s total_ticks=%lu maximum_step_ticks=%lu free_heap=%ld\n",call.name,
             (unsigned long)((uint32_t)TickCount()-started),(unsigned long)maximum,(long)FreeMem());
     }
@@ -69,7 +73,7 @@ static int field(const char *key, char *out, size_t cap)
 static OSErr spec_for(const char *relative, FSSpec *spec)
 {
     char full[256];Str255 native;
-    snprintf(full,sizeof(full),"%s%s",SHERCLAWK_WORKSPACE,relative);
+    snprintf(full,sizeof(full),"%s%s",tools_workspace(),relative);
     native[0]=(unsigned char)strlen(full);memcpy(native+1,full,native[0]);
     return FSMakeFSSpec(0,0,native,spec);
 }
@@ -77,7 +81,7 @@ static void create_fixture(const char *name, const char *text)
 {
     static char quoted[AGENT_ARGUMENT_CAP-400];
     snprintf(path,sizeof(path),"%s:%s",folder,name);strcpy(call.name,"write_text");
-    if(json_quote(text,quoted,sizeof(quoted))<0) { failures++;return; }
+    if(json_quote(text,quoted,sizeof(quoted))<0) { check(0,"fixture text quoted");return; }
     snprintf(call.arguments,sizeof(call.arguments),"{\"path\":\"%s\",\"text\":%s}",path,quoted);execute();
     check(strstr(result,"CREATED")!=NULL,"fixture created");
 }
@@ -88,7 +92,7 @@ static void read_page(int offset)
 static void edit(const char *revision, const char *old, const char *text)
 {
     static char qo[2048], qn[4096];
-    if(json_quote(old,qo,sizeof(qo))<0 || json_quote(text,qn,sizeof(qn))<0) { failures++;return; }
+    if(json_quote(old,qo,sizeof(qo))<0 || json_quote(text,qn,sizeof(qn))<0) { check(0,"edit arguments quoted");return; }
     strcpy(call.name,"edit_text");
     snprintf(call.arguments,sizeof(call.arguments),"{\"path\":\"%s\",\"expected_revision\":\"%s\",\"old_text\":%s,\"new_text\":%s}",path,revision,qo,qn);execute();
 }
@@ -136,16 +140,19 @@ int main(void)
 {
     FSSpec spec;
     CInfoPBRec pb;
-    char revision[80] = "", updated[80] = "", backup[768], raw[4098];
+    char revision[80] = "", updated[80] = "", backup[768], raw[4098], logpath[256];
     short ref;
     long dir, size;
     OSErr err;
     int before;
     InitGraf(&qd.thePort);InitFonts();InitWindows();InitMenus();TEInit();InitDialogs(NULL);InitCursor();
-    logfile=fopen(SHERCLAWK_WORKSPACE "SherclawkEditCheck.log","w");if(!logfile)return 1;
+    if(harness_begin("SherclawkEditCheck") < 0) return 1;
+    if(harness_workspace()) tools_set_workspace(harness_workspace());
+    snprintf(logpath,sizeof(logpath),"%sSherclawkEditCheck.log",tools_workspace());
+    logfile=fopen(logpath,"w");if(!logfile)return harness_finish(1);
     snprintf(folder,sizeof(folder),"Sherclawk Edit %08lx",(unsigned long)TickCount());
     err=spec_for(folder,&spec);
-    if(err!=fnfErr || FSpDirCreate(&spec,smSystemScript,&dir)) { fclose(logfile);return 1; }
+    if(err!=fnfErr || FSpDirCreate(&spec,smSystemScript,&dir)) { fclose(logfile);return harness_finish(1); }
     memset(&call,0,sizeof(call));strcpy(call.id,"native-edit");
     create_fixture("hello.c","/* caf\xc3\xa9 */\r\nint main(void) { return 0; }\n");
     read_page(0);check(field("revision",revision,sizeof(revision)) && strstr(result,"\"editable\":true"),"whole-file editable revision");
@@ -195,5 +202,5 @@ int main(void)
         if(length==65536) { before=records;edit(updated,"UNIQUE","UNIQUEx");check(strstr(result,"LIMIT")!=NULL && records==before,"growth above 64 KiB refused"); }
     }
     fprintf(logfile,"RESULT failures=%d stopped=%d fixture=%s\n",failures,stopped,folder);fflush(logfile);FlushVol(NULL,0);fclose(logfile);
-    return failures ? 1 : 0;
+    return harness_finish(failures);
 }

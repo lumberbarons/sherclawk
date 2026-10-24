@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "diagnostic-tools.h"
+#include "harness/native/diagnostic.h"
 static FILE *logfile;
 static AgentCall call;
 static char result[AGENT_RESULT_CAP];
@@ -25,11 +26,13 @@ static int journal(void *ctx,const char *event,const char *json)
 }
 static void execute(void)
 {
-    if(tools_execute_recorded(&call,result,sizeof(result),journal,NULL))failures++;
+    int stop=tools_execute_recorded(&call,result,sizeof(result),journal,NULL);
+    if(stop) { failures++; harness_check(0,call.name); }
     fprintf(logfile,"%s %s\n",call.name,result);fflush(logfile);
 }
 static void check(int ok,const char *name)
 {
+    harness_check(ok,name);
     fprintf(logfile,"%s %s\n",ok ? "PASS" : "FAIL",name);if(!ok)failures++;fflush(logfile);
 }
 static int field(const char *key,char *out,size_t cap)
@@ -40,14 +43,17 @@ static int field(const char *key,char *out,size_t cap)
 static OSErr folder_create(const char *relative)
 {
     FSSpec spec;Str255 p;char full[256];long dir;OSErr err;
-    snprintf(full,sizeof(full),"%s%s",SHERCLAWK_WORKSPACE,relative);p[0]=(unsigned char)strlen(full);memcpy(p+1,full,p[0]);
+    snprintf(full,sizeof(full),"%s%s",tools_workspace(),relative);p[0]=(unsigned char)strlen(full);memcpy(p+1,full,p[0]);
     err=FSMakeFSSpec(0,0,p,&spec);return err==fnfErr ? FSpDirCreate(&spec,smSystemScript,&dir) : dupFNErr;
 }
 int main(void)
 {
-    char folder[80], sub[100], path[140], cursor[256], revision[80], updated[80];
+    char folder[80], sub[100], path[140], cursor[256], revision[80], updated[80], logpath[256];
     InitGraf(&qd.thePort);InitFonts();InitWindows();InitMenus();TEInit();InitDialogs(NULL);InitCursor();
-    logfile=fopen(SHERCLAWK_WORKSPACE "SherclawkSearchCheck.log","w");if(!logfile)return 1;
+    if(harness_begin("SherclawkSearchCheck") < 0) return 1;
+    if(harness_workspace()) tools_set_workspace(harness_workspace());
+    snprintf(logpath,sizeof(logpath),"%sSherclawkSearchCheck.log",tools_workspace());
+    logfile=fopen(logpath,"w");if(!logfile)return harness_finish(1);
     snprintf(folder,sizeof(folder),"Sherclawk Search %08lx",(unsigned long)TickCount());
     snprintf(sub,sizeof(sub),"%s:Sources",folder);snprintf(path,sizeof(path),"%s:hello.c",sub);
     check(!folder_create(folder) && !folder_create(sub),"fixture folders");
@@ -61,5 +67,5 @@ int main(void)
     strcpy(call.name,"edit_text");snprintf(call.arguments,sizeof(call.arguments),"{\"path\":\"%s\",\"expected_revision\":\"%s\",\"old_text\":\"copper lobster\",\"new_text\":\"silver lobster\"}",path,revision);execute();check(strstr(result,"EDITED") && field("revision",updated,sizeof(updated)),"guarded edit of discovered source");
     strcpy(call.name,"read_text");snprintf(call.arguments,sizeof(call.arguments),"{\"path\":\"%s\"}",path);execute();check(strstr(result,"silver lobster") && strstr(result,updated),"verify edit");
     strcpy(call.name,"search_text");snprintf(call.arguments,sizeof(call.arguments),"{\"root\":\"%s\",\"query\":\"caf\\u00e9\",\"recursive\":true}",folder);execute();check(strstr(result,"\"line\":1")!=NULL,"MacRoman query");
-    fprintf(logfile,"RESULT failures=%d\n",failures);fclose(logfile);return failures ? 1 : 0;
+    fprintf(logfile,"RESULT failures=%d\n",failures);fclose(logfile);return harness_finish(failures);
 }

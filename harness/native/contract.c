@@ -31,10 +31,19 @@ static int path(const char *s, int directory)
     return n > 2 && n <= 220 && s[0] != ':' && strchr(s, ':') &&
         !strstr(s, "::") && (s[n-1] == ':') == directory;
 }
+const char *const h_diagnostics[] = {
+    "SherclawkWriteCheck", "SherclawkSearchCheck", "SherclawkEditCheck",
+    "SherclawkInspectCheck", "SherclawkProjectCheck", "SherclawkScrollCheck",
+    "SherclawkHandoffCheck", "SherclawkSelfBuildCheck",
+    "SherclawkSelfBuildStopCheck", "HarnessAcceptance"
+};
+const unsigned int h_diagnostic_count =
+    sizeof(h_diagnostics) / sizeof(*h_diagnostics);
 int h_registered(const char *s)
 {
-    return !strcmp(s, "SherclawkWriteCheck") || !strcmp(s, "SherclawkInspectCheck") ||
-        !strcmp(s, "HarnessAcceptance");
+    unsigned int i;
+    for (i = 0; i < h_diagnostic_count; i++) if (!strcmp(s, h_diagnostics[i])) return 1;
+    return 0;
 }
 static int valid(const HRequest *r)
 {

@@ -16,6 +16,10 @@ repository and meant to be extracted later, so it imports nothing from
   workspace, with the exact netatalk fork/xattr layout verified before the
   mailbox request and retained per-run evidence.
   See [`docs/publication.md`](docs/publication.md).
+- `suite.py` — the unattended suite runner over a consumer-owned registry:
+  serial publication, expected-outcome completion, reset policy, suite
+  summary, and lease-checked screenshot/input/stop for interactive checks.
+  See [`docs/suite.md`](docs/suite.md).
 - `guest.py` — the public command line for driving a guest over QMP:
   screenshots, keys, text and pointer control, for a slot, any QMP socket or
   the UTM VM. `qmp.py` (bounded protocol, input and capture), `screen.py`

@@ -2,14 +2,19 @@
 
 `native/` is the standalone PowerPC Startup Items controller, its host-testable
 cooperative state machine, closed-file I/O and public diagnostic adapter. It
-includes no Sherclawk headers or helpers. The Sherclawk consumers are
-`tools/write-check.c` and `tools/inspect-check.c`; their compiled default
-workspace and manual logging remain available when no harness config exists.
-No API key or running Sherclawk agent is needed.
+includes no Sherclawk headers or helpers. The Sherclawk consumers are the
+registered diagnostic checks listed below plus the `HarnessAcceptance` fixture;
+their compiled default workspace and manual logging remain available when no
+harness config exists. No API key or running Sherclawk agent is needed.
+
+The unattended runner is `suite.py`, and the consumer registry that names the
+checks, their deadlines and reset policies is `tools/native-suite.json`
+(see [`suite.md`](suite.md)).
 
 ## Build and install
 
-Build all six applications before booting or reserving a guest:
+Build the controller, installer, acceptance fixture and all the diagnostic
+checks before booting or reserving a guest:
 
 ```bash
 ./build.sh HarnessChecks_APPL
@@ -98,7 +103,10 @@ END
 
 These examples show records on separate lines for readability; the actual
 separator is CR. Requests are smaller than 1024 bytes. Registered names are
-`SherclawkWriteCheck`, `SherclawkInspectCheck`, and the explicit test fixture
+`SherclawkWriteCheck`, `SherclawkSearchCheck`, `SherclawkEditCheck`,
+`SherclawkInspectCheck`, `SherclawkProjectCheck`, `SherclawkScrollCheck`,
+`SherclawkHandoffCheck`, `SherclawkSelfBuildCheck`,
+`SherclawkSelfBuildStopCheck`, and the explicit test fixture
 `HarnessAcceptance`. The application's final path component must equal its
 registered name. Create the workspace and publish all fixture inputs before
 publishing the request. The caller grants the exact application and workspace
@@ -178,7 +186,8 @@ pass, one for a validated nonpass, and two for missing/invalid evidence. The
 CLI neither reserves guests nor retries launches.
 
 Host tests run in `tools/check.sh`: C protocol and controller-state fault
-suites plus stdlib Python codec, publication, readiness and provisioning tests.
+suites plus stdlib Python codec, publication, reservation, suite/registry,
+readiness and provisioning tests.
 `HarnessAcceptance` reads a closed `scenario` file in its private workspace:
 `pass`, `fail`, `early`, `partial`, `identity`, `target`, `badconfig` or `wait`.
 `target` deliberately mismatches the diagnostic name; `badconfig` corrupts the

@@ -264,6 +264,9 @@ build_test test-harness-run "${WARN[@]}" -I"$HERE" \
     "$HERE/harness/tests/test_run.c" "$HERE/harness/native/run.c" "$HERE/harness/native/contract.c"
 run_test test-harness-run
 python3 -I -m unittest discover -s "$HERE/harness/tests"
+# Sherclawk's own suite registry is consumer data, not harness code; validate
+# it here so a typo cannot silently drop a diagnostic from the unattended run.
+python3 "$HERE/harness/suite.py" validate --registry "$HERE/tools/native-suite.json"
 
 echo
 echo "Cost table (host counts; convert to guest ticks with docs/development.md#cost-table-and-guest-calibration)"
