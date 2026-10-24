@@ -28,7 +28,10 @@ repository and meant to be extracted later, so it imports nothing from
 - `timing.py` — read-only phase timings and checks per hour from retained
   suite evidence, for one guest or several suites that ran together.
 - `skills/os9-guests/` — the agent skill for the guests: status, the suite,
-  driving, evidence and recovery. It lives here so it moves with the harness.
+  driving, evidence and recovery. It lives here so it moves with the harness;
+  an agent runtime does not discover it here, so link it into the skills
+  directory the agent reads (for example `ln -s "$PWD/harness/skills/os9-guests"
+  ~/.claude/skills/os9-guests`).
 - `native/` — Startup Items controller, cooperative run state machine, public
   diagnostic adapter and explicit guest failure fixture.
 - `contract.py` and `mailbox.py` — version 1 request/report codecs and single-run

@@ -20,14 +20,20 @@ The first line is the manager: capacity, how many slots are free and the lease
 length. Then one line per slot: `free`, or `active`/`launching`/`recovering`/
 `expired`/`quarantined` with the owner, seconds until the lease expires, pid and
 boot ID, and the quarantine reason. That answers how many guests exist and who
-holds them. For what a held guest is doing, read the owner's suite session:
+holds them. For what a held guest is doing, list the active suites and their current check.
+`OS9_HARNESS_HOME` is usually unset; the default is used below. The script
+prints no token, and `session.json` holds a live one, so never `cat` it.
 
 ```bash
-cat "$OS9_HARNESS_HOME"/evidence/suites/*/session.json   # active suites: current check and request
+H="${OS9_HARNESS_HOME:-$HOME/.local/share/os9-harness}"
+python3 - "$H" <<'EOF'
+import glob, json, sys
+for path in sorted(glob.glob(sys.argv[1] + "/evidence/suites/*/session.json")):
+    s = json.load(open(path))
+    if s.get("active"):
+        print(s["owner"], s.get("slot"), (s.get("check") or {}).get("name"), path)
+EOF
 ```
-
-`session.json` holds a live token, so read it only to see the `check` and
-`request` fields; do not copy it into logs or comments.
 
 ## Run the registered suite
 
@@ -41,7 +47,7 @@ python3 harness/suite.py run --registry tools/native-suite.json --build build \
 It reserves a slot, runs each check in its own workspace and releases the guest
 itself. Exit `0` means every check completed as registered. If no slot is free,
 wait and retry; do not recover someone else's slot. The result is in
-`$OS9_HARNESS_HOME/evidence/suites/<suite>/suite.json`; time it with
+`$H/evidence/suites/<suite>/suite.json`; time it with
 `python3 harness/timing.py report <suite dir>`.
 
 ## Reserve and drive a guest by hand
@@ -91,10 +97,10 @@ python3 harness/manage.py recover --slot slotN --reason "<what you fixed>"
 - Lease expired or the owner died: `recover --slot` after expiry; the token is
   already revoked.
 - Result `unknown` or a request left unconsumed: never replay it. Read the run
-  evidence under `$OS9_HARNESS_HOME/evidence/<slot>/`, then recover the slot.
+  evidence under `$H/evidence/<slot>/`, then recover the slot.
 - `recover` with no `--slot` invalidates every lease. Use it only when no other
   agent holds a guest.
 - Republished app reports "in use": a stale `afpd` session on the share host.
   Kill only that process (see `AGENTS.md`).
 
-Images, credentials and evidence stay under `$OS9_HARNESS_HOME` and out of git.
+Images, credentials and evidence stay under `$H` (the harness home) and out of git.

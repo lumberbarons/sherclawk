@@ -37,7 +37,11 @@ One guest completed three checks in 99.4 s (about 109 checks per hour); two
 guests together completed six in 104.3 s (about 207 checks per hour). Two
 slots therefore roughly doubled throughput for this registry, with no sign of
 contention between the guests, but the measurement is one pass on one host
-over three short checks; the pool stays at two slots. Raw timings are in
+over three short checks; the pool stays at two slots. After the runner was revised (it now also refuses a live token under the other
+owner's name, cleans up on failure and drains both suites' output) it passed
+again under `uv run python`: one guest completed three checks in 91.5 s (about
+118 checks per hour) and two guests together six in 96.4 s (about 224 checks per
+hour). Raw timings are in
 `build/qualification/` (untracked); each suite's evidence is under
 `$OS9_HARNESS_HOME/evidence/suites/`.
 
@@ -50,16 +54,35 @@ Problems the pass found, each kept as evidence and none counted as a pass:
   uses.
 - The first full registered-suite run stopped at `search` (`unknown` after the
   195 s wait) and left its `request` in `Retro68:Harness:slot1:`. Recovery does
-  not clear that file, so the next two suites on slot1 failed at publication
-  until it was moved aside by hand into `Harness/archive/` on the share (#260).
-- `SherclawkSearchCheck` and `SherclawkEditCheck` never ran, even alone on a
-  fresh guest: the controller in the sealed slot images was built for #255 and
-  registers fewer diagnostics than `DIAGNOSTICS` now lists, and it ignores an
-  unregistered request silently (#261). The native self-build and Stop checks
-  therefore have **no guest evidence yet**: the slot bases must be rebuilt with
-  the current controller (see "Build and install" in `contract.md`) and the
-  full registry rerun before this issue's native self-build/Stop item can be
-  closed.
+  not clear that file, so the next suites on slot1 failed at publication until
+  it was moved aside by hand into `Harness/archive/` on the share (#260).
+- `SherclawkSearchCheck` and `SherclawkEditCheck` then never ran, even alone on
+  a fresh guest: the controller in the sealed slot images was built for #255
+  and registers fewer diagnostics than `DIAGNOSTICS` now lists, and it ignores
+  an unregistered request silently (#261). Both slot bases were rebuilt with the
+  current controller: the previous bases were archived and later deleted,
+  `HarnessInstall1` and `HarnessInstall2` each logged `installed=1`, each guest
+  was shut down from Special > Shut Down, and `provision.py freeze-slot` and
+  `init` recorded new checksums.
+- A suite using the full registry then lost its lease at the self-build check
+  (`lease_lost`, `unknown or stale lease token`). A `manage.py status` run in
+  another process had recorded `manager_restart`: under the host's
+  `/usr/bin/python3` each process reads its own `time.monotonic()` origin, and
+  the manager compares those readings across processes (#262). The self-build
+  checks were rerun with every harness process under `uv run python`, whose
+  monotonic clock is the host uptime, and no other manager command ran.
+
+With the current controller in both slots, a full registered suite on one guest
+passed `write`, `search`, `edit`, `inspect`, `project`, `scroll` and `handoff`
+(wall 351 s to the interrupted self-build check; about 47 s boot, 27 s
+publication, 270 s diagnostic execution and collection). A second suite then
+ran `selfbuild` and `selfbuild-stop` to a pass: 25 and 6 assertions, 540 s and
+83 s, with a fresh reservation (new boot, 44 s) between them and a wall time of
+717 s. `selfbuild` used 540 of its 600 s timeout, so it has little headroom on
+this host. Both builds ran through MPW ToolServer on the shared base, which
+contains no MacRelix (see [provisioning](provisioning.md)); neither used an API
+key or a Sherclawk agent session. The registry was not run end to end in one
+uninterrupted suite.
 
 Guest images, credentials and the raw evidence stay outside the repository.
 

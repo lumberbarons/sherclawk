@@ -5,8 +5,9 @@ Runs the registered suite alone on one slot, then two agents' suites at the
 same time on both slots, and prints the phase timings and checks per hour of
 each so the one-versus-two guest comparison comes from measurements. While the
 two suites run it checks that a third reservation is refused and that a live
-lease cannot be reached with a made-up token under either owner's name. The registry it
-runs is a copy of the consumer's with a ``deliberate-failure`` check appended
+lease refuses both a made-up token and its real token under the other owner's
+name. The registry it runs is a copy of the consumer's with a
+``deliberate-failure`` check appended
 (``HarnessAcceptance`` told to fail, expected to fail), so every run also shows
 a failing assertion being recorded without disturbing the other guest.
 
@@ -86,40 +87,63 @@ def write_registry(args, scratch):
     return path
 
 
-def launch(args, registry, owner):
-    argv = [sys.executable, os.path.join(REPO, "harness", "suite.py"), "--json",
-            "run", "--registry", registry, "--build", args.build, "--owner", owner]
-    if args.home:
-        argv[3:3] = ["--home", args.home]
-    if args.share:
-        argv[3:3] = ["--share", args.share]
-    return subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True)
+class Suite:
+    """One `suite.py run` child; output goes to files so neither pipe can fill."""
+
+    def __init__(self, args, registry, owner, scratch):
+        self.owner = owner
+        argv = [sys.executable, os.path.join(REPO, "harness", "suite.py"), "--json",
+                "run", "--registry", registry, "--build", args.build, "--owner", owner]
+        if args.home:
+            argv[3:3] = ["--home", args.home]
+        if args.share:
+            argv[3:3] = ["--share", args.share]
+        self.out_path = os.path.join(scratch, owner + ".out")
+        self.err_path = os.path.join(scratch, owner + ".err")
+        with open(self.out_path, "w") as out, open(self.err_path, "w") as err:
+            self.process = subprocess.Popen(argv, stdout=out, stderr=err, text=True)
+
+    def stop(self):
+        """Leave no child behind when the qualification fails; evidence stays."""
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait()
+
+    def finish(self):
+        self.process.wait()
+        with open(self.out_path, encoding="utf-8") as f:
+            out = f.read()
+        try:
+            summary = json.loads(out)
+        except ValueError:
+            with open(self.err_path, encoding="utf-8") as f:
+                err = f.read()
+            raise QualificationError("suite for %s produced no summary (exit %s): %s"
+                                     % (self.owner, self.process.returncode, err.strip()[-400:]))
+        check(summary["passed"], "%s: every check completed as expected "
+              "(%s)" % (self.owner, ", ".join(step["name"] for step in summary["checks"])))
+        return summary
 
 
-def finish(process, owner):
-    out, err = process.communicate()
-    try:
-        summary = json.loads(out)
-    except ValueError:
-        raise QualificationError("suite for %s produced no summary (exit %s): %s"
-                                 % (owner, process.returncode, err.strip()[-400:]))
-    check(summary["passed"], "%s: every check completed as expected "
-          "(%s)" % (owner, ", ".join(step["name"] for step in summary["checks"])))
-    return summary
-
-
-def solo(args, registry):
+def solo(args, registry, scratch):
     note("== one agent, one guest")
     started = time.monotonic()
-    summary = finish(launch(args, registry, args.owner_a), args.owner_a)
+    child = Suite(args, registry, args.owner_a, scratch)
+    try:
+        summary = child.finish()
+    finally:
+        child.stop()
     note("solo wall %.1fs" % (time.monotonic() - started))
     return summary
 
 
-def live_leases(manager, owners, deadline):
-    """Wait until every owner holds a booted lease; return their session tokens."""
-    while time.monotonic() < deadline:
+def live_leases(manager, owners, deadline, stop):
+    """Wait until every owner holds a booted lease; return their slot rows."""
+    while time.monotonic() < deadline and not stop.is_set():
         held = {slot["owner"]: slot for slot in manager.status()["slots"]
                 if slot["owner"] in owners and slot["state"] == "active"}
         if len(held) == len(owners):
@@ -128,48 +152,75 @@ def live_leases(manager, owners, deadline):
     raise QualificationError("both agents did not reach a live lease in time")
 
 
-def isolation_probe(manager, args):
+def session_token(home, owner):
+    """The live token a suite advertises in its private session file."""
+    root = os.path.join(home.path, "evidence", "suites")
+    for name in sorted(os.listdir(root), reverse=True):
+        try:
+            with open(os.path.join(root, name, "session.json"), encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if data.get("owner") == owner and data.get("active") and data.get("token"):
+            return data["token"]
+    raise QualificationError("no live session for %s" % owner)
+
+
+def isolation_probe(manager, args, stop):
     held = live_leases(manager, {args.owner_a, args.owner_b},
-                       time.monotonic() + args.ready_timeout + 120)
+                       time.monotonic() + args.ready_timeout + 120, stop)
     check(held[args.owner_a]["slot"] != held[args.owner_b]["slot"],
           "the two agents hold distinct slots %s and %s"
           % (held[args.owner_a]["slot"], held[args.owner_b]["slot"]))
     check(held[args.owner_a]["boot"] != held[args.owner_b]["boot"],
           "the two guests booted with distinct identities")
     try:
-        manager.reserve(args.owner_c)
-        raise QualificationError("a third reservation succeeded while both slots were held")
+        extra = manager.reserve(args.owner_c)
     except reservation.NoCapacity:
         note("PASS a third reservation is refused while both agents hold a slot")
+    else:
+        # One suite finished between the check above and this call; give the
+        # guest back before reporting that the probe lost its race.
+        manager.release(extra.token, args.owner_c)
+        raise QualificationError("a third reservation succeeded; a suite may have "
+                                 "finished before the probe ran, so rerun")
+    real = session_token(manager.home, args.owner_a)
     for name, call in (
             ("a made-up token", lambda: manager.screenshot(secrets.token_hex(16),
                                                            args.owner_a)),
-            ("a made-up token naming the other owner", lambda: manager.input(secrets.token_hex(16),
-                                                           args.owner_b, text="x"))):
+            ("a live token under the other owner's name",
+             lambda: manager.screenshot(real, args.owner_b))):
         try:
             call()
-            raise QualificationError("%s was accepted" % name)
         except reservation.LeaseError:
             note("PASS %s is refused against a live lease" % name)
+        else:
+            raise QualificationError("%s was accepted" % name)
 
 
-def pair(args, registry, manager):
+def pair(args, registry, manager, scratch):
     note("== two agents, two guests at once")
     started = time.monotonic()
-    processes = {owner: launch(args, registry, owner)
-                 for owner in (args.owner_a, args.owner_b)}
+    children = {owner: Suite(args, registry, owner, scratch)
+                for owner in (args.owner_a, args.owner_b)}
     probe = {}
+    stop = threading.Event()
 
     def run_probe():
         try:
-            isolation_probe(manager, args)
+            isolation_probe(manager, args, stop)
         except BaseException as exc:
             probe["error"] = exc
 
-    thread = threading.Thread(target=run_probe)
+    thread = threading.Thread(target=run_probe, daemon=True)
     thread.start()
-    summaries = {owner: finish(process, owner) for owner, process in processes.items()}
-    thread.join()
+    try:
+        summaries = {owner: child.finish() for owner, child in children.items()}
+    finally:
+        stop.set()
+        for child in children.values():
+            child.stop()
+        thread.join(timeout=30)
     if "error" in probe:
         raise probe["error"]
     note("pair wall %.1fs" % (time.monotonic() - started))
@@ -190,11 +241,17 @@ def accept(args):
     manager = reservation.Manager(home=home, share=args.share,
                                   ready_timeout=args.ready_timeout)
     manager.recover(reason="qualification_reset")
-    with tempfile.TemporaryDirectory(prefix="qualification-") as scratch:
-        registry = write_registry(args, scratch)
-        one = solo(args, registry)
-        both = pair(args, registry, manager)
-    manager.recover(reason="qualification_final")
+    try:
+        with tempfile.TemporaryDirectory(prefix="qualification-") as scratch:
+            registry = write_registry(args, scratch)
+            one = solo(args, registry, scratch)
+            both = pair(args, registry, manager, scratch)
+    finally:
+        # A failed pass must not leave a booted, leased guest for the next one.
+        try:
+            manager.recover(reason="qualification_final")
+        except reservation.ReservationError as exc:
+            print("WARN final recovery failed: %s" % exc, file=sys.stderr)
     check(all(s["state"] == "free" for s in manager.status()["slots"]),
           "both slots are free and stopped at the end")
     reports = {"one_guest": timing.report([one["evidence_dir"]]),

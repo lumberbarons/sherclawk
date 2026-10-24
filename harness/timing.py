@@ -40,7 +40,11 @@ def _span(start, end):
 
 
 def _steps(check):
-    """Return (publish, collect) seconds from the run's own step records."""
+    """Return (publish, collect) seconds from the run's own step records.
+
+    (None, None) means the run's evidence could not be read, which the caller
+    reports instead of folding the time silently into another phase.
+    """
     evidence = (check.get("run") or {}).get("evidence")
     if not evidence:
         return None, None
@@ -70,14 +74,18 @@ def suite_timing(directory):
     phases = {"boot": 0.0, "publication": 0.0, "diagnostic": 0.0, "reset": 0.0,
               "release": 0.0, "other": 0.0}
     rows = []
+    unreadable = []
     cursor = started
-    for index, check in enumerate(checks):
-        # A reservation stamped between two checks is a reset and reboot.
-        for reservation in reservations:
+    # The first reservation is the boot, whether or not a check ever ran.
+    if reservations:
+        phases["boot"] += _span(cursor, reservations[0]["at"])
+        cursor = reservations[0]["at"]
+    for check in checks:
+        # A later reservation stamped before this check is a reset and reboot.
+        for reservation in reservations[1:]:
             at = reservation["at"]
             if cursor["monotonic"] <= at["monotonic"] <= check["started"]["monotonic"]:
-                key = "boot" if reservation is reservations[0] else "reset"
-                phases[key] += _span(cursor, at)
+                phases["reset"] += _span(cursor, at)
                 cursor = at
         publish, collect = _steps(check)
         seconds = check.get("seconds") or _span(check["started"], check["finished"])
@@ -87,6 +95,8 @@ def suite_timing(directory):
             phases["other"] += max(0.0, seconds - publish - collect)
         else:
             phases["other"] += seconds
+            if (check.get("run") or {}).get("evidence"):
+                unreadable.append(check["name"])
         rows.append({"name": check["name"], "outcome": check["outcome"],
                      "passed": check["passed"], "seconds": seconds,
                      "publication": publish, "diagnostic": collect})
@@ -95,23 +105,31 @@ def suite_timing(directory):
     return {
         "suite": summary.get("suite"), "owner": summary.get("owner"),
         "passed": bool(summary.get("passed")), "directory": directory,
-        "started": started["wall"], "finished": finished["wall"],
+        "started": started["monotonic"], "finished": finished["monotonic"],
         "wall": _span(started, finished),
         "checks": rows,
+        "unreadable_evidence": unreadable,
         "phases": {name: round(value, 3) for name, value in phases.items()},
     }
 
 
 def report(directories):
+    """Combine suites that ran on one host; all stamps are that host's monotonic clock."""
     suites = [suite_timing(directory) for directory in directories]
     start = min(suite["started"] for suite in suites)
     end = max(suite["finished"] for suite in suites)
     wall = round(end - start, 3)
     completed = sum(1 for suite in suites for check in suite["checks"]
                     if check["passed"])
+    ordered = sorted(suites, key=lambda suite: suite["started"])
+    # Suites that ran one after another are not a concurrency measurement.
+    overlapping = all(later["started"] < max(earlier["finished"] for earlier in
+                                              ordered[:index + 1])
+                      for index, later in enumerate(ordered[1:]))
     return {
         "suites": suites,
         "concurrent": len(suites),
+        "overlapping": overlapping,
         "wall": wall,
         "passed_checks": completed,
         "checks_per_hour": round(completed * 3600.0 / wall, 2) if wall > 0 else None,
@@ -126,11 +144,18 @@ def render(result):
             "passed" if suite["passed"] else "failed", suite["wall"]))
         for name, seconds in suite["phases"].items():
             lines.append("  %-12s %8.1fs" % (name, seconds))
+        if suite["unreadable_evidence"]:
+            lines.append("  WARNING run evidence unreadable for %s; their publication "
+                         "and diagnostic time is counted as other"
+                         % ", ".join(suite["unreadable_evidence"]))
         for check in suite["checks"]:
             lines.append("  check %-10s %-14s %7.1fs  publish=%s diagnostic=%s" % (
                 check["name"], check["outcome"], check["seconds"],
                 "-" if check["publication"] is None else "%.1fs" % check["publication"],
                 "-" if check["diagnostic"] is None else "%.1fs" % check["diagnostic"]))
+    if not result["overlapping"]:
+        lines.append("WARNING these suites did not overlap in time; the combined "
+                     "rate is not a concurrent-guest measurement")
     lines.append("guests=%d wall=%.1fs passed_checks=%d checks_per_hour=%s" % (
         result["concurrent"], result["wall"], result["passed_checks"],
         result["checks_per_hour"]))

@@ -11,7 +11,7 @@ which lives under `harness/` so it moves with the harness
 
 1. Provision the slots ([provisioning.md](provisioning.md)): the frozen base,
    a controller-configured image per slot, and `provision.py info` listing
-   both slots. Images, media and credentials stay under `$OS9_HARNESS_HOME`
+   every configured slot. Images, media and credentials stay under `$OS9_HARNESS_HOME`
    (default `~/.local/share/os9-harness`), never in a checkout.
 2. Mount the `Retro68` export writable on the host and point the harness at
    it. AFP works where the host still has an AFP client. Otherwise export the
@@ -138,5 +138,5 @@ The report separates boot, publication, diagnostic execution plus result
 collection, reset reboots and release, and gives checks per hour for the
 combined wall time. Build time is not part of a suite; time `./build.sh`
 separately. Treat the figures as properties of one host and one registry, and
-keep the pool at the two slots until a measurement says another would pay
-for itself. Recorded measurements are in [verification.md](verification.md).
+keep the pool at its configured slots until a measurement says another would
+pay for itself. Recorded measurements are in [verification.md](verification.md).

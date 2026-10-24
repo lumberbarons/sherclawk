@@ -102,6 +102,42 @@ class TimingTest(unittest.TestCase):
         with self.assertRaisesRegex(timing.TimingError, "not finished"):
             timing.suite_timing(directory)
 
+    def test_a_suite_that_failed_before_its_first_check_still_reports_its_boot(self):
+        directory = os.path.join(self.tmp.name, "early")
+        write(os.path.join(directory, timing.SUMMARY_NAME), {
+            "suite": "early", "owner": "agent", "passed": False,
+            "started": stamp(0), "finished": stamp(60), "checks": [],
+            "reservations": [{"at": stamp(50), "reason": "suite start"}]})
+        phases = timing.suite_timing(directory)["phases"]
+        self.assertEqual((phases["boot"], phases["release"]), (50.0, 10.0))
+
+    def test_unreadable_run_evidence_is_called_out_not_hidden(self):
+        directory = self.suite("a", evidence=False)
+        with open(os.path.join(directory, timing.SUMMARY_NAME), encoding="utf-8") as f:
+            data = json.load(f)
+        data["checks"][0]["run"]["evidence"] = os.path.join(self.tmp.name, "gone.json")
+        write(os.path.join(directory, timing.SUMMARY_NAME), data)
+        result = timing.suite_timing(directory)
+        self.assertEqual(result["unreadable_evidence"], ["one"])
+        self.assertIn("evidence unreadable for one", timing.render(timing.report([directory])))
+
+    def test_suites_that_ran_one_after_another_are_flagged(self):
+        both = timing.report([self.suite("b"), self.suite("c", offset=10.0)])
+        self.assertTrue(both["overlapping"])
+        self.assertNotIn("did not overlap", timing.render(both))
+        apart = timing.report([self.suite("d"), self.suite("e", offset=500.0)])
+        self.assertFalse(apart["overlapping"])
+        self.assertIn("did not overlap", timing.render(apart))
+
+    def test_the_combined_wall_uses_the_same_clock_as_each_suite(self):
+        directory = self.suite("a")
+        with open(os.path.join(directory, timing.SUMMARY_NAME), encoding="utf-8") as f:
+            data = json.load(f)
+        data["started"]["wall"] += 99999.0   # a stepped wall clock must not matter
+        data["finished"]["wall"] += 99999.0
+        write(os.path.join(directory, timing.SUMMARY_NAME), data)
+        self.assertEqual(timing.report([directory])["wall"], 180.0)
+
     def test_a_missing_directory_is_an_error(self):
         with self.assertRaisesRegex(timing.TimingError, "cannot read"):
             timing.suite_timing(os.path.join(self.tmp.name, "nowhere"))
