@@ -166,10 +166,12 @@ def main(argv=None):
         manager = reservation.Manager(home=args.home, share=args.share)
         if args.command == "reserve":
             lease = manager.reserve(args.owner, args.ttl)
-            emit(args, lease.public(manager.clock.monotonic(), manager.clock.wall()))
+            emit(args, lease.public(manager.clock.monotonic(), manager.clock.wall(),
+                                     manager.clock.source))
         elif args.command == "renew":
             lease = manager.renew(args.token, args.owner, args.ttl)
-            emit(args, lease.public(manager.clock.monotonic(), manager.clock.wall()))
+            emit(args, lease.public(manager.clock.monotonic(), manager.clock.wall(),
+                                     manager.clock.source))
         elif args.command == "run":
             code = manager.run(args.token, args.owner, command, args.timeout)
             if code < 0:

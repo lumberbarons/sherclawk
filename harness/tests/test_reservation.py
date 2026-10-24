@@ -19,9 +19,10 @@ import reservation  # noqa: E402
 
 
 class FakeClock(reservation.Clock):
-    def __init__(self, monotonic=1000.0, wall=1_700_000_000.0):
+    def __init__(self, monotonic=1000.0, wall=1_700_000_000.0, source="fake-host-clock"):
         self.mono = monotonic
         self.wall_time = wall
+        self.source = source
 
     def monotonic(self):
         return self.mono
@@ -193,6 +194,41 @@ class Base(unittest.TestCase):
         return reservation.Manager(**kw)
 
 
+class ClockTest(unittest.TestCase):
+    def test_prefers_shared_uptime_over_process_relative_monotonic(self):
+        with mock.patch.object(time, "CLOCK_UPTIME_RAW", 123, create=True), \
+                mock.patch.object(time, "clock_gettime", return_value=5000.0) as read, \
+                mock.patch.object(time, "monotonic", side_effect=[1000.0, 0.006]):
+            first, second = reservation.Clock(), reservation.Clock()
+            self.assertEqual(first.monotonic(), 5000.0)
+            self.assertEqual(second.monotonic(), 5000.0)
+            self.assertEqual(first.source, second.source)
+            self.assertEqual(first.source, "clock_gettime:CLOCK_UPTIME_RAW")
+            read.assert_called_with(123)
+
+    def test_unavailable_uptime_uses_shared_monotonic(self):
+        def read(clock_id):
+            if clock_id == 123:
+                raise OSError("clock unavailable")
+            return 5000.0
+
+        with mock.patch.object(time, "CLOCK_UPTIME_RAW", 123, create=True), \
+                mock.patch.object(time, "CLOCK_MONOTONIC", 456, create=True), \
+                mock.patch.object(time, "clock_gettime", side_effect=read):
+            clock = reservation.Clock()
+            self.assertEqual(clock.monotonic(), 5000.0)
+            self.assertEqual(clock.source, "clock_gettime:CLOCK_MONOTONIC")
+
+    def test_fallback_origins_are_never_marked_comparable(self):
+        with mock.patch.object(time, "CLOCK_UPTIME_RAW", None, create=True), \
+                mock.patch.object(time, "CLOCK_MONOTONIC", None, create=True), \
+                mock.patch.object(time, "monotonic", side_effect=[1000.0, 0.006]):
+            first, second = reservation.Clock(), reservation.Clock()
+            self.assertEqual(first.monotonic(), 1000.0)
+            self.assertEqual(second.monotonic(), 0.006)
+            self.assertNotEqual(first.source, second.source)
+
+
 class ReservationTest(Base):
     def test_two_reserves_get_distinct_slots_and_a_third_is_refused(self):
         a = self.manager.reserve("alice")
@@ -297,6 +333,110 @@ class ReservationTest(Base):
         self.assertEqual([s["state"] for s in restarted.status()["slots"]], ["free", "free"])
         c = restarted.reserve("carol")
         self.assertGreater(c.generation, 1)
+
+    def test_new_clock_origin_preserves_live_leases_and_epoch(self):
+        a = self.manager.reserve("alice", ttl=60)
+        epoch = self.manager.status()["manager"]["epoch"]
+        # Both a smaller origin (old macOS Python) and a larger one must work.
+        for origin in (0.006, 100_000.0):
+            clock = FakeClock(origin, self.clock.wall_time, source="origin-%s" % origin)
+            other = self.new_manager(clock=clock)
+            self.assertEqual(other.status()["manager"]["epoch"], epoch)
+            self.assertEqual(other.lease(a.token, "alice").token, a.token)
+            self.assertEqual(other.status()["slots"][0]["expires_in"], 60)
+            self.assertEqual(self.manager.lease(a.token, "alice").token, a.token)
+            renewed = other.renew(a.token, "alice", ttl=60)
+            self.assertEqual(renewed.token, a.token)
+            self.assertEqual(self.manager.status()["slots"][0]["expires_in"], 60)
+            self.assertEqual(self.manager.lease(a.token, "alice").token, a.token)
+        self.assertEqual(self.effects.terminated, [])
+        self.assertEqual(self.effects.resets, [])
+
+    def test_different_origin_cannot_extend_wall_deadline(self):
+        a = self.manager.reserve("alice", ttl=10)
+        clock = FakeClock(0.006, self.clock.wall_time + 11, source="other-origin")
+        other = self.new_manager(clock=clock)
+        self.assertEqual(other.status()["slots"][0]["state"], "expired")
+        with self.assertRaisesRegex(reservation.LeaseError, "expired"):
+            other.renew(a.token, "alice")
+        b = other.reserve("bob")
+        self.assertEqual(b.slot, a.slot)
+        self.assertIn(a.pid, self.effects.terminated)
+
+    def test_legacy_clock_values_are_not_compared(self):
+        a = self.manager.reserve("alice", ttl=60)
+        epoch = self.manager.status()["manager"]["epoch"]
+        with self.manager._txn() as conn:
+            # Model a database written before source tracking was introduced.
+            conn.execute("DELETE FROM meta WHERE key='last_mono_source'")
+            columns = {r["name"] for r in conn.execute("PRAGMA table_info(slots)")}
+            if "mono_source" in columns:
+                # SQLite bundled with older Python lacks DROP COLUMN.
+                names = ", ".join(sorted(columns - {"mono_source"}))
+                schema = conn.execute("SELECT sql FROM sqlite_master WHERE name='slots'").fetchone()[0]
+                conn.execute(schema.replace("CREATE TABLE slots", "CREATE TABLE legacy_slots")
+                             .replace("mono_source TEXT,", ""))
+                conn.execute("INSERT INTO legacy_slots (%s) SELECT %s FROM slots" % (names, names))
+                conn.execute("DROP TABLE slots")
+                conn.execute("ALTER TABLE legacy_slots RENAME TO slots")
+            conn.execute("UPDATE meta SET value='100000' WHERE key='last_mono'")
+            conn.execute("UPDATE slots SET expires_mono=0 WHERE token=?", (a.token,))
+        upgraded = self.new_manager()
+        self.assertEqual(upgraded.status()["manager"]["epoch"], epoch)
+        self.assertEqual(upgraded.lease(a.token, "alice").token, a.token)
+        self.assertEqual(upgraded.status()["slots"][0]["expires_in"], 60)
+
+    def test_same_source_monotonic_expiry_still_bounds_clock_steps(self):
+        a = self.manager.reserve("alice", ttl=10)
+        self.clock.advance(11, wall=False)
+        other = self.new_manager()
+        with self.assertRaisesRegex(reservation.LeaseError, "expired"):
+            other.lease(a.token, "alice")
+        self.assertEqual(other.status()["slots"][0]["expires_in"], 0)
+
+    def test_public_expiry_matches_status_when_the_wall_clock_steps_back(self):
+        a = self.manager.reserve("alice", ttl=100)
+        self.clock.advance(60, wall=False)
+        source = self.clock.source
+        public = a.public(self.clock.monotonic(), self.clock.wall(), source)
+        self.assertEqual(public["expires_in"], 40)
+        self.assertEqual(public["expires_in"],
+                         self.manager.status()["slots"][0]["expires_in"])
+        # Without a matching source only the wall deadline applies.
+        self.assertEqual(a.public(self.clock.monotonic(), self.clock.wall())["expires_in"], 100)
+
+    def test_revoked_slot_drops_the_old_monotonic_source(self):
+        a = self.manager.reserve("alice")
+        self.manager.release(a.token, "alice")
+        with self.manager._txn() as conn:
+            sources = [r["mono_source"] for r in conn.execute(
+                "SELECT mono_source FROM slots WHERE token IS NULL")]
+        self.assertEqual(sources, [None] * len(provision.SLOTS))
+
+    def test_same_source_regression_rotates_epoch_only_once(self):
+        a = self.manager.reserve("alice")
+        epoch = self.manager.status()["manager"]["epoch"]
+        self.clock.mono = 0.006
+        other = self.new_manager()
+        new_epoch = other.status()["manager"]["epoch"]
+        self.assertNotEqual(new_epoch, epoch)
+        with self.assertRaises(reservation.LeaseError):
+            other.lease(a.token, "alice")
+        self.assertEqual(self.new_manager().status()["manager"]["epoch"], new_epoch)
+
+    def test_boot_change_with_different_clock_source_revokes_every_lease(self):
+        leases = [self.manager.reserve("alice"), self.manager.reserve("bob")]
+        epoch = self.manager.status()["manager"]["epoch"]
+        self.effects.host_boot = "boot-b"
+        other = self.new_manager(clock=FakeClock(0.006, source="new-origin"))
+        new_epoch = other.status()["manager"]["epoch"]
+        self.assertNotEqual(new_epoch, epoch)
+        for lease in leases:
+            with self.assertRaises(reservation.LeaseError):
+                other.lease(lease.token, lease.owner)
+            self.assertIn(lease.pid, self.effects.terminated)
+        self.assertEqual(self.new_manager(clock=other.clock).status()["manager"]["epoch"],
+                         new_epoch)
 
     def test_launch_without_readiness_quarantines_the_slot(self):
         self.effects.ready_error = "no controller heartbeat"

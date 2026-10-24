@@ -70,7 +70,9 @@ Problems the pass found, each kept as evidence and none counted as a pass:
   `/usr/bin/python3` each process reads its own `time.monotonic()` origin, and
   the manager compares those readings across processes (#262). The self-build
   checks were rerun with every harness process under `uv run python`, whose
-  monotonic clock is the host uptime, and no other manager command ran.
+  monotonic clock is the host uptime, and no other manager command ran (Resolved by #262:
+  the manager now reads the OS uptime clock directly, so processes share one
+  monotonic origin and the workaround is no longer needed.)
 
 With the current controller in both slots, a full registered suite on one guest
 passed `write`, `search`, `edit`, `inspect`, `project`, `scroll` and `handoff`
