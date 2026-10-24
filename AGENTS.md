@@ -115,7 +115,9 @@ cp config.example.h config.local.h  # optional local config; gitignored
   `harness/publish.py` owns lease-aware per-run publication, fork metadata and
   retained evidence; see `harness/docs/publication.md`. `harness/suite.py` runs the
   checks named by the consumer-owned `tools/native-suite.json` as one unattended
-  suite; see `harness/docs/suite.md`. It imports
+  suite; see `harness/docs/suite.md`. `harness/timing.py` reports phase timings
+  from retained suite evidence, and `harness/skills/os9-guests/` is the agent
+  skill for using the guests (workflow in `harness/docs/workflow.md`). It imports
   nothing from `tools/` or `src/`; guest disk images and installation media stay
   outside the repository.
 - `tests/` uses `tests/toolbox/` stubs to compile app sources with host `cc`;

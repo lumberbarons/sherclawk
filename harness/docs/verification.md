@@ -1,3 +1,91 @@
+# Two-guest qualification — October 23, 2026
+
+Verified the working tree on top of `c0eacc7` (issue #74, ADR-0009). QEMU
+10.1.2 `mac99` slots booted from the immutable configured slot images, with
+the `Retro68` export mounted on the host over NFS from the AFP host
+(`mount_nfs -o vers=3,noresvport,nolocks,locallocks,noac,nonegnamecache`).
+`tools/check.sh` (including the new two-agent, timing and skill suites) and
+`tools/lint.sh` passed; `./build.sh HarnessChecks_APPL` built every
+registered diagnostic in 1 minute 30 seconds. The regression suites in
+`harness/tests/test_qualification.py` run two suites against one manager
+with the second inside the first's wait for its result: a deliberate
+assertion failure, a stalled guest, a released owner's token replayed
+against a live suite, an expired lease whose slot is reassigned, and
+repeated runs that never reuse a workspace or boot.
+
+`python3 harness/tests/guest_reservations.py` returned `ACCEPTED two-slot
+reservation manager` again, with the same isolation, stale-owner,
+termination, quarantine and recovery results as the earlier record.
+
+`python3 harness/tests/guest_qualification.py --build build` ran the
+`write` and `inspect` checks plus a `deliberate-failure` check
+(`HarnessAcceptance` told to fail, expected to fail) and returned `ACCEPTED
+two-guest qualification`. While two agents' suites ran at once, the two held
+distinct slots with distinct boot identities, a third reservation was refused,
+and a made-up token was refused under either owner's name; every check in both
+suites ran in its own never-reused workspace and each suite stayed on its own
+slot. Both slots were free and stopped at the end.
+
+| Phase (seconds) | One guest | Two guests, qualify-a | Two guests, qualify-b |
+|---|---:|---:|---:|
+| Boot to controller readiness | 47.2 | 50.0 | 41.6 |
+| Publication | 12.8 | 15.1 | 12.9 |
+| Diagnostic execution and result collection | 38.1 | 38.1 | 42.8 |
+| Suite wall time | 99.4 | 104.3 | 98.4 |
+
+One guest completed three checks in 99.4 s (about 109 checks per hour); two
+guests together completed six in 104.3 s (about 207 checks per hour). Two
+slots therefore roughly doubled throughput for this registry, with no sign of
+contention between the guests, but the measurement is one pass on one host
+over three short checks; the pool stays at two slots. After the runner was revised (it now also refuses a live token under the other
+owner's name, cleans up on failure and drains both suites' output) it passed
+again under `uv run python`: one guest completed three checks in 91.5 s (about
+118 checks per hour) and two guests together six in 96.4 s (about 224 checks per
+hour). Raw timings are in
+`build/qualification/` (untracked); each suite's evidence is under
+`$OS9_HARNESS_HOME/evidence/suites/`.
+
+Problems the pass found, each kept as evidence and none counted as a pass:
+
+- An earlier pair run failed its third check on slot2 with `no advancing fresh
+  controller heartbeat` while the NFS mount used default attribute caching; the
+  heartbeat is replaced by rename and the cached directory entry looked stale.
+  The same pass succeeded with `noac,nonegnamecache`, which the mount above
+  uses.
+- The first full registered-suite run stopped at `search` (`unknown` after the
+  195 s wait) and left its `request` in `Retro68:Harness:slot1:`. Recovery does
+  not clear that file, so the next suites on slot1 failed at publication until
+  it was moved aside by hand into `Harness/archive/` on the share (#260).
+- `SherclawkSearchCheck` and `SherclawkEditCheck` then never ran, even alone on
+  a fresh guest: the controller in the sealed slot images was built for #255
+  and registers fewer diagnostics than `DIAGNOSTICS` now lists, and it ignores
+  an unregistered request silently (#261). Both slot bases were rebuilt with the
+  current controller: the previous bases were archived and later deleted,
+  `HarnessInstall1` and `HarnessInstall2` each logged `installed=1`, each guest
+  was shut down from Special > Shut Down, and `provision.py freeze-slot` and
+  `init` recorded new checksums.
+- A suite using the full registry then lost its lease at the self-build check
+  (`lease_lost`, `unknown or stale lease token`). A `manage.py status` run in
+  another process had recorded `manager_restart`: under the host's
+  `/usr/bin/python3` each process reads its own `time.monotonic()` origin, and
+  the manager compares those readings across processes (#262). The self-build
+  checks were rerun with every harness process under `uv run python`, whose
+  monotonic clock is the host uptime, and no other manager command ran.
+
+With the current controller in both slots, a full registered suite on one guest
+passed `write`, `search`, `edit`, `inspect`, `project`, `scroll` and `handoff`
+(wall 351 s to the interrupted self-build check; about 47 s boot, 27 s
+publication, 270 s diagnostic execution and collection). A second suite then
+ran `selfbuild` and `selfbuild-stop` to a pass: 25 and 6 assertions, 540 s and
+83 s, with a fresh reservation (new boot, 44 s) between them and a wall time of
+717 s. `selfbuild` used 540 of its 600 s timeout, so it has little headroom on
+this host. Both builds ran through MPW ToolServer on the shared base, which
+contains no MacRelix (see [provisioning](provisioning.md)); neither used an API
+key or a Sherclawk agent session. The registry was not run end to end in one
+uninterrupted suite.
+
+Guest images, credentials and the raw evidence stay outside the repository.
+
 # Unattended suite host verification — October 23, 2026
 
 Verified the working tree on top of `14bed6d` (issue #73, ADR-0009).
