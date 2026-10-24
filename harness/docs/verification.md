@@ -1,3 +1,68 @@
+# Two-guest qualification — October 23, 2026
+
+Verified the working tree on top of `c0eacc7` (issue #74, ADR-0009). QEMU
+10.1.2 `mac99` slots booted from the immutable configured slot images, with
+the `Retro68` export mounted on the host over NFS from the AFP host
+(`mount_nfs -o vers=3,noresvport,nolocks,locallocks,noac,nonegnamecache`).
+`tools/check.sh` (including the new two-agent, timing and skill suites) and
+`tools/lint.sh` passed; `./build.sh HarnessChecks_APPL` built every
+registered diagnostic in 1 minute 30 seconds. The regression suites in
+`harness/tests/test_qualification.py` run two suites against one manager
+with the second inside the first's wait for its result: a deliberate
+assertion failure, a stalled guest, a released owner's token replayed
+against a live suite, an expired lease whose slot is reassigned, and
+repeated runs that never reuse a workspace or boot.
+
+`python3 harness/tests/guest_reservations.py` returned `ACCEPTED two-slot
+reservation manager` again, with the same isolation, stale-owner,
+termination, quarantine and recovery results as the earlier record.
+
+`python3 harness/tests/guest_qualification.py --build build` ran the
+`write` and `inspect` checks plus a `deliberate-failure` check
+(`HarnessAcceptance` told to fail, expected to fail) and returned `ACCEPTED
+two-guest qualification`. While two agents' suites ran at once, the two held
+distinct slots with distinct boot identities, a third reservation was refused,
+and a made-up token was refused under either owner's name; every check in both
+suites ran in its own never-reused workspace and each suite stayed on its own
+slot. Both slots were free and stopped at the end.
+
+| Phase (seconds) | One guest | Two guests, qualify-a | Two guests, qualify-b |
+|---|---:|---:|---:|
+| Boot to controller readiness | 47.2 | 50.0 | 41.6 |
+| Publication | 12.8 | 15.1 | 12.9 |
+| Diagnostic execution and result collection | 38.1 | 38.1 | 42.8 |
+| Suite wall time | 99.4 | 104.3 | 98.4 |
+
+One guest completed three checks in 99.4 s (about 109 checks per hour); two
+guests together completed six in 104.3 s (about 207 checks per hour). Two
+slots therefore roughly doubled throughput for this registry, with no sign of
+contention between the guests, but the measurement is one pass on one host
+over three short checks; the pool stays at two slots. Raw timings are in
+`build/qualification/` (untracked); each suite's evidence is under
+`$OS9_HARNESS_HOME/evidence/suites/`.
+
+Problems the pass found, each kept as evidence and none counted as a pass:
+
+- An earlier pair run failed its third check on slot2 with `no advancing fresh
+  controller heartbeat` while the NFS mount used default attribute caching; the
+  heartbeat is replaced by rename and the cached directory entry looked stale.
+  The same pass succeeded with `noac,nonegnamecache`, which the mount above
+  uses.
+- The first full registered-suite run stopped at `search` (`unknown` after the
+  195 s wait) and left its `request` in `Retro68:Harness:slot1:`. Recovery does
+  not clear that file, so the next two suites on slot1 failed at publication
+  until it was moved aside by hand into `Harness/archive/` on the share (#260).
+- `SherclawkSearchCheck` and `SherclawkEditCheck` never ran, even alone on a
+  fresh guest: the controller in the sealed slot images was built for #255 and
+  registers fewer diagnostics than `DIAGNOSTICS` now lists, and it ignores an
+  unregistered request silently (#261). The native self-build and Stop checks
+  therefore have **no guest evidence yet**: the slot bases must be rebuilt with
+  the current controller (see "Build and install" in `contract.md`) and the
+  full registry rerun before this issue's native self-build/Stop item can be
+  closed.
+
+Guest images, credentials and the raw evidence stay outside the repository.
+
 # Unattended suite host verification — October 23, 2026
 
 Verified the working tree on top of `14bed6d` (issue #73, ADR-0009).
