@@ -70,7 +70,10 @@ class FakeRun:
 
     def _evidence(self):
         with open(self.evidence_path, "w", encoding="utf-8") as f:
-            json.dump({"phase": self.state}, f)
+            if "evidence_raw" in self.spec:
+                f.write(self.spec["evidence_raw"])
+            else:
+                json.dump({"phase": self.state}, f)
 
     def _fail(self, phase):
         if self.spec.get("fail") == phase:
@@ -129,6 +132,8 @@ class FakePublisher:
 
     def begin(self, token, owner, artifact):
         spec = self.specs.pop(0) if self.specs else {}
+        if spec.get("fail") == "begin":
+            raise publish.PublicationError("begin failed")
         run = FakeRun(self, self._lease(token, owner), artifact, spec)
         self.begins.append(run)
         return run
@@ -237,6 +242,19 @@ class RegistryTest(unittest.TestCase):
                         "reserved")
         self.assert_bad([check(fixtures={"scenario": 1})], "needs a path")
 
+    def test_schema_must_be_the_integer_or_string_one(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        for schema in (1, "1"):
+            with self.subTest(schema=schema):
+                suite.load_registry(
+                    write_registry(tmp.name, [check()], schema=schema))
+        for schema in (True, 1.0, 2, None, "one"):
+            with self.subTest(schema=schema):
+                with self.assertRaises(suite.RegistryError):
+                    suite.load_registry(
+                        write_registry(tmp.name, [check()], schema=schema))
+
     def test_unknown_selection_lists_known_checks(self):
         registry = self.load([check()])
         with self.assertRaises(suite.RegistryError) as caught:
@@ -326,6 +344,45 @@ class RunTest(SuiteBase):
         self.assertEqual(summary["checks"][0]["outcome"], "error")
         self.assertIn("request failed", summary["checks"][0]["error"])
         self.assertEqual(len(self.publisher.begins), 1)
+
+    def test_begin_failure_is_a_failed_check_not_a_suite_abort(self):
+        summary = self.run_suite([
+            check("write"), check("search", target="SherclawkSearchCheck")],
+            specs=[{"fail": "begin"}, {}], keep_going=True)
+        self.assertFalse(summary["passed"])
+        self.assertEqual(summary["checks"][0]["outcome"], "error")
+        self.assertIn("begin failed", summary["checks"][0]["error"])
+        self.assertIsNone(summary["checks"][0]["run"])
+        self.assertIsNone(summary["current"])
+        self.assertEqual(summary["checks"][1]["outcome"], "passed")
+
+    def test_unreadable_or_odd_evidence_does_not_discard_a_finished_check(self):
+        for raw in ("[]", "not json"):
+            with self.subTest(raw=raw):
+                summary = self.run_suite([check()],
+                                         specs=[{"evidence_raw": raw}])
+                step = summary["checks"][0]
+                self.assertEqual(step["outcome"], "passed")
+                self.assertIsNone(step["run"]["phase"])
+
+    def test_session_stops_advertising_the_lease_while_it_is_released(self):
+        seen = []
+        real_release = self.manager.release
+
+        def release(token, owner, *args, **kw):
+            seen.append(suite.read_session(self.last_runner._session_path))
+            return real_release(token, owner, *args, **kw)
+
+        self.manager.release = release
+        self.run_suite([
+            check("write", reset="reset"),
+            check("search", target="SherclawkSearchCheck")])
+        self.assertEqual(len(seen), 2)
+        for data in seen:
+            self.assertFalse(data["active"])
+            self.assertIsNone(data["token"])
+            with self.assertRaises(suite.SessionError):
+                suite.active_session(self.last_runner._session_path)
 
     def test_default_stops_at_the_first_failure(self):
         summary = self.run_suite([
@@ -672,6 +729,35 @@ class CliTest(unittest.TestCase):
             self.assertEqual(suite.main(["validate", "--registry",
                                          os.path.join(tmp.name, "absent")]), 2)
         self.assertIn("cannot read registry", err.getvalue())
+
+    def test_run_failures_after_the_suite_began_exit_1_and_name_the_evidence(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = write_registry(tmp.name, [check()])
+
+        class Lost:
+            summary = {"evidence_dir": "/evidence/suite-1"}
+
+            def __init__(self, **kw):
+                pass
+
+            def run(self, *args, **kw):
+                raise reservation.LeaseError("lease expired")
+
+        class Early(Lost):
+            summary = None
+
+        argv = ["run", "--registry", path, "--build", tmp.name,
+                "--owner", "alice"]
+        for runner, code, evidence in ((Lost, 1, True), (Early, 2, False)):
+            with self.subTest(runner=runner.__name__):
+                err = io.StringIO()
+                with mock.patch.object(suite, "Suite", runner), \
+                        contextlib.redirect_stderr(err):
+                    self.assertEqual(suite.main(argv), code)
+                self.assertIn("lease expired", err.getvalue())
+                self.assertEqual("evidence retained under /evidence/suite-1"
+                                 in err.getvalue(), evidence)
 
     def test_validate_reports_missing_artifacts_with_a_build(self):
         tmp = tempfile.TemporaryDirectory()

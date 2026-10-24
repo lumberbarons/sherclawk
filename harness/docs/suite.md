@@ -79,6 +79,16 @@ unconsumed mailbox request, the suite stops and names the evidence instead of
 deleting it or publishing a second request; recover the guest explicitly.
 A release that quarantines its slot also fails the suite.
 
+## Exit codes
+
+`suite.py run` exits `0` when every selected check passed and `1` when the
+suite began but did not pass: a check failed or was uncertain, a release
+quarantined its slot, or the lease was lost or no capacity was available once
+the suite directory existed. Every `1` names the retained evidence directory on
+stderr. `2` is a usage, registry, artifact or configuration error before
+anything began, and `3` is a publication or host failure (also naming the
+evidence directory when the suite had begun).
+
 ## Evidence
 
 Each suite writes

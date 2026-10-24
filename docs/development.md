@@ -230,7 +230,7 @@ UTM guest through the harness's `harness/guest.py`; see
 and collected by `harness/publish.py`
 ([publication](../harness/docs/publication.md)); the unattended suite over
 `tools/native-suite.json` is `harness/suite.py`
-([suite](../harness/docs/suite.md)). The nine suite checks keep their manual
+([suite](../harness/docs/suite.md)). The suite checks keep their manual
 `Retro68:<Name>.log` behavior when no harness config is present; under a
 suite each writes into its private run workspace instead.
 

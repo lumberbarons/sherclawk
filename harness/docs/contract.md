@@ -2,18 +2,18 @@
 
 `native/` is the standalone PowerPC Startup Items controller, its host-testable
 cooperative state machine, closed-file I/O and public diagnostic adapter. It
-includes no Sherclawk headers or helpers. The Sherclawk consumers are the nine
+includes no Sherclawk headers or helpers. The Sherclawk consumers are the
 registered diagnostic checks listed below plus the `HarnessAcceptance` fixture;
 their compiled default workspace and manual logging remain available when no
 harness config exists. No API key or running Sherclawk agent is needed.
 
 The unattended runner is `suite.py`, and the consumer registry that names the
-nine checks, their deadlines and reset policies is `tools/native-suite.json`
+checks, their deadlines and reset policies is `tools/native-suite.json`
 (see [`suite.md`](suite.md)).
 
 ## Build and install
 
-Build the controller, installer, acceptance fixture and all nine diagnostic
+Build the controller, installer, acceptance fixture and all the diagnostic
 checks before booting or reserving a guest:
 
 ```bash

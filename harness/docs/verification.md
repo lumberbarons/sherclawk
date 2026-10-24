@@ -2,21 +2,21 @@
 
 Verified the working tree on top of `14bed6d` (issue #73, ADR-0009).
 `tools/check.sh` passed the ASan/UBSan C suites, the native controller suites,
-247 stdlib Python harness tests (including the new suite/registry, failure,
+the stdlib Python harness tests (including the new suite/registry, failure,
 reset, session and interactive tests) and the shipped
 `tools/native-suite.json` validation. `tools/lint.sh` passed shellcheck,
 cppcheck and ruff.
 
 `./build.sh HarnessChecks_APPL` built the controller, installer, acceptance
-fixture and all nine registered checks with Retro68 in Docker:
+fixture and all registered checks with Retro68 in Docker:
 `SherclawkWriteCheck`, `SherclawkSearchCheck`, `SherclawkEditCheck`,
 `SherclawkInspectCheck`, `SherclawkProjectCheck`, `SherclawkScrollCheck`,
 `SherclawkHandoffCheck`, `SherclawkSelfBuildCheck` and
-`SherclawkSelfBuildStopCheck`. `suite.py validate --build build` accepted all
-nine artifacts; both self-build targets compiled with the private `buildjobs`
+`SherclawkSelfBuildStopCheck`. `suite.py validate --build build` accepted every
+artifact; both self-build targets compiled with the private `buildjobs`
 queue name.
 
-A guest run of all nine checks was not performed for this record: the host had
+A guest run of all the checks was not performed for this record: the host had
 no mounted `Retro68` export or configured share host during verification.
 Host tests prove the runner's completion, reset, evidence and no-replay rules;
 the end-to-end guest qualification (including a MacRelix-free ToolServer run

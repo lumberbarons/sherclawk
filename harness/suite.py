@@ -128,7 +128,9 @@ def load_registry(path):
         raise RegistryError("registry %s is not valid UTF-8 JSON: %s" % (path, exc))
     if not isinstance(data, dict):
         raise RegistryError("registry %s must be a JSON object" % path)
-    if data.get("schema") not in (1, "1"):
+    schema = data.get("schema")
+    # bool and float compare equal to 1 but are not the schema number.
+    if not ((type(schema) is int and schema == 1) or schema == "1"):
         raise RegistryError("registry %s has schema %r, expected 1"
                             % (path, data.get("schema")))
     entries = data.get("checks")
@@ -348,6 +350,11 @@ class Suite:
         self.session["updated"] = _stamp(self.clock)
         self._write_json(self._session_path, self.session, mode=0o600)
 
+    def _session_idle(self):
+        """Stop advertising a lease the suite is about to release or has lost."""
+        self._session(active=False, token=None, request=None, check=None,
+                      mailbox=None)
+
     # ---- suite -----------------------------------------------------------
 
     def run(self, registry, build=None, owner=None, selected=None,
@@ -430,6 +437,7 @@ class Suite:
                 if remaining:
                     if check.reset == "reset" or failed:
                         current, lease = lease, None
+                        self._session_idle()
                         self._release(current, owner,
                                       "reset after %s" % check.name)
                         lease = self.manager.reserve(owner)
@@ -454,6 +462,7 @@ class Suite:
         finally:
             if lease is not None:
                 current, lease = lease, None
+                self._session_idle()
                 try:
                     self._release(current, owner, "suite finished")
                 except Exception as exc:
@@ -462,7 +471,7 @@ class Suite:
                     self.summary["passed"] = False
                     self.summary["phase"] = "failed"
             self.summary["finished"] = _stamp(self.clock)
-            self._session(active=False, token=None, request=None, check=None)
+            self._session_idle()
             self._write_summary()
         return self.summary
 
@@ -475,23 +484,25 @@ class Suite:
             "outcome": "error", "passed": False, "assertions": 0,
             "failures": 0, "failed_assertions": [], "error": None, "run": None,
         }
-        run = self.publisher.begin(lease.token, lease.owner, artifact)
-        entry["run"] = {
-            "id": run.run_id,
-            "slot": lease.slot,
-            "generation": lease.generation,
-            "workspace": run.workspace,
-            "application": run.application,
-            "evidence_dir": run.evidence_dir,
-            "evidence": getattr(run, "evidence_path", None),
-            "result": None,
-            "mailbox": run.mailbox_share,
-        }
-        self._session(active=True, check={
-            "name": check.name, "target": check.target, "run_id": run.run_id,
-            "workspace": run.workspace, "evidence_dir": run.evidence_dir},
-            mailbox=run.mailbox_share)
+        run = None
         try:
+            run = self.publisher.begin(lease.token, lease.owner, artifact)
+            entry["run"] = {
+                "id": run.run_id,
+                "slot": lease.slot,
+                "generation": lease.generation,
+                "workspace": run.workspace,
+                "application": run.application,
+                "evidence_dir": run.evidence_dir,
+                "evidence": getattr(run, "evidence_path", None),
+                "result": None,
+                "mailbox": run.mailbox_share,
+            }
+            self._session(active=True, check={
+                "name": check.name, "target": check.target,
+                "run_id": run.run_id, "workspace": run.workspace,
+                "evidence_dir": run.evidence_dir},
+                mailbox=run.mailbox_share)
             run.publish_application()
             for name, source in check.fixtures:
                 run.publish_fixture(name, fixtures[(check.name, name)])
@@ -527,12 +538,18 @@ class Suite:
         entry["finished"] = _stamp(self.clock)
         entry["seconds"] = round(entry["finished"]["monotonic"]
                                  - entry["started"]["monotonic"], 3)
-        if entry["run"].get("evidence") and os.path.exists(entry["run"]["evidence"]):
-            with open(entry["run"]["evidence"], encoding="utf-8") as f:
-                try:
-                    entry["run"]["phase"] = json.load(f).get("phase")
-                except ValueError:
-                    entry["run"]["phase"] = None
+        if run is None:
+            self._session(active=True, check=None, request=None, mailbox=None)
+            return entry
+        evidence = entry["run"]["evidence"]
+        if evidence:
+            try:
+                with open(evidence, encoding="utf-8") as f:
+                    document = json.load(f)
+                entry["run"]["phase"] = (document.get("phase")
+                                         if isinstance(document, dict) else None)
+            except (OSError, ValueError):
+                entry["run"]["phase"] = None
         fields = {
             "check": {
                 "name": check.name, "target": check.target,
@@ -755,9 +772,26 @@ def main(argv=None):
             runner = Suite(home=args.home, share=args.share,
                            share_host=args.share_host, share_dir=args.share_dir,
                            screenshot=not args.no_screenshot)
-            result = runner.run(registry, args.build, args.owner,
-                                selected=args.check or None,
-                                keep_going=args.keep_going)
+            try:
+                result = runner.run(registry, args.build, args.owner,
+                                    selected=args.check or None,
+                                    keep_going=args.keep_going)
+            except Exception as exc:
+                if runner.summary is None:
+                    raise
+                # The suite began, so it left evidence; a run that failed
+                # (including a lost lease) is not a bad invocation.
+                print("suite: %s" % exc, file=sys.stderr)
+                print("suite: evidence retained under %s"
+                      % runner.summary["evidence_dir"], file=sys.stderr)
+                if isinstance(exc, (SuiteError, reservation.LeaseError,
+                                    reservation.NoCapacity)):
+                    return 1
+                return 3 if isinstance(exc, (
+                    publish.PublicationError, reservation.ReservationError,
+                    reservation.RecoveryError, provision.ProvisionError,
+                    contract.ContractError, qmp.QMPError, qmp.KeymapError,
+                    OSError, ValueError)) else 2
             emit(args, result)
             if result["passed"]:
                 return 0
