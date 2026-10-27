@@ -18,6 +18,7 @@ $OS9_HARNESS_HOME (default ~/.local/share/os9-harness), outside any worktree:
 """
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 import posixpath
@@ -36,6 +37,7 @@ QEMU_IMG = "qemu-img"
 STORAGE_NAME = "storage.json"
 VOLUME = "Retro68"
 SENTINEL = ".harness-slot"
+AFP_PORT = 548
 # The developer's working export (tools/deploy-to-share.sh); never a slot's.
 DEVELOPER_EXPORT = "/srv/retro68"
 
@@ -100,13 +102,34 @@ def qemu_argv(s, qemu=QEMU, display="none", cdroms=(), drive=None):
     argv += [
         "-device", "usb-kbd",
         "-device", "usb-mouse",
-        "-nic", "user,model=sungem,mac=%s" % s.mac,
+        "-nic", nic_option(s),
         "-display", display,
         "-qmp", "unix:%s,server=on,wait=off" % s.qmp,
         "-pidfile", s.pidfile,
         "-daemonize",
     ]
     return argv
+
+
+def nic_option(s):
+    """The slot's user-mode NIC, with its own AFP server wired in when mapped.
+
+    The guests' startup mounts name the share host by address and the standard
+    AFP port, and an AppleShare alias keeps no other port. The guest therefore
+    gets a virtual network that contains that address, and QEMU forwards the
+    address's AFP port to this slot's own server instance. The developer share
+    on the same address is unreachable from the guest, with no change to the
+    guest image.
+    """
+    option = "user,model=sungem,mac=%s" % s.mac
+    storage = read_storage(s.home)
+    if storage is None or not storage.server:
+        return option
+    port = storage.slot(s.name).afp_port
+    if not port:
+        return option
+    return "%s,net=%s,guestfwd=tcp:%s:%d-cmd:nc %s %d" % (
+        option, storage.network, storage.server, AFP_PORT, storage.server, port)
 
 
 def overlay_argv(base, overlay, qemu_img=QEMU_IMG):
@@ -253,16 +276,18 @@ class SlotStorage:
     mount of another slot's volume or of the developer share is detected.
     """
 
-    def __init__(self, slot, mount, export, volume=VOLUME, isolated=True):
+    def __init__(self, slot, mount, export, volume=VOLUME, isolated=True, afp_port=None):
         self.slot = slot
         self.mount = mount
         self.export = export
         self.volume = volume
         self.isolated = isolated
+        self.afp_port = afp_port
 
     def describe(self):
         return {"slot": self.slot, "volume": self.volume, "mount": self.mount,
-                "export": self.export, "isolated": self.isolated}
+                "export": self.export, "isolated": self.isolated,
+                "afp_port": self.afp_port}
 
     def verify_mount(self):
         """Require the mount to be this slot's own volume; legacy storage is exempt."""
@@ -282,9 +307,14 @@ class SlotStorage:
 class Storage:
     """The explicit slot-to-storage mapping, one disjoint volume per slot."""
 
-    def __init__(self, slots, isolated=True):
+    def __init__(self, slots, isolated=True, server=None):
         self.slots = slots
         self.isolated = isolated
+        self.server = server  # address the guests' startup mounts name
+
+    @property
+    def network(self):
+        return str(ipaddress.ip_interface("%s/24" % self.server).network)
 
     @classmethod
     def single(cls, mount, export=DEVELOPER_EXPORT):
@@ -315,8 +345,31 @@ def _nested(a, b):
     return a.startswith(b) or b.startswith(a)
 
 
-def check_storage_entries(entries):
+def check_server(server):
+    try:
+        address = ipaddress.IPv4Address(server)
+    except ValueError:
+        raise StorageError("server %r is not an IPv4 address" % (server,))
+    # The guest's virtual network is that address's /24; keep clear of the
+    # addresses QEMU assigns to its gateway, DNS and DHCP range.
+    last = address.packed[-1]
+    if last in (0, 1, 2, 3, 255) or 15 <= last <= 30:
+        raise StorageError("server %s collides with the guest network's own addresses" % server)
+
+
+def check_storage_entries(entries, server=None):
     """Raise unless every slot has its own mount and export, disjoint from the rest."""
+    ports = [e["afp_port"] for e in entries.values() if e.get("afp_port")]
+    if ports and not server:
+        raise StorageError("afp_port needs a server address")
+    if server:
+        check_server(server)
+    if len(ports) != len(set(ports)):
+        raise StorageError("slots must serve AFP on different ports")
+    for port in ports:
+        if not isinstance(port, int) or not 1024 <= port <= 65535 or port == AFP_PORT:
+            raise StorageError("afp_port %r must be an unprivileged port other than %d"
+                               % (port, AFP_PORT))
     for name, entry in entries.items():
         if name not in SLOTS:
             raise StorageError("unknown slot %r in storage map" % name)
@@ -354,11 +407,13 @@ def read_storage(home):
                 isinstance(entry.get(k), str) and entry[k] for k in ("mount", "export")):
             raise StorageError("%s needs a mount and an export" % name)
         entries[name] = {"mount": os.path.normpath(entry["mount"]),
-                         "export": posixpath.normpath(entry["export"])}
-    check_storage_entries(entries)
+                         "export": posixpath.normpath(entry["export"]),
+                         "afp_port": entry.get("afp_port")}
+    server = data.get("server")
+    check_storage_entries(entries, server)
     volume = data.get("volume", VOLUME)
-    return Storage({n: SlotStorage(n, e["mount"], e["export"], volume)
-                    for n, e in entries.items()})
+    return Storage({n: SlotStorage(n, e["mount"], e["export"], volume, afp_port=e["afp_port"])
+                    for n, e in entries.items()}, server=server)
 
 
 def load_storage(home, share=None):
@@ -383,7 +438,7 @@ def require_storage(storage):
     return storage
 
 
-def set_storage(home, name, mount, export):
+def set_storage(home, name, mount, export, afp_port=None, server=None):
     """Record one slot's volume, refusing any mapping that overlaps another's."""
     slot(home, name)
     data = {}
@@ -395,11 +450,18 @@ def set_storage(home, name, mount, export):
     slots = dict(data.get("slots", {}))
     slots[name] = {"mount": os.path.normpath(os.path.abspath(os.path.expanduser(mount))),
                    "export": posixpath.normpath(export)}
-    check_storage_entries(slots)
+    if afp_port:
+        slots[name]["afp_port"] = afp_port
+    server = server or data.get("server")
+    check_storage_entries({n: dict(e, afp_port=e.get("afp_port")) for n, e in slots.items()},
+                          server)
     os.makedirs(home.path, exist_ok=True)
     tmp = home.storage_path + ".tmp"
+    document = {"volume": VOLUME, "slots": slots}
+    if server:
+        document["server"] = server
     with open(tmp, "w") as f:
-        json.dump({"volume": VOLUME, "slots": slots}, f, indent=2, sort_keys=True)
+        json.dump(document, f, indent=2, sort_keys=True)
         f.write("\n")
     os.replace(tmp, home.storage_path)
 
@@ -448,7 +510,7 @@ def stop(s, timeout=10.0):
 
 def storage_command(home, args):
     if args.storage_cmd == "set":
-        set_storage(home, args.slot, args.mount, args.export)
+        set_storage(home, args.slot, args.mount, args.export, args.afp_port, args.server)
         return
     storage = require_storage(read_storage(home))
     if args.storage_cmd == "check":
@@ -478,6 +540,9 @@ def main(argv=None):
     q.add_argument("slot")
     q.add_argument("--mount", required=True, help="host mount point of the slot's volume")
     q.add_argument("--export", required=True, help="share-host directory behind the volume")
+    q.add_argument("--afp-port", type=int,
+                   help="port of the slot's own AFP instance; the guest's AFP traffic is forwarded to it")
+    q.add_argument("--server", help="address the guests' startup mounts name (needed with --afp-port)")
     p = sub.add_parser("launch", help="start the slot's guest headless (or windowed)")
     p.add_argument("slot")
     p.add_argument("--display", default="none", help="QEMU -display (default none)")

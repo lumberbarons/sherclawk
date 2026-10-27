@@ -61,8 +61,9 @@ A slot is a name with fixed identity values derived in `provision.py`:
 | pid / log | `run/<slot>.pid`, `run/<slot>.log` |
 | AFP volume | `storage.json`: a host mount and a server export of its own, never shared |
 
-Each guest has its own user-mode network stack: every guest sees `10.0.2.15`,
-gateway `10.0.2.2`, and they cannot reach each other directly. Every guest
+Each guest has its own user-mode network stack: by default every guest sees
+`10.0.2.15`, gateway `10.0.2.2`, and they cannot reach each other directly (a
+slot whose storage forwards AFP uses the share host's /24 instead, see below). Every guest
 reaches the AFP share host over its LAN address and holds its own AFP session
 (`info usernet` shows one established connection to port 548 per guest). Add
 `hostfwd` rules per slot if a service must be reachable from the host.
@@ -81,17 +82,101 @@ The mapping is recorded once, outside every worktree, and every harness command
 reads it instead of a share path:
 
 ```bash
-python3 harness/provision.py storage set slot1 --mount ~/Retro68Share-slot1 --export /srv/os9-harness/slot1
-python3 harness/provision.py storage set slot2 --mount ~/Retro68Share-slot2 --export /srv/os9-harness/slot2
+python3 harness/provision.py storage set slot1 --mount ~/Retro68Share-slot1 \
+    --export /srv/os9-harness/slot1 --afp-port 5481 --server <afp-host-ip>
+python3 harness/provision.py storage set slot2 --mount ~/Retro68Share-slot2 \
+    --export /srv/os9-harness/slot2 --afp-port 5482
 python3 harness/provision.py storage show     # the mapping, per slot
 python3 harness/provision.py storage check    # every mount carries its own slot's sentinel
 ```
 
 `storage set` refuses a mapping whose mounts or exports overlap another slot's,
-whose export is relative, or whose export is, contains or sits inside the
-developer share. `info` lists each slot's storage beside its other identity.
-`OS9_HARNESS_SHARE` and `--share` no longer exist; a command with no recorded
-map stops with an error rather than falling back to one shared directory.
+whose export is relative, whose export is, contains or sits inside the developer
+share, whose AFP ports repeat or are privileged, or whose server address sits
+among the addresses QEMU reserves in the guest network. `info` lists each slot's
+storage beside its other identity. `OS9_HARNESS_SHARE` and `--share` no longer
+exist; a command with no recorded map stops with an error rather than falling
+back to one shared directory.
+
+### How a guest reaches only its own volume
+
+The guests' startup mounts name the share host by address and the standard AFP
+port, and an AppleShare alias keeps no other port, so a per-slot port alone would
+be ignored at boot. The harness therefore puts the choice in the slot's QEMU
+network instead of in the guest:
+
+- With `--server`, the slot's NIC gets a virtual network that contains that
+  address (its /24) and `guestfwd=tcp:<server>:548-cmd:nc <server> <afp-port>`,
+  visible in the launch argv and in each run's evidence. The guest connects to
+  the address it has always used and QEMU hands the connection to that slot's own
+  AFP instance.
+- The developer share on the same address and port is not reachable from the
+  guest at all, and neither are the other ports on that address. Nothing in the
+  guest image changes, so the sealed slot bases and the controller stay as they
+  are.
+- The guest's DHCP lease moves to that virtual /24; the guest reaches everything
+  outside it through QEMU's NAT as before.
+
+Each slot's instance is a second pair of netatalk daemons on the share host that
+shares nothing with the developer's `afp.conf`: its own port, CNID daemon port,
+server signature and volume directory. Adding it does not restart or reload the
+running AFP service.
+
+```ini
+; /etc/netatalk/harness-slot1.conf
+[Global]
+mimic model = RackMac
+afp port = 5481
+signature = os9harness-slot1
+uam list = uams_clrtxt.so uams_guest.so
+guest account = macos9
+cnid listen = 127.0.0.1:4701
+cnid server = 127.0.0.1:4701
+log level = default:info
+log file = /var/log/netatalk-harness-slot1.log
+
+[Retro68]
+path = /srv/os9-harness/slot1
+guest ok = yes
+read only = no
+ea = sys
+```
+
+Keep `cnid server` in `[Global]`: given on the volume with a port, afpd appends
+the port a second time and the volume then fails to open ("Unable to get stamp
+value from CNID backend"). The signature must be exactly 16 characters and
+differ per instance.
+
+```ini
+; /etc/systemd/system/harness-cnid@.service
+[Service]
+ExecStart=/usr/sbin/cnid_metad -d -F /etc/netatalk/harness-%i.conf
+Restart=on-failure
+
+; /etc/systemd/system/harness-afpd@.service
+[Unit]
+After=network.target harness-cnid@%i.service
+Requires=harness-cnid@%i.service
+[Service]
+ExecStart=/usr/sbin/afpd -d -F /etc/netatalk/harness-%i.conf
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target
+```
+
+The host reads the same directory over NFS, for the reason in
+[workflow.md](workflow.md): readiness is a file replaced by rename. Add each
+export beside the developer's, for this host only, and mount it unprivileged:
+
+```text
+# /etc/exports.d/os9-harness.exports
+/srv/os9-harness/slot1 <host-ip>(rw,sync,no_subtree_check,insecure,all_squash,anonuid=1001,anongid=1001)
+```
+
+```bash
+mount_nfs -o vers=3,noresvport,nolocks,locallocks,noac,nonegnamecache \
+    <afp-host>:/srv/os9-harness/slot1 ~/Retro68Share-slot1
+```
 
 ### The slot sentinel
 
@@ -109,36 +194,34 @@ anything is written:
 
 ### Preparing an export
 
-On the share host, as the share owner, once per slot. This creates a directory;
-it does not restart AFP and must not run while that slot's guest is using AFP.
+On the share host, as the share owner, once per slot. This creates directories;
+it does not restart AFP and is safe while other guests are running.
 
 ```bash
-sudo install -d -o macos9 -g macos9 -m 0755 /srv/os9-harness/slot1
+sudo install -d -o macos9 -g macos9 -m 0755 /srv/os9-harness /srv/os9-harness/slot1 \
+    /srv/os9-harness/slot1/Harness /srv/os9-harness/slot1/Harness/slot1
 printf 'slot1\n' | sudo tee /srv/os9-harness/slot1/.harness-slot >/dev/null
-sudo install -d -o macos9 -g macos9 -m 0755 /srv/os9-harness/slot1/Harness/slot1
 ```
-
-Serve each export to its guest as an AFP volume named `Retro68` with access
-limited to that slot's own credentials, and keep the developer volume out of the
-guests' reach. How the server names and scopes the volumes is the share host's
-netatalk configuration, not something the harness changes or restarts; record
-the choice and the guest verification in the
-[verification history](../../docs/history/verification.md).
 
 ### Migrating an existing deployment
 
-1. Quit any running guests through `manage.py release` or Special > Shut Down;
-   do not restart AFP while a guest is connected.
-2. Prepare each slot's export and sentinel as above and copy nothing from the
-   developer share except what that slot needs.
-3. Mount each slot's volume on the host at its mount point, then run
-   `provision.py storage set` for every slot and `provision.py storage check`.
-4. Boot each slot with `provision.py launch-work` or from the controller base,
-   point its Chooser alias and startup mount at its own volume, and confirm the
-   guest sees only that volume. Seal the result with `freeze-slot` as for any
-   controller-configured slot base.
-5. Reserve and run a diagnostic. The retained evidence names the storage the
-   run used under `storage`.
+1. Prepare each slot's export and sentinel as above, install its netatalk
+   configuration and units, and `systemctl start harness-afpd@slot1` (and the
+   other slots). Check with `ss -ltn` that its port and its CNID port are
+   listening and that the developer service's process is unchanged. Enabling the
+   units at boot (`systemctl enable`) is the share host owner's decision; until
+   then the instances must be started again after the host restarts.
+2. Export and mount each slot's directory on the host, then run
+   `provision.py storage set` with `--afp-port` and `--server` for every slot and
+   `provision.py storage check`.
+3. Release every lease and stop the guests, then reserve again. Each slot boots
+   its existing sealed image with the new network; the controller mounts its
+   volume and publishes readiness in that slot's own `Harness/<slot>/`. Nothing
+   is copied from the developer share, and no guest image or slot base is
+   rebuilt.
+4. Run a diagnostic through `suite.py run` and read the `storage` record in its
+   evidence. The server's `ss -tn` shows each guest connected to its own port and
+   none to the developer share.
 
 ## Building the base
 

@@ -378,6 +378,46 @@ class StorageMapTest(unittest.TestCase):
         self.mark("slot2")
         self.assertEqual(self.run_cli(base + ["check"]), 0)
 
+    def test_a_mapped_slot_forwards_the_guests_afp_traffic_to_its_own_instance(self):
+        for n, port in (("slot1", 5481), ("slot2", 5482)):
+            provision.set_storage(self.home, n, self.mounts[n], "/srv/harness/" + n,
+                                  afp_port=port, server="10.0.4.48")
+        nics = {}
+        for n in provision.SLOTS:
+            argv = provision.qemu_argv(provision.slot(self.home, n))
+            nics[n] = argv[argv.index("-nic") + 1]
+        self.assertIn("net=10.0.4.0/24", nics["slot1"])
+        self.assertIn("guestfwd=tcp:10.0.4.48:548-cmd:nc 10.0.4.48 5481", nics["slot1"])
+        self.assertIn("guestfwd=tcp:10.0.4.48:548-cmd:nc 10.0.4.48 5482", nics["slot2"])
+        self.assertNotIn("5482", nics["slot1"])
+        self.assertIn("mac=52:54:00:09:00:01", nics["slot1"])
+
+    def test_without_a_forward_the_nic_is_the_plain_user_network(self):
+        self.configure()
+        argv = provision.qemu_argv(provision.slot(self.home, "slot1"))
+        self.assertEqual(argv[argv.index("-nic") + 1],
+                         "user,model=sungem,mac=52:54:00:09:00:01")
+
+    def test_forwarding_needs_distinct_unprivileged_ports_and_a_usable_server(self):
+        mount = self.mounts["slot1"]
+        with self.assertRaisesRegex(provision.StorageError, "needs a server"):
+            provision.set_storage(self.home, "slot1", mount, "/srv/h/slot1", afp_port=5481)
+        with self.assertRaisesRegex(provision.StorageError, "unprivileged"):
+            provision.set_storage(self.home, "slot1", mount, "/srv/h/slot1",
+                                  afp_port=548, server="10.0.4.48")
+        with self.assertRaisesRegex(provision.StorageError, "not an IPv4"):
+            provision.set_storage(self.home, "slot1", mount, "/srv/h/slot1",
+                                  afp_port=5481, server="beardmore")
+        for clash in ("10.0.4.2", "10.0.4.20", "10.0.4.255"):
+            with self.assertRaisesRegex(provision.StorageError, "collides"):
+                provision.set_storage(self.home, "slot1", mount, "/srv/h/slot1",
+                                      afp_port=5481, server=clash)
+        provision.set_storage(self.home, "slot1", mount, "/srv/h/slot1",
+                              afp_port=5481, server="10.0.4.48")
+        with self.assertRaisesRegex(provision.StorageError, "different ports"):
+            provision.set_storage(self.home, "slot2", self.mounts["slot2"], "/srv/h/slot2",
+                                  afp_port=5481)
+
     def test_cli_show_without_a_map_fails(self):
         self.assertEqual(self.run_cli(["--home", self.home.path, "storage", "show"]), 1)
 

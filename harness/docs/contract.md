@@ -20,7 +20,7 @@ checks before booting or reserving a guest:
 ./build.sh HarnessChecks_APPL
 ```
 
-Publish those applications fork-aware to the existing `Retro68:` export.
+Publish those applications fork-aware to each slot's own `Retro68:` volume.
 `harness/publish.py` owns the transport and verification: within a run it
 publishes the selected application into a private
 `Retro68:Harness:<slot>-g<generation>:<run>:` workspace, and its lease-free
