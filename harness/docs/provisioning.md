@@ -22,6 +22,7 @@ base/golden-work.qcow2    writable working copy, present only while preparing a 
 slots/<slot>.qcow2        overlay on the base, one per slot
 run/<slot>.{qmp,pid,log}  QMP socket, pid file and QEMU log
 manifest.json             emulator version and base/original checksums
+storage.json              each slot's own AFP volume: host mount and server export
 manager.sqlite3           exclusive lease state (reservations.md)
 locks/, evidence/         OS locks and retained release/recovery evidence
 ```
@@ -58,13 +59,86 @@ A slot is a name with fixed identity values derived in `provision.py`:
 | MAC address | `52:54:00:09:00:NN`, locally administered, `NN` the slot number |
 | QMP socket | `run/<slot>.qmp`, one client at a time |
 | pid / log | `run/<slot>.pid`, `run/<slot>.log` |
+| AFP volume | `storage.json`: a host mount and a server export of its own, never shared |
 
 Each guest has its own user-mode network stack: every guest sees `10.0.2.15`,
-gateway `10.0.2.2`, and they cannot reach each other directly. Both reach the
-AFP share host over its LAN address and hold independent AFP sessions
-(`info usernet` shows one established connection to port 548 per guest). Guests
-exchange data only through the share; add `hostfwd` rules per slot if a service
-must be reachable from the host.
+gateway `10.0.2.2`, and they cannot reach each other directly. Every guest
+reaches the AFP share host over its LAN address and holds its own AFP session
+(`info usernet` shows one established connection to port 548 per guest). Add
+`hostfwd` rules per slot if a service must be reachable from the host.
+
+## Per-slot AFP storage
+
+A slot's guest mounts a volume that belongs to that slot alone. The guest-visible
+name stays `Retro68`, so the controller, the `Retro68:Harness:` layout and every
+consumer's paths are unchanged, but no slot can browse or modify another slot's
+files or the developer's working share (`tools/deploy-to-share.sh`, default
+`/srv/retro68`). It also gives each slot its own fixed-root files: the shipping
+app's `Retro68:Sherclawk.log`, applications and mailboxes cannot collide between
+two live guests.
+
+The mapping is recorded once, outside every worktree, and every harness command
+reads it instead of a share path:
+
+```bash
+python3 harness/provision.py storage set slot1 --mount ~/Retro68Share-slot1 --export /srv/os9-harness/slot1
+python3 harness/provision.py storage set slot2 --mount ~/Retro68Share-slot2 --export /srv/os9-harness/slot2
+python3 harness/provision.py storage show     # the mapping, per slot
+python3 harness/provision.py storage check    # every mount carries its own slot's sentinel
+```
+
+`storage set` refuses a mapping whose mounts or exports overlap another slot's,
+whose export is relative, or whose export is, contains or sits inside the
+developer share. `info` lists each slot's storage beside its other identity.
+`OS9_HARNESS_SHARE` and `--share` no longer exist; a command with no recorded
+map stops with an error rather than falling back to one shared directory.
+
+### The slot sentinel
+
+Each volume root holds a file `.harness-slot` containing only the slot's name,
+created on the share host when the export is prepared. Three agreements are
+checked against it, and a mismatch is a configuration error raised before
+anything is written:
+
+- `manage.py reserve` checks the chosen slot's host mount before booting it.
+- `publish.py run` and `suite.py run` check the leased slot's host mount and,
+  over ssh, the same file in its server export, before the run is created, again
+  before the application is published and again before the mailbox request.
+- A mount of another slot's volume, of the developer share or of an unmarked
+  directory therefore fails, as does an export that is not the one mapped.
+
+### Preparing an export
+
+On the share host, as the share owner, once per slot. This creates a directory;
+it does not restart AFP and must not run while that slot's guest is using AFP.
+
+```bash
+sudo install -d -o macos9 -g macos9 -m 0755 /srv/os9-harness/slot1
+printf 'slot1\n' | sudo tee /srv/os9-harness/slot1/.harness-slot >/dev/null
+sudo install -d -o macos9 -g macos9 -m 0755 /srv/os9-harness/slot1/Harness/slot1
+```
+
+Serve each export to its guest as an AFP volume named `Retro68` with access
+limited to that slot's own credentials, and keep the developer volume out of the
+guests' reach. How the server names and scopes the volumes is the share host's
+netatalk configuration, not something the harness changes or restarts; record
+the choice and the guest verification in the
+[verification history](../../docs/history/verification.md).
+
+### Migrating an existing deployment
+
+1. Quit any running guests through `manage.py release` or Special > Shut Down;
+   do not restart AFP while a guest is connected.
+2. Prepare each slot's export and sentinel as above and copy nothing from the
+   developer share except what that slot needs.
+3. Mount each slot's volume on the host at its mount point, then run
+   `provision.py storage set` for every slot and `provision.py storage check`.
+4. Boot each slot with `provision.py launch-work` or from the controller base,
+   point its Chooser alias and startup mount at its own volume, and confirm the
+   guest sees only that volume. Seal the result with `freeze-slot` as for any
+   controller-configured slot base.
+5. Reserve and run a diagnostic. The retained evidence names the storage the
+   run used under `storage`.
 
 ## Building the base
 
@@ -131,7 +205,10 @@ Run from the repository root. `HOME_DIR` is `$OS9_HARNESS_HOME`.
 
 Build and publish the fixed native build diagnostic, then launch it from the
 `Retro68` window in each guest and read its log from the share (the log is
-overwritten per launch):
+overwritten per launch). This publishes to the developer share, which a guest
+sees only while it still mounts that share, as during base preparation; once a
+slot has its own volume, publish with `publish.py install --dest` into that
+slot's export, or run the diagnostic through `publish.py run` or `suite.py run`:
 
 ```bash
 SHARE_HOST=<afp-host> APP=SherclawkNativeBuildCheck tools/deploy-to-share.sh

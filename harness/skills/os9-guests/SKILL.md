@@ -38,7 +38,7 @@ EOF
 ## Run the registered suite
 
 ```bash
-export OS9_HARNESS_SHARE="$HOME/Retro68Share" OS9_HARNESS_SHARE_HOST=<afp-host>
+export OS9_HARNESS_SHARE_HOST=<afp-host>
 ./build.sh HarnessChecks_APPL                       # build first; needs INTERFACES_DIR
 python3 harness/suite.py run --registry tools/native-suite.json --build build \
     --owner <your-stable-name>

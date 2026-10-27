@@ -81,6 +81,7 @@ class FakeRemote:
         self.staged = {}
         self.files = {}
         self.metadata = {}
+        self.sentinels = {}
         self.stage_dir = "/tmp/sherclawk-harness-publish.%d" % id(self)
         self.closed = False
 
@@ -108,6 +109,10 @@ class FakeRemote:
         path = "%s/%s" % (self.stage_dir, leaf)
         self.staged[path] = data
         return path
+
+    def read_sentinel(self, export):
+        self._note("read_sentinel", export)
+        return self.sentinels.get(export)
 
     def make_dir(self, *paths):
         for path in paths:
@@ -199,6 +204,153 @@ class Base(unittest.TestCase):
     def evidence(self, run):
         with open(run.evidence_path) as f:
             return json.load(f)
+
+
+class IsolatedBase(Base):
+    """Two slots on disjoint volumes, each marked on the mount and on the server."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = provision.Home(os.path.join(self.tmp.name, "state"))
+        self.mounts = {}
+        self.exports = {}
+        self.remote = FakeRemote()
+        for name in provision.SLOTS:
+            self.mounts[name] = os.path.join(self.tmp.name, "mnt-" + name)
+            self.exports[name] = "/srv/harness/" + name
+            os.makedirs(os.path.join(self.mounts[name], "Harness", name))
+            self.mark_mount(name, name)
+            self.remote.sentinels[self.exports[name]] = name
+            provision.set_storage(self.home, name, self.mounts[name], self.exports[name])
+        self.clock = FakeClock()
+        self.effects = ReadyEffects(self.home, None, self.clock)
+        self.manager = reservation.Manager(home=self.home, clock=self.clock,
+                                           effects=self.effects)
+        self.heartbeat_error = None
+        self.publisher = publish.Publisher(home=self.home, share_host="share-host",
+                                           remote=self.remote, manager=self.manager,
+                                           clock=self.clock, wait_ready=self.read_heartbeat)
+        self.build = BuildTree("SherclawkWriteCheck")
+        self.addCleanup(self.build.close)
+        self.artifact = publish.locate_artifact(self.build.path, "SherclawkWriteCheck")
+
+    def mark_mount(self, mount_slot, content):
+        with open(os.path.join(self.mounts[mount_slot], provision.SENTINEL), "w") as f:
+            f.write(content + "\n")
+
+    def written(self):
+        return [call for call in self.remote.calls
+                if call[0] in ("staging", "stage_bytes", "make_dir", "install")]
+
+
+class IsolatedPublicationTest(IsolatedBase):
+    def test_each_lease_publishes_only_into_its_own_volume(self):
+        lease_a, run_a = self.begin("alice")
+        lease_b, run_b = self.begin("bob")
+        self.assertEqual((lease_a.slot, lease_b.slot), ("slot1", "slot2"))
+        run_a.publish_application()
+        run_b.publish_application()
+        for run, slot in ((run_a, "slot1"), (run_b, "slot2")):
+            self.assertTrue(run.mailbox_share.startswith(self.mounts[slot] + os.sep))
+            self.assertTrue(run.workspace_mount.startswith(self.mounts[slot] + os.sep))
+        dests = {slot: [c[2] for c in self.remote.calls if c[0] == "install"
+                        and c[2].startswith(self.exports[slot] + "/")]
+                 for slot in provision.SLOTS}
+        installs = [c[2] for c in self.remote.calls if c[0] == "install"]
+        self.assertEqual(len(installs), 4)
+        for slot in provision.SLOTS:
+            self.assertEqual(len(dests[slot]), 2, slot)
+        self.assertTrue(all(path.startswith("/srv/harness/") for path in installs))
+        self.assertFalse(any(path.startswith("/srv/retro68") for path in installs))
+
+    def test_workspace_directories_are_made_under_the_slots_export(self):
+        lease, run = self.begin()
+        run.publish_application()
+        dirs = [c[1] for c in self.remote.calls if c[0] == "make_dir"]
+        self.assertEqual(dirs[0], "%s/Harness/%s" % (self.exports[lease.slot], run.reservation))
+        self.assertTrue(all(d.startswith(self.exports[lease.slot] + "/Harness/") for d in dirs))
+
+    def test_evidence_names_the_volume_the_run_used(self):
+        lease, run = self.begin()
+        run.publish_application()
+        storage = self.evidence(run)["storage"]
+        self.assertEqual(storage["slot"], lease.slot)
+        self.assertEqual(storage["mount"], self.mounts[lease.slot])
+        self.assertEqual(storage["export"], self.exports[lease.slot])
+        self.assertTrue(storage["isolated"])
+
+    def test_the_request_lands_in_the_slots_own_mailbox_only(self):
+        lease, run = self.begin()
+        run.publish_application()
+        run.publish_request(seconds=60)
+        self.assertTrue(os.path.exists(os.path.join(self.mounts[lease.slot], "Harness",
+                                                    lease.slot, "request")))
+        other = "slot2" if lease.slot == "slot1" else "slot1"
+        self.assertFalse(os.path.exists(os.path.join(self.mounts[other], "Harness", other,
+                                                     "request")))
+
+
+class StorageMismatchTest(IsolatedBase):
+    def test_a_mount_of_another_slots_volume_is_rejected_before_any_write(self):
+        lease = self.lease()
+        self.mark_mount(lease.slot, "slot2")
+        with self.assertRaisesRegex(publish.ConfigError, "slot 'slot2'"):
+            self.publisher.begin(lease.token, lease.owner, self.artifact)
+        self.assertEqual(self.written(), [])
+
+    def test_an_unmarked_mount_such_as_the_developer_share_is_rejected(self):
+        os.remove(os.path.join(self.mounts["slot1"], provision.SENTINEL))
+        with self.assertRaisesRegex(reservation.ConfigError, "unmarked"):
+            self.lease()
+
+    def test_an_export_that_is_not_the_slots_own_is_rejected_before_any_write(self):
+        lease = self.lease()
+        self.remote.sentinels[self.exports[lease.slot]] = "slot2"
+        with self.assertRaisesRegex(publish.ConfigError, "not this slot's volume"):
+            self.publisher.begin(lease.token, lease.owner, self.artifact)
+        self.assertEqual(self.written(), [])
+
+    def test_an_unmarked_or_unreachable_export_is_rejected(self):
+        lease = self.lease()
+        del self.remote.sentinels[self.exports[lease.slot]]
+        with self.assertRaisesRegex(publish.ConfigError, "unmarked"):
+            self.publisher.begin(lease.token, lease.owner, self.artifact)
+        self.assertEqual(self.written(), [])
+
+    def test_remapping_after_begin_is_caught_before_the_application_is_published(self):
+        lease, run = self.begin()
+        self.remote.sentinels[self.exports[lease.slot]] = "slot2"
+        with self.assertRaisesRegex(publish.ConfigError, "not this slot's volume"):
+            run.publish_application()
+        self.assertEqual(self.written(), [])
+        self.assertEqual(self.evidence(run)["phase"], "failed")
+
+    def test_remapping_after_the_application_is_caught_before_the_request(self):
+        lease, run = self.begin()
+        run.publish_application()
+        self.mark_mount(lease.slot, "slot2")
+        with self.assertRaisesRegex(publish.ConfigError, "slot 'slot2'"):
+            run.publish_request(seconds=60)
+        self.assertFalse(os.path.exists(os.path.join(run.mailbox_share, "request")))
+
+    def test_every_slot_must_be_mapped_before_publishing(self):
+        os.remove(self.home.storage_path)
+        publisher = publish.Publisher(home=self.home, share_host="share-host",
+                                      remote=self.remote, manager=self.manager,
+                                      clock=self.clock)
+        with self.assertRaisesRegex(publish.ConfigError, "no slot storage is mapped"):
+            publisher.require_ready()
+
+    def test_a_legacy_single_root_skips_the_sentinel_check(self):
+        share = os.path.join(self.tmp.name, "legacy")
+        os.makedirs(share)
+        storage = provision.Storage.single(share, "/srv/retro68")
+        publisher = publish.Publisher(home=self.home, share_host="share-host",
+                                      remote=self.remote, manager=self.manager,
+                                      clock=self.clock, storage=storage)
+        publisher.verify_storage("slot1")
+        self.assertNotIn("read_sentinel", self.remote.ops())
 
 
 class ArtifactTest(unittest.TestCase):

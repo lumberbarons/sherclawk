@@ -5,7 +5,7 @@ Sherclawk supplies the built artifact (data fork plus Rez resource fork) and
 the registered target name; this module owns staging, fork metadata,
 publication and collection, under a reservation lease:
 
-    export OS9_HARNESS_SHARE="$HOME/Retro68Share"
+    python3 harness/provision.py storage show      # each slot's own AFP volume
     export OS9_HARNESS_SHARE_HOST="<afp-host>"
     token=$(python3 harness/manage.py --json reserve --owner agent-a \
             | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')
@@ -13,7 +13,7 @@ publication and collection, under a reservation lease:
         --token "$token" --owner agent-a --fixture scenario=scenario.txt
 
 Each run publishes into a fresh, never-reused workspace
-``Retro68:Harness:<slot>-g<generation>:<run>:` on the existing export, with
+``Retro68:Harness:<slot>-g<generation>:<run>:` on the leased slot's own volume, with
 the application, its ``._`` sidecar and the complete netatalk Metadata xattr
 verified server-side before the mailbox request is published last.  The
 workspace also holds the run's private ``buildjobs`` queue.  Evidence is
@@ -21,13 +21,15 @@ retained under ``$OS9_HARNESS_HOME/evidence/<slot>/<slot>-g<gen>-run-<run>/``
 and survives failed runs, expiry and repeated launches; nothing is deleted.
 
 Stdlib only, and no imports from ``tools/`` or ``src/`` (ADR-0009).  Never
-restarts AFP or changes the export.
+restarts AFP or changes an export.  The host mount and the server export must
+both carry the leased slot's sentinel before anything is published.
 """
 import argparse
 import contextlib
 import dataclasses
 import json
 import os
+import posixpath
 import re
 import secrets
 import shlex
@@ -262,6 +264,13 @@ class Remote:
             raise RemoteError("invalid staging leaf %r" % (leaf,))
         return leaf
 
+    def read_sentinel(self, export):
+        """The slot name an export declares, or None when it is missing or unreadable."""
+        path = posixpath.join(export, provision.SENTINEL)
+        done = self._capture(["ssh", "-o", "BatchMode=yes", self.host,
+                              "cat %s" % shlex.quote(path)], check=False)
+        return done.stdout.strip() or None if done.returncode == 0 else None
+
     def make_dir(self, *paths):
         """Create each directory explicitly, so every level gets the owner.
 
@@ -379,14 +388,16 @@ class Publisher:
 
     def __init__(self, home=None, share=None, share_host=None, share_dir=None,
                  clock=None, remote=None, manager=None, evidence_dir=None,
-                 wait_ready=None):
+                 wait_ready=None, storage=None):
         self.clock = clock or reservation.Clock()
         self.home = home if isinstance(home, provision.Home) else provision.Home(home)
-        share = share if share is not None else os.environ.get("OS9_HARNESS_SHARE")
+        # Each slot's own volume from the recorded map; a bare `share` is the
+        # unisolated single-root layout that host tests use as a stand-in.
         self.share = os.path.abspath(share) if share else None
         self.share_host = share_host or os.environ.get("OS9_HARNESS_SHARE_HOST")
         self.share_dir = (share_dir or os.environ.get("OS9_HARNESS_SHARE_DIR")
                           or DEFAULT_SHARE_DIR)
+        self.storage = storage or self._resolve_storage()
         if remote is not None:
             self.remote = remote
         elif self.share_host:
@@ -401,19 +412,51 @@ class Publisher:
             lambda mailbox, slot: harness_mailbox.wait_ready(mailbox, slot,
                                                              timeout=HEARTBEAT_SECONDS))
 
+    def _resolve_storage(self):
+        try:
+            storage = provision.read_storage(self.home)
+        except provision.StorageError as exc:
+            raise ConfigError(str(exc))
+        if storage is None and self.share:
+            storage = provision.Storage.single(self.share, self.share_dir)
+        return storage
+
+    def slot_storage(self, slot):
+        try:
+            return provision.require_storage(self.storage).slot(slot)
+        except provision.StorageError as exc:
+            raise ConfigError(str(exc))
+
     def require_ready(self):
-        if not self.share:
-            raise ConfigError("set OS9_HARNESS_SHARE to the mounted Retro68 export")
-        if not os.path.isdir(self.share):
-            raise ConfigError("share is not mounted: %s" % self.share)
+        for name in provision.SLOTS:
+            self.slot_storage(name)
         if self.remote is None:
             raise ConfigError("set OS9_HARNESS_SHARE_HOST to publish to the share host")
 
-    def mount_path(self, guest):
-        return self._guest_path(self.share, guest)
+    def verify_storage(self, slot):
+        """Require the host mount and the server export to both be this slot's own.
 
-    def remote_path(self, guest):
-        return self._guest_path(self.share_dir, guest)
+        Runs before an application or a mailbox request is published, so a
+        mapping that points at another slot's volume or at the developer share
+        is rejected while nothing has been written.
+        """
+        storage = self.slot_storage(slot)
+        try:
+            storage.verify_mount()
+        except provision.StorageError as exc:
+            raise ConfigError(str(exc))
+        if storage.isolated:
+            found = self.remote.read_sentinel(storage.export)
+            if found != slot:
+                raise ConfigError(
+                    "%s export %s on the share host is %s, not this slot's volume"
+                    % (slot, storage.export, "slot %r" % found if found else "unmarked"))
+
+    def mount_path(self, guest, slot):
+        return self._guest_path(self.slot_storage(slot).mount, guest)
+
+    def remote_path(self, guest, slot):
+        return self._guest_path(self.slot_storage(slot).export, guest)
 
     @staticmethod
     def _guest_path(root, guest):
@@ -426,6 +469,7 @@ class Publisher:
         """Validate the lease and open a fresh, never-reused run."""
         self.require_ready()
         lease = self.manager.lease(token, owner)
+        self.verify_storage(lease.slot)
         run = Run(self, lease, artifact, secrets.token_hex(16))
         run.start()
         return run
@@ -449,7 +493,7 @@ class Run:
         self.application = self.workspace + artifact.target
         self.queue = self.workspace + QUEUE_NAME + ":"
         self.mailbox_guest = "%s%s:" % (HARNESS_ROOT, lease.slot)
-        self.mailbox_share = publisher.mount_path(self.mailbox_guest)
+        self.mailbox_share = publisher.mount_path(self.mailbox_guest, lease.slot)
         self.evidence_dir = os.path.join(
             publisher.evidence_dir, lease.slot,
             "%s-g%d-run-%s" % (lease.slot, lease.generation, self.short))
@@ -472,7 +516,10 @@ class Run:
 
     @property
     def workspace_mount(self):
-        return self.publisher.mount_path(self.workspace)
+        return self.publisher.mount_path(self.workspace, self.lease.slot)
+
+    def _remote_path(self, guest):
+        return self.publisher.remote_path(guest, self.lease.slot)
 
     def start(self):
         os.makedirs(self.evidence_dir, exist_ok=True)
@@ -529,12 +576,13 @@ class Run:
         """Publish the exact artifact into the run workspace and verify it."""
         def body():
             remote = self.publisher.remote
+            self.publisher.verify_storage(self.lease.slot)
             remote.make_dir(
-                self.publisher.remote_path("%s%s:" % (HARNESS_ROOT, self.reservation)),
-                self.publisher.remote_path(self.workspace),
-                self.publisher.remote_path(self.queue))
+                self._remote_path("%s%s:" % (HARNESS_ROOT, self.reservation)),
+                self._remote_path(self.workspace),
+                self._remote_path(self.queue))
             self.verification = publish_artifact(
-                remote, self.artifact, self.publisher.remote_path(self.application),
+                remote, self.artifact, self._remote_path(self.application),
                 leaf_prefix=self.short)
         return self._step("application", body)
 
@@ -551,7 +599,7 @@ class Run:
             remote = self.publisher.remote
             staged = remote.stage_bytes("fixture-%s-%d" % (self.short, len(self.fixtures)),
                                         data)
-            dest = self.publisher.remote_path(self.workspace + name)
+            dest = self._remote_path(self.workspace + name)
             remote.install(staged, dest)
             self.fixtures.append({"name": name, "bytes": len(data),
                                   "sha256": netatalk_meta.sha256(data),
@@ -567,6 +615,7 @@ class Run:
             raise PublicationError("publish and verify the application before the request")
 
         def body():
+            self.publisher.verify_storage(self.lease.slot)
             request_path = os.path.join(self.mailbox_share, "request")
             if os.path.exists(request_path):
                 raise PublicationError(
@@ -714,6 +763,7 @@ class Run:
             "paths": {"workspace": self.workspace, "application": self.application,
                       "queue": self.queue, "mailbox": self.mailbox_guest,
                       "evidence_dir": self.evidence_dir},
+            "storage": self.publisher.slot_storage(self.lease.slot).describe(),
             "fixtures": list(self.fixtures),
             "steps": list(self.steps),
             "captures": dict(self.captures),
@@ -756,7 +806,6 @@ class Run:
 def build_parser():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--home", help="harness state directory (default $OS9_HARNESS_HOME)")
-    ap.add_argument("--share", help="mounted Retro68 export (default $OS9_HARNESS_SHARE)")
     ap.add_argument("--share-host", help="AFP share host (default $OS9_HARNESS_SHARE_HOST)")
     ap.add_argument("--share-dir", help="server-side export (default %s)" % DEFAULT_SHARE_DIR)
     ap.add_argument("--json", action="store_true", help="structured output")
@@ -764,7 +813,6 @@ def build_parser():
     # the root defaults without clobbering values given before it.
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--home", default=argparse.SUPPRESS)
-    common.add_argument("--share", default=argparse.SUPPRESS)
     common.add_argument("--share-host", default=argparse.SUPPRESS)
     common.add_argument("--share-dir", default=argparse.SUPPRESS)
     common.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
@@ -877,8 +925,8 @@ def main(argv=None):
         artifact = locate_artifact(args.build, args.target)
         check_seconds(args.seconds)
         fixtures = parse_fixtures(args.fixture, artifact.target)
-        publisher = Publisher(home=args.home, share=args.share,
-                              share_host=args.share_host, share_dir=args.share_dir)
+        publisher = Publisher(home=args.home, share_host=args.share_host,
+                              share_dir=args.share_dir)
         run = publisher.begin(args.token, args.owner, artifact)
         try:
             run.publish_application()

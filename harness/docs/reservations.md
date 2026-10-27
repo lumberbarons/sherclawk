@@ -18,23 +18,21 @@ immutable images and [`contract.md`](contract.md) for the native controller.
 - Every slot provisioned and configured with the native controller, with
   `base/os9-mpw.qcow2` and `base/slotN.qcow2` present and read-only.
 - QEMU on `PATH` and `qemu-img` available.
-- The `Retro68` export **mounted on the host and writable**, because the
+- The slot's own `Retro68` volume **mounted on the host and writable**, mapped
+  with `provision.py storage set` and marked with its `.harness-slot` sentinel
+  ([provisioning.md](provisioning.md#per-slot-afp-storage)), because the
   manager reads fresh readiness from `Harness/<slot>/ready` and removes a
   stale `ready.tmp` left by an interrupted boot (issue #256). A read-only
   mount still reads readiness but cannot recover that staging file, so the
-  slot is quarantined instead of booting without a heartbeat.
+  slot is quarantined instead of booting without a heartbeat. `reserve` also
+  refuses to boot a slot whose mount is not its own volume.
 
-  ```bash
-  export OS9_HARNESS_SHARE="$HOME/Retro68Share"
-  ```
-
-  Mount it with the host's normal AFP workflow; the manager never starts or
-  restarts AFP and never changes the export.
+  Mount each volume with the host's normal AFP workflow; the manager never
+  starts or restarts AFP and never changes an export.
 
 ## Command sequence
 
 ```bash
-export OS9_HARNESS_SHARE="$HOME/Retro68Share"
 python3 harness/manage.py status
 
 token=$(python3 harness/manage.py --json reserve --owner agent-a \
@@ -66,7 +64,7 @@ second and renews it with the lease's own TTL at least every 60 seconds (more
 often for a short TTL, so a short lease neither lapses mid-command nor grows
 to the default). It passes the lease to the child through
 `OS9_HARNESS_TOKEN`, `OS9_HARNESS_OWNER`, `OS9_HARNESS_SLOT`,
-`OS9_HARNESS_HOME` and `OS9_HARNESS_SHARE`; the child drives the guest through
+`OS9_HARNESS_HOME` and `OS9_HARNESS_SHARE` (the leased slot's own mount); the child drives the guest through
 `manage.py`, never through the private QMP socket. Commands are bounded by
 `--timeout` (1..3600 seconds), and a lost lease or a timeout terminates the
 child rather than leaving it running against a recovery; a revoked or expired
@@ -214,8 +212,7 @@ proves stale-token refusal, verified termination and readiness gating, and
 deliberately fails an overlay reset to demonstrate quarantine and recovery:
 
 ```bash
-OS9_HARNESS_SHARE="$HOME/Retro68Share" \
-    python3 harness/tests/guest_reservations.py
+python3 harness/tests/guest_reservations.py
 ```
 
 Run it only when no agent holds a slot: the initial clean step invalidates

@@ -854,5 +854,66 @@ class CliTest(unittest.TestCase):
         self.assertIn("timeout", out)
 
 
+class IsolatedStorageTest(unittest.TestCase):
+    """Each slot boots against its own volume, never a shared or foreign one."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = provision.Home(os.path.join(self.tmp.name, "state"))
+        self.mounts = {}
+        for name in provision.SLOTS:
+            self.mounts[name] = os.path.join(self.tmp.name, "mnt-" + name)
+            os.makedirs(os.path.join(self.mounts[name], "Harness", name))
+            self.mark(name, name)
+            provision.set_storage(self.home, name, self.mounts[name], "/srv/harness/" + name)
+        self.clock = FakeClock()
+        self.effects = FakeEffects(self.home, None, self.clock)
+        self.manager = reservation.Manager(home=self.home, clock=self.clock,
+                                           effects=self.effects)
+
+    def mark(self, mount_slot, content):
+        with open(os.path.join(self.mounts[mount_slot], provision.SENTINEL), "w") as f:
+            f.write(content + "\n")
+
+    def test_mailboxes_live_in_the_slots_own_volume(self):
+        for name in provision.SLOTS:
+            self.assertEqual(self.effects.mailbox(name),
+                             os.path.join(self.mounts[name], "Harness", name))
+        self.assertNotEqual(self.effects.mailbox("slot1"), self.effects.mailbox("slot2"))
+
+    def test_reserve_boots_with_the_leased_slots_volume(self):
+        lease = self.manager.reserve("alice")
+        self.assertEqual(lease.slot, "slot1")
+        self.assertEqual(self.manager.status()["manager"]["storage"]["slot2"]["mount"],
+                         self.mounts["slot2"])
+
+    def test_a_mount_of_another_slots_volume_is_rejected_before_boot(self):
+        self.mark("slot1", "slot2")
+        with self.assertRaisesRegex(reservation.ConfigError, "slot 'slot2'"):
+            self.manager.reserve("alice")
+        self.assertEqual(self.effects.launched, [])
+
+    def test_an_unmarked_volume_such_as_the_developer_share_is_rejected(self):
+        os.remove(os.path.join(self.mounts["slot1"], provision.SENTINEL))
+        with self.assertRaisesRegex(reservation.ConfigError, "unmarked"):
+            self.manager.reserve("alice")
+        self.assertEqual(self.effects.launched, [])
+
+    def test_reserving_needs_every_slot_mapped(self):
+        os.remove(self.home.storage_path)
+        effects = FakeEffects(self.home, None, self.clock)
+        manager = reservation.Manager(home=self.home, clock=self.clock, effects=effects)
+        with self.assertRaisesRegex(reservation.ConfigError, "no slot storage is mapped"):
+            manager.reserve("alice")
+
+    def test_second_slot_is_checked_against_its_own_sentinel(self):
+        self.manager.reserve("alice")
+        self.mark("slot2", "slot1")
+        with self.assertRaisesRegex(reservation.ConfigError, "slot 'slot1'"):
+            self.manager.reserve("bob")
+        self.assertEqual([entry for entry in self.effects.launched if entry[0] == "slot2"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

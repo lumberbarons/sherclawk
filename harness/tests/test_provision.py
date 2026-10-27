@@ -1,5 +1,7 @@
 """Host tests for guest provisioning: no QEMU, VM or network needed."""
+import contextlib
 import hashlib
+import io
 import os
 import stat
 import sys
@@ -264,6 +266,120 @@ class ManifestTest(unittest.TestCase):
                 f.write(b"two")
             with self.assertRaises(provision.ProvisionError):
                 provision.verify_base(home)
+
+
+class StorageMapTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = provision.Home(os.path.join(self.tmp.name, "home"))
+        self.mounts = {n: os.path.join(self.tmp.name, "mnt-" + n) for n in provision.SLOTS}
+        for path in self.mounts.values():
+            os.makedirs(path)
+
+    def configure(self):
+        for n in provision.SLOTS:
+            provision.set_storage(self.home, n, self.mounts[n], "/srv/harness/" + n)
+
+    def mark(self, name, content=None):
+        with open(os.path.join(self.mounts[name], provision.SENTINEL), "w") as f:
+            f.write((content or name) + "\n")
+
+    def test_no_map_is_not_storage(self):
+        self.assertIsNone(provision.read_storage(self.home))
+        with self.assertRaisesRegex(provision.StorageError, "storage set"):
+            provision.require_storage(provision.load_storage(self.home))
+
+    def test_each_slot_gets_its_own_mount_and_export(self):
+        self.configure()
+        storage = provision.read_storage(self.home)
+        one, two = storage.slot("slot1"), storage.slot("slot2")
+        self.assertEqual(one.volume, "Retro68")
+        self.assertNotEqual(one.mount, two.mount)
+        self.assertNotEqual(one.export, two.export)
+        self.assertEqual(one.export, "/srv/harness/slot1")
+        self.assertTrue(one.isolated)
+
+    def test_incomplete_map_is_refused(self):
+        provision.set_storage(self.home, "slot1", self.mounts["slot1"], "/srv/harness/slot1")
+        with self.assertRaisesRegex(provision.StorageError, "exactly slot1, slot2"):
+            provision.read_storage(self.home)
+
+    def test_overlapping_exports_and_mounts_are_refused(self):
+        provision.set_storage(self.home, "slot1", self.mounts["slot1"], "/srv/harness/slot1")
+        with self.assertRaisesRegex(provision.StorageError, "exports overlap"):
+            provision.set_storage(self.home, "slot2", self.mounts["slot2"],
+                                  "/srv/harness/slot1/inner")
+        with self.assertRaisesRegex(provision.StorageError, "exports overlap"):
+            provision.set_storage(self.home, "slot2", self.mounts["slot2"], "/srv/harness/slot1")
+        with self.assertRaisesRegex(provision.StorageError, "mounts overlap"):
+            provision.set_storage(self.home, "slot2", self.mounts["slot1"], "/srv/harness/slot2")
+        self.assertFalse(os.path.exists(self.home.storage_path + ".tmp"))
+
+    def test_developer_share_is_never_a_slot_export(self):
+        for export in ("/srv/retro68", "/srv/retro68/slot1", "/srv"):
+            with self.assertRaisesRegex(provision.StorageError, "developer share"):
+                provision.set_storage(self.home, "slot1", self.mounts["slot1"], export)
+
+    def test_relative_and_unknown_inputs_are_refused(self):
+        with self.assertRaisesRegex(provision.StorageError, "absolute"):
+            provision.set_storage(self.home, "slot1", self.mounts["slot1"], "srv/slot1")
+        with self.assertRaises(provision.ProvisionError):
+            provision.set_storage(self.home, "slot9", self.mounts["slot1"], "/srv/h/slot9")
+
+    def test_mount_must_carry_its_own_slots_sentinel(self):
+        self.configure()
+        one = provision.read_storage(self.home).slot("slot1")
+        with self.assertRaisesRegex(provision.StorageError, "unmarked"):
+            one.verify_mount()
+        self.mark("slot1", "slot2")
+        with self.assertRaisesRegex(provision.StorageError, "slot 'slot2'"):
+            one.verify_mount()
+        self.mark("slot1")
+        one.verify_mount()
+
+    def test_unmounted_volume_is_refused(self):
+        self.configure()
+        os.rmdir(self.mounts["slot2"])
+        with self.assertRaisesRegex(provision.StorageError, "not mounted"):
+            provision.read_storage(self.home).slot("slot2").verify_mount()
+
+    def test_single_root_is_unisolated_and_skips_the_sentinel(self):
+        storage = provision.load_storage(self.home, share=self.mounts["slot1"])
+        self.assertFalse(storage.isolated)
+        storage.slot("slot2").verify_mount()
+        self.assertEqual(storage.slot("slot1").mount, storage.slot("slot2").mount)
+
+    def test_recorded_map_wins_over_a_bare_share(self):
+        self.configure()
+        storage = provision.load_storage(self.home, share=self.mounts["slot1"])
+        self.assertTrue(storage.isolated)
+
+    def test_corrupt_map_is_refused(self):
+        os.makedirs(self.home.path)
+        with open(self.home.storage_path, "w") as f:
+            f.write("{")
+        with self.assertRaisesRegex(provision.StorageError, "not valid JSON"):
+            provision.read_storage(self.home)
+
+    def run_cli(self, argv):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return provision.main(argv)
+
+    def test_cli_sets_shows_and_checks(self):
+        base = ["--home", self.home.path, "storage"]
+        for n in provision.SLOTS:
+            self.assertEqual(self.run_cli(base + ["set", n, "--mount", self.mounts[n],
+                                                    "--export", "/srv/harness/" + n]), 0)
+        self.assertEqual(self.run_cli(base + ["show"]), 0)
+        self.assertEqual(self.run_cli(base + ["check"]), 1)
+        self.mark("slot1")
+        self.assertEqual(self.run_cli(base + ["check"]), 1)
+        self.mark("slot2")
+        self.assertEqual(self.run_cli(base + ["check"]), 0)
+
+    def test_cli_show_without_a_map_fails(self):
+        self.assertEqual(self.run_cli(["--home", self.home.path, "storage", "show"]), 1)
 
 
 if __name__ == "__main__":

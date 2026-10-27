@@ -13,9 +13,10 @@ which lives under `harness/` so it moves with the harness
    a controller-configured image per slot, and `provision.py info` listing
    every configured slot. Images, media and credentials stay under `$OS9_HARNESS_HOME`
    (default `~/.local/share/os9-harness`), never in a checkout.
-2. Mount the `Retro68` export writable on the host and point the harness at
-   it. AFP works where the host still has an AFP client. Otherwise export the
-   directory over NFS to this host only (`all_squash` to the share's owner,
+2. Mount each slot's own `Retro68` volume writable on the host and record the
+   mapping with `provision.py storage set` ([provisioning.md](provisioning.md#per-slot-afp-storage));
+   `storage check` confirms every mount is its own slot's. AFP works where the host still has an AFP client. Otherwise export the
+   slot's directory over NFS to this host only (`all_squash` to the share's owner,
    `insecure` for an unprivileged mount) and mount it with
    `mount_nfs -o vers=3,noresvport,nolocks,locallocks,noac,nonegnamecache`:
    readiness is a file replaced by rename, and with default attribute caching
@@ -25,8 +26,7 @@ which lives under `harness/` so it moves with the harness
    ([publication.md](publication.md#configuration)).
 
 ```bash
-export OS9_HARNESS_SHARE="$HOME/Retro68Share"   # mounted export
-export OS9_HARNESS_SHARE_HOST="<afp-host>"      # ssh target carrying it
+export OS9_HARNESS_SHARE_HOST="<afp-host>"      # ssh target carrying the exports
 ```
 
 QEMU must be on `PATH`. No API key or Sherclawk session is involved.
@@ -96,8 +96,8 @@ Nothing is deleted by the harness, including failed runs.
 | Suite summary, live session, interventions | `$OS9_HARNESS_HOME/evidence/suites/<suite>/` (`suite.json`, `session.json`, `interventions.jsonl`); `suite.py run` prints it |
 | One run: request, closed result, assertions, screenshot, QEMU/controller/diagnostic logs, hashes | `$OS9_HARNESS_HOME/evidence/<slot>/<slot>-g<gen>-run-<run>/` |
 | Release and recovery records with a last screenshot | `$OS9_HARNESS_HOME/evidence/<slot>/<slot>-g<gen>-<reason>-*.json` and `.ppm` |
-| Guest-side mailbox, claims, results, boot traces | `Retro68:Harness:<slot>:` on the share |
-| Per-run workspaces and diagnostic logs | `Retro68:Harness:<slot>-g<gen>:<run>:` on the share |
+| Guest-side mailbox, claims, results, boot traces | `Retro68:Harness:<slot>:` on the slot's own volume |
+| Per-run workspaces and diagnostic logs | `Retro68:Harness:<slot>-g<gen>:<run>:` on the slot's own volume |
 | Phase timings | `python3 harness/timing.py report <suite dir>...` (read-only) |
 
 Disk images, credentials and these artifacts stay untracked. Record a

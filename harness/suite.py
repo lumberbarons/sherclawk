@@ -8,7 +8,6 @@ optional fresh reservation between checks, a retained suite summary and the
 lease-checked interactive escape hatches.  It knows no Sherclawk diagnostic
 names beyond the versioned contract's registered allowlist.
 
-    export OS9_HARNESS_SHARE="$HOME/Retro68Share"
     export OS9_HARNESS_SHARE_HOST="<afp-host>"
     python3 harness/suite.py run --registry tools/native-suite.json \
         --build build --owner agent-a
@@ -258,7 +257,6 @@ class Suite:
                  screenshot=True, suite_id=None):
         self.clock = clock or reservation.Clock()
         self.home = home if isinstance(home, provision.Home) else provision.Home(home)
-        share = share if share is not None else os.environ.get("OS9_HARNESS_SHARE")
         share_host = share_host or os.environ.get("OS9_HARNESS_SHARE_HOST")
         self.manager = manager or reservation.Manager(home=self.home, share=share,
                                                       clock=self.clock)
@@ -679,14 +677,12 @@ def stop(directory, manager):
 def build_parser():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--home", help="harness state directory (default $OS9_HARNESS_HOME)")
-    ap.add_argument("--share", help="mounted Retro68 export (default $OS9_HARNESS_SHARE)")
     ap.add_argument("--share-host", help="AFP share host (default $OS9_HARNESS_SHARE_HOST)")
     ap.add_argument("--share-dir", help="server-side export (default %s)"
                     % publish.DEFAULT_SHARE_DIR)
     ap.add_argument("--json", action="store_true", help="structured output")
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--home", default=argparse.SUPPRESS)
-    common.add_argument("--share", default=argparse.SUPPRESS)
     common.add_argument("--share-host", default=argparse.SUPPRESS)
     common.add_argument("--share-dir", default=argparse.SUPPRESS)
     common.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
@@ -770,7 +766,7 @@ def main(argv=None):
             return 0
         if args.command == "run":
             registry = load_registry(args.registry)
-            runner = Suite(home=args.home, share=args.share,
+            runner = Suite(home=args.home,
                            share_host=args.share_host, share_dir=args.share_dir,
                            screenshot=not args.no_screenshot)
             try:
@@ -801,7 +797,7 @@ def main(argv=None):
             print("suite: evidence retained under %s" % result["evidence_dir"],
                   file=sys.stderr)
             return 1
-        manager = reservation.Manager(home=args.home, share=args.share)
+        manager = reservation.Manager(home=args.home)
         if args.command == "screenshot":
             emit(args, screenshot(args.suite, manager, args.out))
         elif args.command == "input":
