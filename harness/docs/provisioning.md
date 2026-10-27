@@ -206,11 +206,10 @@ printf 'slot1\n' | sudo tee /srv/os9-harness/slot1/.harness-slot >/dev/null
 ### Migrating an existing deployment
 
 1. Prepare each slot's export and sentinel as above, install its netatalk
-   configuration and units, and `systemctl start harness-afpd@slot1` (and the
-   other slots). Check with `ss -ltn` that its port and its CNID port are
-   listening and that the developer service's process is unchanged. Enabling the
-   units at boot (`systemctl enable`) is the share host owner's decision; until
-   then the instances must be started again after the host restarts.
+   configuration and units, and `systemctl enable --now harness-afpd@slot1` (and
+   the other slots; the CNID daemon is pulled in by `Requires=`). Check with
+   `ss -ltn` that its port and its CNID port are listening and that the
+   developer service's process is unchanged.
 2. Export and mount each slot's directory on the host, then run
    `provision.py storage set` with `--afp-port` and `--server` for every slot and
    `provision.py storage check`.

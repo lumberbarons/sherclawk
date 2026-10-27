@@ -47,8 +47,9 @@ Results:
 
 Not established here: the guest's own view of its volume in the Finder was not
 captured (isolation is shown from the share host's sessions and directories and
-from the launch argv in each run's evidence); the slot instances are started
-but not enabled at boot on the share host; the runs are one pass on one host.
+from the launch argv in each run's evidence); the slot instances are enabled
+at boot on the share host but a host restart was not exercised; the runs are one
+pass on one host.
 
 # Two-guest qualification — October 23, 2026
 
