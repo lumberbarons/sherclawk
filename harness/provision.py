@@ -117,9 +117,9 @@ def nic_option(s):
     The guests' startup mounts name the share host by address and the standard
     AFP port, and an AppleShare alias keeps no other port. The guest therefore
     gets a virtual network that contains that address, and QEMU forwards the
-    address's AFP port to this slot's own server instance. The developer share
-    on the same address is unreachable from the guest, with no change to the
-    guest image.
+    address's AFP port to this slot's own server instance, with no change to
+    the guest image. This selects the normal startup mount; it is not an
+    access-control boundary between trusted agents running on the same host.
     """
     option = "user,model=sungem,mac=%s" % s.mac
     storage = read_storage(s.home)

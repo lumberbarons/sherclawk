@@ -72,11 +72,17 @@ reaches the AFP share host over its LAN address and holds its own AFP session
 
 A slot's guest mounts a volume that belongs to that slot alone. The guest-visible
 name stays `Retro68`, so the controller, the `Retro68:Harness:` layout and every
-consumer's paths are unchanged, but no slot can browse or modify another slot's
-files or the developer's working share (`tools/deploy-to-share.sh`, default
-`/srv/retro68`). It also gives each slot its own fixed-root files: the shipping
+consumer's paths are unchanged. Each startup mount selects its slot's own root
+instead of the developer's working share (`tools/deploy-to-share.sh`, default
+`/srv/retro68`). This gives each slot its own fixed-root files: the shipping
 app's `Retro68:Sherclawk.log`, applications and mailboxes cannot collide between
 two live guests.
+
+This separation prevents accidental collisions during normal harness use. The
+agents running on the host are trusted and can already access both exports and
+control both guests. Separate volumes and AFP forwarding do not provide a
+security boundary between those agents; a guest can explicitly connect to
+another AFP listener through QEMU's ordinary network access.
 
 The mapping is recorded once, outside every worktree, and every harness command
 reads it instead of a share path:
@@ -98,7 +104,7 @@ storage beside its other identity. `OS9_HARNESS_SHARE` and `--share` no longer
 exist; a command with no recorded map stops with an error rather than falling
 back to one shared directory.
 
-### How a guest reaches only its own volume
+### How a guest's startup mount selects its own volume
 
 The guests' startup mounts name the share host by address and the standard AFP
 port, and an AppleShare alias keeps no other port, so a per-slot port alone would
@@ -110,9 +116,9 @@ network instead of in the guest:
   visible in the launch argv and in each run's evidence. The guest connects to
   the address it has always used and QEMU hands the connection to that slot's own
   AFP instance.
-- The developer share on the same address and port is not reachable from the
-  guest at all, and neither are the other ports on that address. Nothing in the
-  guest image changes, so the sealed slot bases and the controller stay as they
+- The normal port-548 connection reaches the slot's instance rather than the
+  developer share. Other ports remain reachable through QEMU's NAT. Nothing in
+  the guest image changes, so the sealed slot bases and controller stay as they
   are.
 - The guest's DHCP lease moves to that virtual /24; the guest reaches everything
   outside it through QEMU's NAT as before.

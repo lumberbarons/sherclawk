@@ -16,8 +16,9 @@ What the first attempt found, and what changed because of it:
   not keep the port: the next boot connected to port 548, the developer share.
   The slots therefore forward the guests' AFP traffic in QEMU's user network
   (`net=10.0.4.0/24,guestfwd=tcp:10.0.4.48:548-cmd:nc 10.0.4.48 <port>`), which
-  needs no guest change and leaves the developer share unreachable from the
-  guest. A guest booted from the original sealed slot image mounted its own
+  needs no guest change and selects the slot's volume for its startup mount.
+  This does not block explicit access to other AFP listeners. A guest booted
+  from the original sealed slot image mounted its own
   volume, and the controller published `ready` there.
 - A volume-level `cnid server = host:port` makes afpd append the port twice and
   fail the volume open (`Unable to get stamp value from CNID backend`); the
