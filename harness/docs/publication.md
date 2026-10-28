@@ -1,7 +1,7 @@
 # Publishing diagnostic runs
 
 `harness/publish.py` publishes one built application into a fresh private run
-workspace on the existing `Retro68:` export, publishes the mailbox request
+workspace on the leased slot's own `Retro68:` volume, publishes the mailbox request
 last, and retains evidence that identifies the exact source, artifact and run.
 It is lease-aware: every publishing step re-checks the reservation, so an
 expired or reassigned lease cannot publish, and the share host is the only
@@ -15,10 +15,20 @@ transport for the shipping application.
 ## Configuration
 
 ```bash
-export OS9_HARNESS_SHARE="$HOME/Retro68Share"      # mounted export (readiness, mailbox)
-export OS9_HARNESS_SHARE_HOST="<afp-host>"         # ssh target that carries the share
-# optional: export OS9_HARNESS_SHARE_DIR=/srv/retro68
+python3 harness/provision.py storage show          # each slot's mount and export
+export OS9_HARNESS_SHARE_HOST="<afp-host>"         # ssh target that carries the exports
 ```
+
+Each slot has its own mounted volume and server export, recorded by
+`provision.py storage set` ([provisioning.md](provisioning.md#per-slot-afp-storage)).
+A run uses only the leased slot's: the host mount for the mailbox and the
+diagnostic log, the server export for staging and installation. Before the run
+is created, before the application is published and again before the mailbox
+request, the publisher requires the slot's mount and its export to both carry
+that slot's `.harness-slot` sentinel, so a mapping that points at another
+slot's volume or the developer share is refused while nothing has been written.
+`OS9_HARNESS_SHARE_DIR` only names the export `install` is given when it is
+used outside a lease.
 
 The share host needs passwordless `sudo -n`, a `macos9` user and group and
 python3, exactly like `deploy-to-share.sh`. The publisher never restarts AFP
@@ -40,7 +50,9 @@ Retro68:Harness:<slot>-g<generation>:<run>:
 Retro68:Harness:slot1:      the controller mailbox (request/claim/result/stop)
 ```
 
-Two reservations therefore share nothing: distinct workspaces, applications,
+The paths are relative to the slot's volume, so the same names exist in each
+slot's volume without sharing a file. Two reservations therefore share nothing:
+distinct volumes, workspaces, applications,
 sidecars, queues, fixture files, mailbox files, logs and evidence. The
 publisher refuses to publish when the mailbox still holds an unconsumed
 request, so an old in-flight run can never be replayed by accident.

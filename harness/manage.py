@@ -4,10 +4,9 @@
 One manager per host keeps its state outside every worktree, in
 ``$OS9_HARNESS_HOME``. A reservation returns a random lease token and a
 generation; every later command checks both, under an OS lock, before touching
-the guest. Readiness is read from the mounted ``Retro68`` export, so set
-``OS9_HARNESS_SHARE`` (or pass ``--share``) before reserving.
+the guest. Readiness is read from the slot's own mounted ``Retro68`` volume, so
+map each slot's storage (``provision.py storage set``) before reserving.
 
-    export OS9_HARNESS_SHARE="$HOME/Retro68Share"
     token=$(manage.py --json reserve --owner agent-a | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')
     manage.py screenshot "$token" --owner agent-a --out shot.png
     manage.py release "$token" --owner agent-a
@@ -35,13 +34,11 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="\n".join(__doc__.split("\n")[1:]))
     ap.add_argument("--home", help="harness state directory (default $OS9_HARNESS_HOME)")
-    ap.add_argument("--share", help="mounted Retro68 export (default $OS9_HARNESS_SHARE)")
     ap.add_argument("--json", action="store_true", help="structured output")
     # The same flags after a subcommand use SUPPRESS defaults so they win over
     # the root defaults without clobbering values given before it.
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--home", default=argparse.SUPPRESS)
-    common.add_argument("--share", default=argparse.SUPPRESS)
     common.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     sub = ap.add_subparsers(dest="command", required=True)
 
@@ -163,7 +160,7 @@ def main(argv=None):
         if command and command[0] == "--":
             command = command[1:]
     try:
-        manager = reservation.Manager(home=args.home, share=args.share)
+        manager = reservation.Manager(home=args.home)
         if args.command == "reserve":
             lease = manager.reserve(args.owner, args.ttl)
             emit(args, lease.public(manager.clock.monotonic(), manager.clock.wall(),

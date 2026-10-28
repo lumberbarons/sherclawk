@@ -141,10 +141,11 @@ class SystemProcess:
 class Effects:
     """The host boundary: QEMU, the share, processes and QMP."""
 
-    def __init__(self, home, share=None, clock=None, qmp_timeout=20.0):
+    def __init__(self, home, share=None, clock=None, qmp_timeout=20.0, storage=None):
         self.home = home
-        share = share or os.environ.get("OS9_HARNESS_SHARE")
-        self.share = os.path.abspath(share) if share else None
+        # Each slot's own volume from the recorded map. A bare `share` is the
+        # unisolated single-root layout and only stands in for it in host tests.
+        self.storage = storage or provision.load_storage(home, share)
         self.clock = clock or Clock()
         self.qmp_timeout = qmp_timeout
 
@@ -215,11 +216,23 @@ class Effects:
 
     # ---- readiness and QMP ----------------------------------------------
 
-    def mailbox(self, slot):
-        if not self.share:
-            raise ConfigError("set OS9_HARNESS_SHARE to the mounted Retro68 export")
+    def slot_storage(self, slot):
         name = slot if isinstance(slot, str) else slot.name
-        return os.path.join(self.share, "Harness", name)
+        try:
+            return provision.require_storage(self.storage).slot(name)
+        except provision.StorageError as exc:
+            raise ConfigError(str(exc))
+
+    def verify_storage(self, slot):
+        """Require the slot's mount to be its own volume before anything boots."""
+        try:
+            self.slot_storage(slot).verify_mount()
+        except provision.StorageError as exc:
+            raise ConfigError(str(exc))
+
+    def mailbox(self, slot):
+        name = slot if isinstance(slot, str) else slot.name
+        return os.path.join(self.slot_storage(name).mount, "Harness", name)
 
     def wait_ready(self, slot, previous_boot=None, timeout=READY_TIMEOUT):
         name = slot if isinstance(slot, str) else slot.name
@@ -316,9 +329,6 @@ class Manager:
         self.home = home if isinstance(home, provision.Home) else provision.Home(home)
         self.clock = clock or Clock()
         self.effects = effects or Effects(self.home, share=share, clock=self.clock)
-        if share and not self.effects.share:
-            self.effects.share = os.path.abspath(share)
-        self.share = self.effects.share
         self.ready_timeout = ready_timeout
         self.stop_timeout = stop_timeout
         self.renew_interval = max(0.01, float(renew_interval))
@@ -443,9 +453,10 @@ class Manager:
 
     # ---- leases ----------------------------------------------------------
 
-    def _require_share(self):
-        if not self.share:
-            raise ConfigError("set OS9_HARNESS_SHARE to the mounted Retro68 export")
+    def _require_storage(self):
+        """Every slot must have its own mapped volume before any reservation starts."""
+        for name in provision.SLOTS:
+            self.effects.slot_storage(name)
 
     def _revoke(self, conn, row, reason):
         """Invalidate a lease inside a transaction; keep evidence fields."""
@@ -540,7 +551,7 @@ class Manager:
             raise UsageError("reserve needs a non-empty owner")
         if not 1 <= ttl <= LEASE_SECONDS:
             raise UsageError("lease seconds must be within 1..%d" % LEASE_SECONDS)
-        self._require_share()
+        self._require_storage()
         self._reap_expired()
 
         with self._txn() as conn:
@@ -574,6 +585,7 @@ class Manager:
                 if self.effects.qmp_alive(slot):
                     raise ReservationError(
                         "%s has a live QMP socket with no verified owner" % slot.name)
+                self.effects.verify_storage(slot)
                 self.effects.clear_stale_readiness(slot)
                 self.effects.ensure_overlay(slot)
                 pid = int(self.effects.launch(slot))
@@ -1022,7 +1034,7 @@ class Manager:
         env = os.environ.copy()
         env.update({
             "OS9_HARNESS_HOME": self.home.path,
-            "OS9_HARNESS_SHARE": self.share or "",
+            "OS9_HARNESS_SHARE": self.effects.slot_storage(slot_name).mount,
             "OS9_HARNESS_SLOT": slot_name,
             "OS9_HARNESS_TOKEN": token,
             "OS9_HARNESS_OWNER": owner,
@@ -1130,7 +1142,8 @@ class Manager:
                 "epoch": meta.get("epoch"),
                 "host_boot": meta.get("host_boot"),
                 "home": self.home.path,
-                "share": self.share,
+                "storage": {n: self.effects.slot_storage(n).describe()
+                            for n in provision.SLOTS} if self.effects.storage else None,
                 "lease_seconds": LEASE_SECONDS,
                 "capacity": len(provision.SLOTS),
                 "free": free,

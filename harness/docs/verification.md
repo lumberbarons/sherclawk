@@ -1,3 +1,57 @@
+# Per-slot AFP volumes — October 26, 2026
+
+Verified issue #266 on top of `80fb70f` plus the AFP forwarding change in this
+branch (ADR-0009). QEMU 10.1.2 `mac99` slots booted from the unchanged sealed
+slot images. The share host runs netatalk 3.1.18: the developer's `afp.conf`
+service (pid unchanged throughout, no session on port 548 while the guests ran)
+plus a separate afpd and CNID daemon per slot on ports 5481 and 5482, each
+serving only `/srv/os9-harness/<slot>` as the volume `Retro68`. Both volumes
+were mounted on the host over NFS (`mount_nfs -o vers=3,noresvport,nolocks,locallocks,noac,nonegnamecache`)
+and recorded with `provision.py storage set`; `storage check` passed.
+
+What the first attempt found, and what changed because of it:
+
+- Per-slot ports alone do not work. The Chooser accepts `10.0.4.48:5481` and
+  the session reaches the slot's instance, but the startup alias it saves does
+  not keep the port: the next boot connected to port 548, the developer share.
+  The slots therefore forward the guests' AFP traffic in QEMU's user network
+  (`net=10.0.4.0/24,guestfwd=tcp:10.0.4.48:548-cmd:nc 10.0.4.48 <port>`), which
+  needs no guest change and selects the slot's volume for its startup mount.
+  This does not block explicit access to other AFP listeners. A guest booted
+  from the original sealed slot image mounted its own
+  volume, and the controller published `ready` there.
+- A volume-level `cnid server = host:port` makes afpd append the port twice and
+  fail the volume open (`Unable to get stamp value from CNID backend`); the
+  setting belongs in `[Global]`.
+
+Results:
+
+- With both slots reserved (`manage.py reserve`), the share host showed exactly
+  one established AFP session per slot, on its own port, and none on 548. Each
+  volume's `Harness/` held only its own slot's mailbox and run workspaces; the
+  other slot's did not exist in it. Each export carried only its own sentinel
+  (`slot1`, `slot2`), and `storage check` passed on both mounts.
+- `guest_qualification.py --checks write,search,inspect` returned `ACCEPTED
+  two-guest qualification`: one guest completed four checks (including the
+  deliberate failure) in 78.9 s, two guests together completed eight in 85.8 s.
+- `guest_qualification.py --checks project,selfbuild` returned `ACCEPTED
+  two-guest qualification`. The Sherclawk native self build (MrC, PPCLink and
+  Rez through ToolServer) passed on one guest in 371.8 s and on both guests at
+  the same time in 369.3 s and 360.1 s, each on its own volume, with the
+  third-reservation, made-up-token and other-owner-token refusals and the
+  distinct slots, boots and never-reused workspaces all passing.
+- `guest_reservations.py` returned `ACCEPTED two-slot reservation manager`,
+  repeating the stale-owner, stale-token, verified-termination, quarantine and
+  recovery results with each slot on its own volume.
+- Host: `tools/check.sh`, `tools/lint.sh` and the Docker `./build.sh` and
+  `./build.sh HarnessChecks_APPL` passed.
+
+Not established here: the guest's own view of its volume in the Finder was not
+captured (isolation is shown from the share host's sessions and directories and
+from the launch argv in each run's evidence); the slot instances are enabled
+at boot on the share host but a host restart was not exercised; the runs are one
+pass on one host.
+
 # Two-guest qualification — October 23, 2026
 
 Verified the working tree on top of `c0eacc7` (issue #74, ADR-0009). QEMU

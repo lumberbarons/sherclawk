@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """Opt-in guest acceptance for the two-slot reservation manager (#71).
 
-Requires the provisioned OS 9 slots, QEMU, and the Retro68 export mounted on
-the host (set ``OS9_HARNESS_SHARE`` or pass ``--share``). It boots both slots,
+Requires the provisioned OS 9 slots, QEMU, and each slot's own Retro68 volume
+mounted on the host and mapped with ``provision.py storage set``. It boots both slots,
 checks exclusive ownership and stale-token refusal, releases one slot and
 reassigns it, then deliberately fails a reset to demonstrate quarantine and
 explicit recovery. Evidence stays under ``$OS9_HARNESS_HOME/evidence``.
 
-    OS9_HARNESS_SHARE="$HOME/Retro68Share" \
-        python3 harness/tests/guest_reservations.py
+    python3 harness/tests/guest_reservations.py
 
 This is not part of host discovery: it needs real guests and takes a few
 minutes. Run it only when no agent holds a slot, because the initial clean
@@ -54,8 +53,7 @@ def clean(manager):
 
 def accept(args):
     home = provision.Home(args.home)
-    manager_args = {"home": home, "share": args.share,
-                    "ready_timeout": args.ready_timeout}
+    manager_args = {"home": home, "ready_timeout": args.ready_timeout}
     manager = reservation.Manager(**manager_args)
     try:
         return _accept(manager, manager_args, args)
@@ -182,15 +180,12 @@ def _accept(manager, manager_args, args):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--home", help="harness state directory (default $OS9_HARNESS_HOME)")
-    p.add_argument("--share", help="mounted Retro68 export (default $OS9_HARNESS_SHARE)")
     p.add_argument("--ready-timeout", type=int, default=240)
     p.add_argument("--owner-a", default="acceptance-a")
     p.add_argument("--owner-b", default="acceptance-b")
     p.add_argument("--owner-c", default="acceptance-c")
     args = p.parse_args(argv)
     try:
-        if not args.share and not os.environ.get("OS9_HARNESS_SHARE"):
-            raise AcceptanceError("set OS9_HARNESS_SHARE to the mounted Retro68 export")
         accept(args)
         return 0
     except (AcceptanceError, reservation.ReservationError,

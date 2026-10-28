@@ -6,7 +6,8 @@ repository and meant to be extracted later, so it imports nothing from
 ([ADR-0009](../docs/adr/0009-build-harness-in-repo-then-extract.md)).
 
 - `provision.py` — immutable base image, per-slot copy-on-write overlays,
-  slot identities and the headless QEMU launcher.
+  slot identities, each slot's own AFP volume mapping and the headless QEMU
+  launcher.
 - `manage.py` and `reservation.py` — host-wide exclusive leases over the two
   slots: reserve, renew, run, suite, screenshot, input, release, status and
   recovered/quarantined state, with SQLite transactions and an OS lock.

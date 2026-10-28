@@ -12,7 +12,6 @@ Sherclawk's registry is [`tools/native-suite.json`](../../tools/native-suite.jso
 
 ```bash
 ./build.sh HarnessChecks_APPL
-export OS9_HARNESS_SHARE="$HOME/Retro68Share"
 export OS9_HARNESS_SHARE_HOST="<afp-host>"
 python3 harness/suite.py validate --registry tools/native-suite.json --build build
 python3 harness/suite.py run --registry tools/native-suite.json --build build --owner agent-a

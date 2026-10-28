@@ -12,7 +12,7 @@ name. The registry it runs is a copy of the consumer's with a
 a failing assertion being recorded without disturbing the other guest.
 
     ./build.sh HarnessChecks_APPL
-    OS9_HARNESS_SHARE="$HOME/Retro68Share" OS9_HARNESS_SHARE_HOST=<afp-host> \
+    OS9_HARNESS_SHARE_HOST=<afp-host> \
         python3 harness/tests/guest_qualification.py --build build
 
 Not part of host discovery: it needs two provisioned guests, the mounted
@@ -96,8 +96,6 @@ class Suite:
                 "run", "--registry", registry, "--build", args.build, "--owner", owner]
         if args.home:
             argv[3:3] = ["--home", args.home]
-        if args.share:
-            argv[3:3] = ["--share", args.share]
         self.out_path = os.path.join(scratch, owner + ".out")
         self.err_path = os.path.join(scratch, owner + ".err")
         with open(self.out_path, "w") as out, open(self.err_path, "w") as err:
@@ -238,8 +236,7 @@ def pair(args, registry, manager, scratch):
 
 def accept(args):
     home = provision.Home(args.home)
-    manager = reservation.Manager(home=home, share=args.share,
-                                  ready_timeout=args.ready_timeout)
+    manager = reservation.Manager(home=home, ready_timeout=args.ready_timeout)
     manager.recover(reason="qualification_reset")
     try:
         with tempfile.TemporaryDirectory(prefix="qualification-") as scratch:
@@ -269,7 +266,6 @@ def accept(args):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--home", help="harness state directory (default $OS9_HARNESS_HOME)")
-    p.add_argument("--share", help="mounted Retro68 export (default $OS9_HARNESS_SHARE)")
     p.add_argument("--build", required=True, help="build tree from ./build.sh HarnessChecks_APPL")
     p.add_argument("--registry", default=DEFAULT_REGISTRY)
     p.add_argument("--checks", default="write,inspect",
@@ -281,11 +277,9 @@ def main(argv=None):
     p.add_argument("--owner-b", default="qualify-b")
     p.add_argument("--owner-c", default="qualify-c")
     args = p.parse_args(argv)
-    args.share = args.share or os.environ.get("OS9_HARNESS_SHARE")
     try:
-        if not args.share or not os.environ.get("OS9_HARNESS_SHARE_HOST"):
-            raise QualificationError(
-                "set OS9_HARNESS_SHARE and OS9_HARNESS_SHARE_HOST for publication")
+        if not os.environ.get("OS9_HARNESS_SHARE_HOST"):
+            raise QualificationError("set OS9_HARNESS_SHARE_HOST for publication")
         accept(args)
         return 0
     except (QualificationError, timing.TimingError, reservation.ReservationError,
