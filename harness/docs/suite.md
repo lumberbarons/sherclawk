@@ -80,6 +80,29 @@ unconsumed mailbox request, the suite stops and names the evidence instead of
 deleting it or publishing a second request; recover the guest explicitly.
 A release that quarantines its slot also fails the suite.
 
+## What a green suite proves
+
+Three evidence tiers are named here and used across the project's docs:
+
+1. **host** — `tools/check.sh`, `tools/check-transport.sh` and `tools/lint.sh`
+   running on a modern host.
+2. **guest** — a reserved QEMU `mac99` slot booting its sealed slot image,
+   publication into a fresh workspace, and named assertions collected through
+   the report contract.
+3. **hardware** — a physical Mac. A passing host or guest result never
+   upgrades itself to hardware evidence.
+
+A green suite is **guest** evidence. It establishes that the controller was
+ready, that each run was published into its own never-reused workspace, and
+that every diagnostic's named assertions held inside the sealed QEMU `mac99`
+slot image. The lease-checked screenshot/input pass in
+[Interactive checks](#interactive-checks) stays in this tier.
+
+It does not establish behaviour on a physical Power Mac, on another OS 9
+version, under a different QEMU build, over a real network (the guest uses QEMU
+user networking), or visual fidelity. Hardware acceptance is a separate gate,
+and a guest result is never quoted as "works on OS 9".
+
 ## Exit codes
 
 `suite.py run` exits `0` when every selected check passed and `1` when the
@@ -106,6 +129,12 @@ Every check links its `publish.py` run directory under
 request, closed result, named assertions, screenshot, QEMU/controller/
 diagnostic logs and source/artifact hashes.  Release and reset evidence stays
 in the same per-slot evidence tree.  Nothing is deleted, including failed runs.
+
+`suite.json` carries `"tier": "guest"` at its top level and on every
+reservation it records, beside the slot, generation and boot identity.  The
+field is additive: summaries written before it existed still parse, and a
+reader that does not know it can ignore it.  `suite.py run` always writes it,
+and only a physical Mac — not this runner — can produce hardware evidence.
 
 ## Interactive checks
 

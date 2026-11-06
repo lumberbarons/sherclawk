@@ -2,9 +2,17 @@
 
 Dated acceptance evidence for the OS 9 guest, host checks and live model runs,
 retained from earlier development. Entries describe the state on their recorded
-dates. Use the [current guides](../../README.md#documentation) for present behavior.
+dates. Each dated entry names the strongest evidence tier it establishes —
+**host**, **guest** or **hardware** — as defined in
+[What a green suite proves](../../harness/docs/suite.md#what-a-green-suite-proves);
+host checks reported inside a guest entry are supporting evidence, and **no
+entry here establishes hardware behaviour**. Entries that name the UTM guest
+predate the reserved QEMU slots: they are guest-tier QEMU evidence from that
+virtual machine, not a sealed slot image, so do not quote them as suite
+evidence. Use the
+[current guides](../../README.md#documentation) for present behavior.
 
-Recorded October 21, 2026 (standalone guests, issue #68): the base image built from
+Recorded October 21, 2026 (standalone guests, issue #68; **guest tier**): the base image built from
 a copy of the original QEMU disk (Mac OS 9.2.2, QEMU 10.1.2, `mac99`, 512 MB) plus the
 MPW-GM distribution, with MacRelix absent. Both slot overlays booted headless side by
 side to the desktop, auto-mounted the `Retro68` share and held independent AFP
@@ -17,7 +25,7 @@ Afterwards the base matched its recorded checksum, the verbatim copy matched the
 original disk, and the original disk and the UTM virtual machine's image kept their
 modification times. Procedure and configuration: [harness provisioning](../../harness/docs/provisioning.md).
 
-Recorded October 16, 2026 (host cost counters, issue #19): `SherclawkCalibrateCheck`
+Recorded October 16, 2026 (host cost counters, issue #19; **guest tier**): `SherclawkCalibrateCheck`
 built from the issue branch, published to the AFP share with `tools/deploy-to-share.sh`
 and launched in the OS 9.2.2 UTM guest with the Retro68 window frontmost, the guest
 otherwise idle. Each of three runs reported `RESULT failures=0` and deleted its
@@ -32,7 +40,7 @@ sleep 0 took 5, 5 and 41 ticks and sleep 1 took 331, 323 and 300; sleep 10 took 
 calibration](../development.md#cost-table-and-guest-calibration) come from these.
 
 Recorded October 15, 2026 (model chooser and reasoning effort, issue #62
-follow-up): OS 9.2.2 running the main application built from main (`0f99919`
+follow-up; **guest tier**): OS 9.2.2 running the main application built from main (`0f99919`
 was the head). With DHCP DNS in place, Edit > Preferences loaded the popular
 catalog, Cancel closed it and left the app usable, and a model request completed
 (`end=ok`, no `TLS error`). That is the successful baseline the October 14 entry
@@ -64,7 +72,7 @@ the network cannot be cut without losing the application, and the DNS override
 does not fail the fetch. The API key appears in clear text in Preferences
 screenshots; none were retained.
 
-Recorded October 14, 2026 (model chooser and reasoning effort, issue #62):
+Recorded October 14, 2026 (model chooser and reasoning effort, issue #62; **guest tier**):
 the October 13 guest evidence on issues #62 and #57 covers popular-model loading,
 search, rejection of a nonexistent typed model ID, exact confirmation and saving
 of an existing typed ID, model-specific effort choices/defaults, persistence of
@@ -105,7 +113,7 @@ closed, and #214 (cached-list drawing on the main window) remains tracked. No
 application code was changed for this verification. `tools/check.sh`,
 `tools/check-transport.sh`, `tools/lint.sh` and the Docker app build passed.
 
-Recorded October 10, 2026: `copy_file` was exercised in OS 9.2.2 against the
+Recorded October 10, 2026 (**guest tier**): `copy_file` was exercised in OS 9.2.2 against the
 AFP `Retro68` volume. `SherclawkCopyCheck` reported zero failures: a native
 fixture with both forks (3,000 data and 1,500 resource bytes) and Finder
 identity (`APPL`/`ShCk`, custom-icon flag set) was pinned through
@@ -118,7 +126,7 @@ copy onto the published name was refused `EXISTS` before any I/O, with no
 journal records. Not exercised: a copy at the 1 MiB cap, Stop mid-copy and a
 publish from a real build artifact in the main app.
 
-Recorded October 10, 2026 (display extraction, issue #145): Clang and Linux
+Recorded October 10, 2026 (display extraction, issue #145; **guest tier**): Clang and Linux
 GCC 13 ASan/UBSan host checks passed the extracted formatting, validation,
 transcript capping and scroll/layout fixtures. `tools/check-transport.sh` and
 `tools/lint.sh` passed. Docker `./build.sh` and `./build.sh all` built the app,
@@ -133,7 +141,7 @@ Continue resumed from the seed. The handoff diagnostic showed its PASS message
 through the extracted transcript appender. These diagnostics used synthetic text
 and summaries with no model requests.
 
-Recorded October 10, 2026: `move_to_trash` was exercised in OS 9.2.2 against
+Recorded October 10, 2026 (**guest tier**): `move_to_trash` was exercised in OS 9.2.2 against
 the AFP `Retro68` volume. Real sessions had failed every move with `-43` because
 `FSpCatMove` was given a file-named destination instead of the Trash directory
 (the host stub had modelled a move-and-rename). After the fix,
@@ -145,7 +153,7 @@ the Trash with its original bytes. A name already in the Trash is refused
 `EXISTS` (`-48`). Not exercised: the workspace fallback Trash and a batch of
 eight in the main app.
 
-Recorded October 9, 2026 (large text, **host/build evidence only; guest pending**):
+Recorded October 9, 2026 (large text, **host tier**; host/build evidence only, guest pending):
 Clang and GCC 13 ASan/UBSan checks passed the 64 KiB read/edit and immutable
 build-arena fixtures, all transfer/open/close/flush fault positions in a
 multi-chunk edit, journal/rename faults, phase cancellation, tick wrap, JSON
@@ -162,7 +170,7 @@ have **not** been measured: no AFP host/guest connection was configured in the
 implementation workspace. The shipping cap remains 4 KiB. See
 [the pending acceptance procedure](../large-text.md).
 
-Recorded October 9, 2026: `view_image` was exercised in OS 9.2.2. The
+Recorded October 9, 2026 (**guest tier**): `view_image` was exercised in OS 9.2.2. The
 `SherclawkViewImageCheck` diagnostic reported zero failures against the real
 File Manager: a PNG at the 128 KiB cap read in eight bounded steps and handed
 over byte for byte, an over-cap file, a non-PNG and a missing file refused with
@@ -177,7 +185,7 @@ the tool result only, with no `base64` or `image_url`, and the following round
 uploaded about 25 KB. Not exercised: a text-only model, a PNG near the cap sent
 to a provider, and Stop during a read in the main app.
 
-Recorded October 5, 2026: 256 KiB history / 288 KiB request PowerPC build and
+Recorded October 5, 2026 (**guest tier**): 256 KiB history / 288 KiB request PowerPC build and
 ASan/UBSan checks passed, including a near-full history handoff request and
 refusal of truncated/tool-call summaries and failed seed persistence. The
 OS 9 handoff diagnostic reported zero failures: exact Markdown read-back,
@@ -185,7 +193,7 @@ new-journal seeding, distinct filenames, and retention on encoding/size failures
 A live `openai/gpt-6-luna` conversation was summarized using Command-H, saved
 as native Markdown, and continued from the seeded history.
 
-Recorded October 2, 2026: PowerPC build passed; ASan/UBSan baseline, agent-loop
+Recorded October 2, 2026 (**guest tier**): PowerPC build passed; ASan/UBSan baseline, agent-loop
 and TLS application-I/O checks passed. Live host and OS 9.2.2 probes both called
 all three tools, read `copper-crab` from the fixture, and received a final
 model response over TLS 1.3; each reported `RESULT failures=0`. Finder displayed
@@ -199,7 +207,7 @@ spike/recon scripts, outputs, and test folders were archived by same-volume
 rename into `Retro68:Spikes:`. Superseded apps and diagnostics from before the
 rename are in `Retro68:Older:`; their earlier session directory remains preserved.
 
-Create-only write verification, October 2, 2026: the PowerPC app built and was
+Create-only write verification, October 2, 2026 (**guest tier**): the PowerPC app built and was
 published fork-aware to the AFP share. ASan/UBSan protocol and File Manager
 model checks passed, including journal failures before staging/after publish,
 short writes, corrupt reads, rename races, uncertain outcomes, malformed calls,
@@ -218,7 +226,7 @@ After the final DEL-byte and Unicode-path hardening, the rebuilt/published main
 app created `ClawFinal.c`, read back `lobster`, and received a final model answer;
 its saved session parsed successfully.
 
-Exact-edit verification, October 2, 2026: ASan/UBSan checks passed for
+Exact-edit verification, October 2, 2026 (**guest tier**): ASan/UBSan checks passed for
 whole-file/page revisions, source changes at unchanged size/date, changed
 catalog identity, unique and overlapping matches, deletion, encoding/control
 refusal, size and recovery-path bounds, busy opens, journal barriers, corrupt
@@ -241,7 +249,7 @@ session retained the completed calls without a subsequent mutation.
 Injected failure paths were tested on the host model, not by damaging the
 live guest volume.
 
-Search verification, October 2, 2026: text tools v2 built and was published
+Search verification, October 2, 2026 (**guest tier**): text tools v2 built and was published
 fork-aware. ASan/UBSan checks passed for recursive/nonrecursive discovery,
 CR/CRLF line numbers, pagination, overlapping and scan-boundary matches,
 MacRoman queries, resource/binary/alias refusal, malformed/overflowed cursors,
@@ -265,7 +273,7 @@ root locations; saved recovery/session paths refer to those original locations.
 No AFP service restart was needed.
 
 
-Native job integration, October 3, 2026: `jobs.c` now reserves fresh job folders,
+Native job integration, October 3, 2026 (**guest tier**): `jobs.c` now reserves fresh job folders,
 stages and reads back closed snapshot inputs in bounded steps, publishes ready
 last, and polls strict terminal records plus separate 1 KiB log pages. The
 PowerPC `SherclawkJobCheck` diagnostic was built, published fork-aware and
@@ -278,7 +286,7 @@ limits are in [macrelix-worker-verified.md](macrelix-worker-verified.md). Model-
 tools, source revision binding and artifact authorization were planned at this
 point and have since been implemented.
 
-Create-project verification, October 5, 2026: ASan/UBSan protocol and File Manager
+Create-project verification, October 5, 2026 (**guest tier**): ASan/UBSan protocol and File Manager
 checks passed for exact template bytes, MacRoman/CR/TEXT metadata, nested
 parents, malformed arguments, path/alias refusal, existing destinations, short
 writes, corrupt reads, close failures, journal barriers, rename collisions,
@@ -300,7 +308,7 @@ readback matched the repository template exactly and all pages carried the same
 editable whole-file revision. Diagnostic evidence is retained locally under
 ignored `build/project-check-verified.log` and `build/project-session.jsonl`.
 
-Native build verification, October 5, 2026: PowerPC main/diagnostic builds and
+Native build verification, October 5, 2026 (**guest tier**): PowerPC main/diagnostic builds and
 ASan/UBSan protocol, descriptor and File Manager fault checks passed. The guest
 `SherclawkBuildCheck` reported `RESULT failures=0` for independent and starter
 projects with two C sources and editable output names. Each route deliberately
@@ -328,7 +336,7 @@ results. Stop retained an uncertain published job without resubmission; its
 original snapshot later completed when the worker was explicitly resumed.
 
 
-Native launch verification, October 5–6, 2026: the final PowerPC main and
+Native launch verification, October 5–6, 2026 (**guest tier**): the final PowerPC main and
 `SherclawkRunCheck` builds passed, along with ASan/UBSan fault checks. The OS 9
 build-and-launch diagnostic reported `RESULT failures=0` for independent and
 starter projects: compiler failures refused launch, revision-guarded repairs
@@ -340,7 +348,7 @@ lifetimes. These are process observations, not functional smoke-test results.
 IDs and retained evidence are in [macrelix-worker-verified.md](macrelix-worker-verified.md).
 
 
-ToolServer spike verification, October 6, 2026: the standalone PowerPC diagnostic
+ToolServer spike verification, October 6, 2026 (**guest tier**): the standalone PowerPC diagnostic
 built and was published fork-aware, then ran in OS 9.2.2. Native desktop-database
 ToolServer launch, queued success/error Rez replies, exact compiled string-resource
 readback, and synthetic malformed-reply checks passed (`RESULT failures=0`).
@@ -356,7 +364,7 @@ raw evidence is under ignored `build/toolserver-check-verified.log` and
 `build/toolserver-final.png` / `build/toolserver-background.png`.
 
 
-Fixed native executor verification, October 6, 2026: both PowerPC diagnostics
+Fixed native executor verification, October 6, 2026 (**guest tier**): both PowerPC diagnostics
 built and were published fork-aware. With MacRelix quit, two native template
 builds passed compile/link/Rez, fork/resource/metadata verification and exact
 artifact launch (`RESULT failures=0`); their windows displayed the expected text.
@@ -367,7 +375,7 @@ are separate from the queue and model tools. Retained fixture IDs, repeat-byte
 comparison limits and ignored raw evidence are in
 [native executor evidence](native-executor-evidence.md#increment-2-guest-evidence--october-6-2026).
 
-Integrated self-build verification, October 6, 2026: `SherclawkSelfBuildCheck`
+Integrated self-build verification, October 6, 2026 (**guest tier**): `SherclawkSelfBuildCheck`
 reported `RESULT failures=0` in OS 9.2.2 with MacRelix absent before each build.
 Independent and starter projects each passed compiler-error, repair, authorized
 launch and fresh revision-bound rebuild fixtures: six retained build IDs, four
@@ -385,7 +393,7 @@ success/launch, and lock released after draining. Its retained ID is
 This demonstrates observation stopping and safe draining, not cancellation.
 
 
-Read-only inspection verification, October 6, 2026: the PowerPC main app,
+Read-only inspection verification, October 6, 2026 (**guest tier**): the PowerPC main app,
 `SherclawkProbe` and `SherclawkInspectCheck` builds passed along with the
 ASan/UBSan host suite, whose File Manager model now also covers resource
 maps, alias records, Process Manager paging, Font Manager families and
@@ -406,7 +414,7 @@ ignored `build/inspect-check-verified.log` and `build/probe-verified.log`.
 Resource reads never load a whole fork, and inspection results are evidence,
 never launch authority.
 
-Preferences verification, October 7, 2026: the pure parser/formatter suite runs
+Preferences verification, October 7, 2026 (**guest tier**): the pure parser/formatter suite runs
 under ASan/UBSan in `tools/check.sh` alongside the existing suites: missing
 file/defaults, every key, comments and blank lines, CR/LF/CRLF, duplicate and
 unknown keys, empty-key clearing, over-long and boundary values, workspace
@@ -431,7 +439,7 @@ tracks the toggle itself (`SetControlValue` followed by `Draw1Control`). The
 saved key was present in the file and used by the runs, but not yet
 distinguished from the identical compiled key in a no-compiled-key build.
 
-Owned application Quit verification, October 9, 2026: `SherclawkQuitCheck`
+Owned application Quit verification, October 9, 2026 (**guest tier**): `SherclawkQuitCheck`
 reported `RESULT failures=0 project=BuildCheck000d104ds` in the running OS 9.2.2
 UTM guest. The independent, responsive app accepted one noninteractive Quit
 but kept running: `run-000d16c3-0001` (PSN `0:47185922`, build
@@ -454,7 +462,7 @@ host suites and Linux GCC 13 ASan/UBSan suites passed. The successful guest
 logs are retained locally under ignored `build/quit-check-verified.log` and
 `build/quit-ignore-verified.log`. The schema/discovery gate is now open.
 
-MCP Servers editor verification, October 9, 2026: the main `Sherclawk` build
+MCP Servers editor verification, October 9, 2026 (**guest tier**): the main `Sherclawk` build
 (Docker, with the configuration editor) was published to the AFP share and run
 in the OS 9.2.2 UTM guest. **Edit ▸ MCP Servers…** opened the dialog with the
 disabled template and the no-file hint. Saving the template plus a stray `x`
@@ -478,7 +486,7 @@ the integrated memory partition or any agent use of the configuration.
 
 ## MCP resumable processing, October 10, 2026
 
-Issue #161's guest gate: `SherclawkMCPCheck` was Docker-built from source
+**Guest tier.** Issue #161's guest gate: `SherclawkMCPCheck` was Docker-built from source
 commit `d15752c8379bcbf74cf4cf89f0b4b5660ab775f1`, published with AFP fork metadata and launched in the OS 9.2.2
 UTM guest against the official Tavily endpoint with the owner's saved
 configuration. Message parsing, key checks, discovery and result checks ran in
@@ -498,7 +506,7 @@ change.
 
 ## MCP Tavily diagnostic, October 10, 2026
 
-Issue #159's native diagnostic gate passed in the OS 9.2.2 UTM guest against
+**Guest tier.** Issue #159's native diagnostic gate passed in the OS 9.2.2 UTM guest against
 the official Tavily endpoint. The owner had saved the private configuration
 through **Edit ▸ MCP Servers…** before this session. The diagnostic read
 `System Folder:Preferences:Sherclawk MCP Servers.json` directly; no host-written
@@ -581,7 +589,7 @@ inside the editor, or refusal specifically during a stopped lookup's drain.
 This gate does not establish agent integration, credential redaction of
 model-visible results, minimum-partition headroom or release acceptance.
 
-Raised limits verification, October 10, 2026: the main `Sherclawk` build (Docker,
+Raised limits verification, October 10, 2026 (**guest tier**): the main `Sherclawk` build (Docker,
 history 1 MiB, tool results 4096 bytes, prompt 8 KiB, `SIZE` 10 MiB minimum / 16 MiB
 preferred) was published to the AFP share and run in the OS 9.2.2 UTM guest with
 `openai/gpt-6-luna`. It launched in the new partition and the status line read
@@ -610,7 +618,7 @@ to the limit, so provider-side context overflow at 1 MiB was not exercised.
 
 ## MCP configuration guard, October 10, 2026
 
-Issue #160's identity guard was checked in the OS 9.2.2 UTM guest against the
+**Guest tier.** Issue #160's identity guard was checked in the OS 9.2.2 UTM guest against the
 real Preferences folder and the owner's saved configuration. The workspace was
 pointed at the boot volume so it contained `System Folder:Preferences`. The
 diagnostic's log carries statuses, codes and identifiers only, never a result
@@ -656,13 +664,13 @@ Not exercised: `view_image` (host fixtures only), `build_project` inputs and
 `run_application` against the real configuration, and the `Sherclawk
 Preferences` file, which the guard does not cover (#170).
 
-Recorded October 10, 2026: the `Retro68:Older:` and `Retro68:Spikes:` archives
+Recorded October 10, 2026 (**host tier**, share state): the `Retro68:Older:` and `Retro68:Spikes:` archives
 named in the October 2 entries no longer exist on the AFP share; those entries
 describe the state on their recorded dates.
 
 ## Abort mid-connect drain, October 10, 2026
 
-Issue #34's gate: an abort that fires while a request is still connecting must
+**Guest tier.** Issue #34's gate: an abort that fires while a request is still connecting must
 not tear the TLS context down mid-connect, because classic OT can fault on an
 outstanding async connect. Every abort branch (lookup, send, handoff) and quit
 now hand a live exchange to one bounded drain that closes it only once
@@ -709,7 +717,7 @@ Not exercised: the send-time lookup's own 30 s deadline can still close before
 the transport timeout (filed as #182), and the pre-fix crash was not re-run as
 a control — #34 records it at three type-3 failures.
 
-Rerun with the pump-only drain (October 10, 2026, OS 9.2.2 UTM guest, same
+Rerun with the pump-only drain (October 10, 2026, **guest tier**, OS 9.2.2 UTM guest, same
 model and Preferences). Docker-built `Sherclawk` published to the AFP share;
 local and published SHA-256 matched,
 `a6717010e752886e101687978a223d2f430db21aa8e70da47c2fd1ec0f11bb43`. Stops were
@@ -738,7 +746,7 @@ exercised: the 30 s forced-close backstop and a long hidden-window quit wait.
 
 ## MCP run loop in the guest, October 11, 2026
 
-The app built from the integration branch was published to the AFP `Retro68`
+**Guest tier.** The app built from the integration branch was published to the AFP `Retro68`
 volume and driven in the OS 9.2.2 UTM guest with the owner's saved MCP
 configuration (Tavily) and a live model. It found two defects the host
 fixtures could not:
@@ -781,7 +789,7 @@ server, quit during a call and repeated long sessions.
 
 ## Application heap headroom, October 11, 2026
 
-A temporary probe (not shipped) logged the application zone, its limit,
+**Guest tier.** A temporary probe (not shipped) logged the application zone, its limit,
 `FreeMem`, `MaxBlock`, `MaxMem`, `StackSpace` and the addresses of `gNet`,
 `gAgent` and the code to `Retro68:Sherclawk.log`. The app was built from
 `main` at `73a3d3b`, published to the AFP share and launched in the OS 9.2.2
@@ -807,7 +815,7 @@ tests inject it for the model request and for MCP discovery and calls.
 
 ## Preferences crash from MaxApplZone, October 12, 2026
 
-Edit ▸ Preferences… died in OS 9.2.2 with "an error of type 2" inside
+**Guest tier.** Edit ▸ Preferences… died in OS 9.2.2 with "an error of type 2" inside
 `DialogSelect`, on the dialog's first activate event, in every build from
 `68ad400` (#199) on. Bisecting on the guest: `a03b99c`, `db0a6c4`, `468efb9` and
 `73a3d3b` opened the dialog; `68ad400` crashed; the same tree without its
@@ -828,7 +836,7 @@ force-stopped and restarted after repeated faults wedged it.
 
 ## Build-check fixtures, October 12, 2026
 
-`SherclawkBuildCheck`, `SherclawkRunCheck`, `SherclawkQuitCheck` and
+**Guest tier.** `SherclawkBuildCheck`, `SherclawkRunCheck`, `SherclawkQuitCheck` and
 `SherclawkSelfBuildCheck` had failed (2, 3, 3 and 3) on `main` since #91 gave the
 starter five sources: the fixture's edit of `"sources":["main.c"]` in the
 starter's `project.json` no longer matched, so `extra.c` never joined the build,
@@ -842,7 +850,7 @@ first project's `QUIT_TIMEOUT`, the `PROCESS_PREEXISTED` relaunch and
 
 ## Integrated MCP agent acceptance, October 14, 2026
 
-Issue #165's release gate passed in the OS 9.2.2 UTM guest with
+**Guest tier.** Issue #165's release gate passed in the OS 9.2.2 UTM guest with
 `SherclawkMCPAgentCheck`, built from the production UI, agent and MCP
 controller on the branch based at `081707b`. The owner’s private Tavily
 configuration was saved through **Edit ▸ MCP Servers…**; the diagnostic read
@@ -906,7 +914,7 @@ requires successful retained extraction and distinct successful page reads.
 
 ## Capabilities and volume info, October 15, 2026
 
-`get_capabilities` and `get_volume_info` were verified in the OS 9.2.2 guest
+**Guest tier.** `get_capabilities` and `get_volume_info` were verified in the OS 9.2.2 guest
 with `SherclawkInspectCheck` (extended for them) before either was added to
 `agent_tool_schemas`. The diagnostic APPL's SHA-256 was
 `c1fd176eedb27cd5251876193e65f8e809039f4d72d667afc1f5909f023b35bd`. Result:

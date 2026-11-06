@@ -1,3 +1,20 @@
+# Evidence tiers and suite scope — November 5, 2026
+
+Verified issue #265 on top of `3d63a74` (ADR-0009). This record is **host
+tier**: `tools/check.sh` passed the harness suite tests, including the new
+assertion that `suite.json` records `"tier": "guest"`, and `tools/lint.sh`
+passed. No guest run was made for this change, so this record establishes no
+guest or hardware behaviour. The tier names are defined in
+[the suite guide](suite.md#what-a-green-suite-proves).
+
+A green suite is guest-tier evidence: a reserved QEMU `mac99` slot booting its
+sealed OS 9.2.2 image, publication into a fresh workspace, and each
+diagnostic's named assertions collected through the report contract. It does
+not establish behaviour on a physical Power Mac, on another OS 9 version,
+under a different QEMU build, over a real network, or visual fidelity. A
+passing host or guest result never upgrades itself to hardware evidence;
+hardware acceptance is a separate gate.
+
 # Per-slot AFP volumes — October 26, 2026
 
 Verified issue #266 on top of `80fb70f` plus the AFP forwarding change in this
