@@ -1,7 +1,8 @@
 # Building, deploying and checking Sherclawk
 
 Run the commands in this guide from the repository root. Host checks use
-Toolbox stubs; a successful host run does not establish guest behavior.
+Toolbox stubs; a successful host run does not establish guest behavior, and a
+green guest run is QEMU evidence rather than physical-hardware evidence.
 [AGENTS.md](../AGENTS.md) contains contributor conventions and the source map.
 
 ## Build and publish
@@ -197,8 +198,11 @@ build/host-probe
 ## Files and verification
 
 [AGENTS.md](../AGENTS.md#layout) lists the source layout. Each `tools/*-check.c` is a Mac GUI
-diagnostic built as its own CMake target; launch it in the guest and read
-`Retro68:<Name>.log`:
+diagnostic built as its own CMake target; guest-tier verification launches it in a
+reserved QEMU `mac99` guest and reads `Retro68:<Name>.log`. That is QEMU evidence,
+not physical-hardware evidence: hardware acceptance is a separate gate, and
+[what a green suite proves](../harness/docs/suite.md#what-a-green-suite-proves)
+defines the tiers. The diagnostics are:
 
 | Diagnostic | Exercises |
 |---|---|

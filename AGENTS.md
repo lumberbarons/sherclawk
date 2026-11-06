@@ -70,8 +70,10 @@ cp config.example.h config.local.h  # optional local config; gitignored
   sidecar open on the share host. Confirm with `ss`/`lsof` that the process
   has no client and holds the app path, kill only those stale sessions, and
   leave netatalk and the live mount alone.
-- Verification beyond host tests means the OS 9 guest: launch the diagnostic
-  and read `Retro68:<Name>.log`. Per-diagnostic launch/read commands are in
+- Verification beyond host tests means the **guest** tier: a reserved QEMU
+  `mac99` guest running the sealed OS 9.2.2 image, not a physical Mac. Launch
+  the diagnostic and read `Retro68:<Name>.log`; hardware acceptance is a
+  separate gate. Per-diagnostic launch/read commands are in
   [Files and verification](docs/development.md#files-and-verification).
 
 ## Layout

@@ -508,6 +508,15 @@ class RunTest(SuiteBase):
         self.assertEqual(stat.S_IMODE(os.stat(summary["interventions"]).st_mode),
                          0o600)
 
+    def test_summary_records_the_guest_tier_it_was_retained_from(self):
+        summary = self.run_suite([check()])
+        self.assertEqual(summary["tier"], "guest")
+        self.assertEqual([entry["tier"] for entry in summary["reservations"]],
+                         ["guest"])
+        with open(os.path.join(summary["evidence_dir"], "suite.json"),
+                  encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["tier"], "guest")
+
 
 class RealPublisherTest(unittest.TestCase):
     """The runner's use of publish.Run, beyond the fake publisher above."""

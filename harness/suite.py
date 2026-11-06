@@ -35,6 +35,7 @@ import qmp
 import reservation
 
 SCHEMA = "1"
+TIER = "guest"
 MODES = ("automated", "visual", "model")
 EXPECTATIONS = ("passed", "failed")
 RESET_POLICIES = ("keep", "reset")
@@ -377,6 +378,7 @@ class Suite:
         suite_id, directory = self._new_directory()
         self.summary = {
             "schema": SCHEMA,
+            "tier": TIER,
             "suite": suite_id,
             "owner": owner,
             "registry": registry.record(),
@@ -564,6 +566,7 @@ class Suite:
 
     def _reserved(self, lease, reason):
         self.summary["reservations"].append({
+            "tier": TIER,
             "slot": lease.slot, "generation": lease.generation,
             "boot": lease.boot, "at": _stamp(self.clock), "reason": reason})
         self._write_summary()

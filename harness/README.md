@@ -5,6 +5,17 @@ repository and meant to be extracted later, so it imports nothing from
 `tools/` or `src/` and keeps its own tests and documentation
 ([ADR-0009](../docs/adr/0009-build-harness-in-repo-then-extract.md)).
 
+## Evidence tiers
+
+The harness produces **guest**-tier evidence: a reserved QEMU `mac99` slot
+running its sealed OS 9.2.2 image, publication into a fresh workspace, and
+named diagnostic assertions collected through the report contract. **Host**
+evidence comes from `tools/check.sh`, `tools/check-transport.sh` and
+`tools/lint.sh`; **hardware** evidence requires a physical Mac and is a
+separate acceptance gate. A green host or guest run never becomes hardware
+evidence; see
+[what a green suite proves](docs/suite.md#what-a-green-suite-proves).
+
 - `provision.py` — immutable base image, per-slot copy-on-write overlays,
   slot identities, each slot's own AFP volume mapping and the headless QEMU
   launcher.
@@ -19,8 +30,8 @@ repository and meant to be extracted later, so it imports nothing from
   See [`docs/publication.md`](docs/publication.md).
 - `suite.py` — the unattended suite runner over a consumer-owned registry:
   serial publication, expected-outcome completion, reset policy, suite
-  summary, and lease-checked screenshot/input/stop for interactive checks.
-  See [`docs/suite.md`](docs/suite.md).
+  summary with its evidence `tier`, and lease-checked screenshot/input/stop
+  for interactive checks. See [`docs/suite.md`](docs/suite.md).
 - `guest.py` — the public command line for driving a guest over QMP:
   screenshots, keys, text and pointer control, for a slot, any QMP socket or
   the UTM VM. `qmp.py` (bounded protocol, input and capture), `screen.py`
