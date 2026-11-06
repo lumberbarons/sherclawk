@@ -97,6 +97,7 @@ Nothing is deleted by the harness, including failed runs.
 | One run: request, closed result, assertions, screenshot, QEMU/controller/diagnostic logs, hashes | `$OS9_HARNESS_HOME/evidence/<slot>/<slot>-g<gen>-run-<run>/` |
 | Release and recovery records with a last screenshot | `$OS9_HARNESS_HOME/evidence/<slot>/<slot>-g<gen>-<reason>-*.json` and `.ppm` |
 | Guest-side mailbox, claims, results, boot traces | `Retro68:Harness:<slot>:` on the slot's own volume |
+| Requests and Stop records retained by recovery | `Retro68:Harness:archive:<slot>:g<old-generation>:<run-prefix>-<random>:` on the slot's own volume; `run-prefix` is the first 20 run-ID digits, or `unknown` for a malformed request |
 | Per-run workspaces and diagnostic logs | `Retro68:Harness:<slot>-g<gen>:<run>:` on the slot's own volume |
 | Phase timings | `python3 harness/timing.py report <suite dir>...` (read-only) |
 
@@ -115,7 +116,7 @@ for a quarantine, the reason.
 | A suite or script died holding a lease | Nothing, or `recover --slot slotN` once its lease expired. Expiry revokes the token before the slot is recovered. |
 | The result never arrived (`unknown`) | Do not replay the request. Read the run evidence, screenshot and controller trace; the harness resets the guest on release. |
 | A slot's controller never became ready | The manager removes stale `ready.tmp` staging and quarantines a failed boot. Check the QEMU log tail in the release evidence, then recover. |
-| `publish` reports an unconsumed request | The previous run ended uncertain and left its `request` in `Retro68:Harness:<slot>:`. Recovery does not clear it yet (#260): keep the evidence, move that file out of the mailbox (for example into `Harness/archive/`) on the share, and never replay it. |
+| `publish` reports an unconsumed request | Release your lease and reserve again. After verifying QEMU has stopped, recovery moves the old `request` and `stop-*` records to `Retro68:Harness:archive:<slot>:g<old-generation>:<run-prefix>-<random>:` before freeing the slot. Never replay them or move a live guest's request by hand. If archiving fails, the slot is quarantined: fix the storage/permissions named by `status`, then explicitly recover it. |
 | App "in use" after republishing | A stale `afpd` session on the share host, covered in `AGENTS.md`. Kill only that process; never restart netatalk or the mount. |
 | Every slot misbehaves after a host crash | `manage.py recover` with no `--slot` rotates the manager epoch, invalidates every lease and resets what it can. Only when no other agent holds a guest. |
 
