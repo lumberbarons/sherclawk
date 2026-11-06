@@ -28,6 +28,8 @@ import subprocess
 import sys
 import time
 
+import qmp
+
 SLOTS = ("slot1", "slot2")
 BASE_NAME = "os9-mpw.qcow2"
 ORIGINAL_NAME = "os9-original.qcow2"
@@ -40,6 +42,10 @@ SENTINEL = ".harness-slot"
 AFP_PORT = 548
 # The developer's working export (tools/deploy-to-share.sh); never a slot's.
 DEVELOPER_EXPORT = "/srv/retro68"
+# `status` must answer even when a client holds the QMP socket or the guest is
+# wedged, so its query has a much shorter deadline than the driving default.
+STATUS_QMP_TIMEOUT = 2.0
+STATUS_SCHEMA = "1"
 
 
 class ProvisionError(Exception):
@@ -466,14 +472,64 @@ def set_storage(home, name, mount, export, afp_port=None, server=None):
     os.replace(tmp, home.storage_path)
 
 
-def pid_of(s):
+def read_pid(s):
+    """The pid recorded for the slot, even when that process is gone."""
     try:
         with open(s.pidfile) as f:
-            pid = int(f.read().strip())
-        os.kill(pid, 0)
-        return pid
-    except (FileNotFoundError, ValueError, ProcessLookupError):
+            return int(f.read().strip())
+    except (OSError, ValueError):
         return None
+
+
+def process_alive(pid):
+    if not pid or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass  # it exists; this user may not signal it
+    return True
+
+
+def parse_etime(text):
+    """Seconds from `ps -o etime` ([[dd-]hh:]mm:ss); ValueError otherwise."""
+    value = text.strip()
+    if not value:
+        raise ValueError("empty etime")
+    days = 0
+    if "-" in value:
+        day, _, value = value.partition("-")
+        days = int(day)
+    parts = value.split(":")
+    if not 2 <= len(parts) <= 3:
+        raise ValueError("unrecognised etime %r" % text)
+    numbers = [int(part) for part in parts]
+    if len(numbers) == 2:
+        hours, minutes, seconds = 0, numbers[0], numbers[1]
+    else:
+        hours, minutes, seconds = numbers
+    return days * 86400 + hours * 3600 + minutes * 60 + seconds
+
+
+def process_uptime(pid, ps="ps"):
+    """Seconds since the pid started, or None when ps cannot say."""
+    if not pid or pid <= 0:
+        return None
+    try:
+        result = subprocess.run([ps, "-p", str(pid), "-o", "etime="],
+                                capture_output=True, text=True, timeout=5)
+        if result.returncode:
+            return None
+        return parse_etime(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def pid_of(s):
+    pid = read_pid(s)
+    return pid if pid and process_alive(pid) else None
 
 
 def launch(s, display="none", cdroms=(), drive=None, qemu=QEMU):
@@ -508,6 +564,84 @@ def stop(s, timeout=10.0):
     raise ProvisionError("%s (pid %d) ignored SIGTERM" % (s.name, pid))
 
 
+class StatusProbe:
+    """What `status` asks the host about a recorded pid; host tests replace it."""
+
+    def alive(self, pid):
+        return process_alive(pid)
+
+    def uptime(self, pid):
+        return process_uptime(pid)
+
+
+def query_status(path, timeout=STATUS_QMP_TIMEOUT):
+    """The guest's query-status answer, or absent/unresponsive within the deadline."""
+    if not os.path.exists(path):
+        return "absent"
+    try:
+        with qmp.QMP(path, timeout=timeout) as client:
+            reply = client.cmd("query-status", timeout=timeout)
+    except qmp.QMPError:
+        return "unresponsive"
+    state = reply.get("status") if isinstance(reply, dict) else None
+    return state if isinstance(state, str) and state else "unresponsive"
+
+
+def status(home, probe=None, qmp_timeout=STATUS_QMP_TIMEOUT):
+    """Report each slot's process, uptime, overlay and QMP answer, without mutating."""
+    probe = probe or StatusProbe()
+    counts = {"running": 0, "stopped": 0, "stale": 0}
+    slots = []
+    for name in SLOTS:
+        s = slot(home, name)
+        pid = read_pid(s)
+        alive = bool(pid and probe.alive(pid))
+        if alive:
+            state = "running"
+        elif os.path.exists(s.pidfile) or os.path.exists(s.qmp):
+            state = "stale"  # a dead pid or socket was left behind
+        else:
+            state = "stopped"
+        counts[state] += 1
+        slots.append({
+            "slot": name,
+            "state": state,
+            "pid": pid if alive else None,
+            "uptime": probe.uptime(pid) if alive else None,
+            "overlay": s.overlay,
+            "qmp_state": query_status(s.qmp, qmp_timeout),
+        })
+    return {"schema": STATUS_SCHEMA, "slots": slots, "counts": counts}
+
+
+def format_uptime(seconds):
+    if seconds is None:
+        return "-"
+    days, rest = divmod(int(seconds), 86400)
+    hours, rest = divmod(rest, 3600)
+    minutes, secs = divmod(rest, 60)
+    if days:
+        return "%dd%02dh%02dm%02ds" % (days, hours, minutes, secs)
+    if hours:
+        return "%dh%02dm%02ds" % (hours, minutes, secs)
+    if minutes:
+        return "%dm%02ds" % (minutes, secs)
+    return "%ds" % secs
+
+
+def render_status(report):
+    lines = []
+    for entry in report["slots"]:
+        lines.append("%s state=%s pid=%s uptime=%s qmp_state=%s overlay=%s" % (
+            entry["slot"], entry["state"],
+            "-" if entry["pid"] is None else entry["pid"],
+            format_uptime(entry["uptime"]), entry["qmp_state"], entry["overlay"]))
+    counts = report["counts"]
+    lines.append("summary running=%d stopped=%d stale=%d"
+                 % (counts["running"], counts["stopped"], counts["stale"]))
+    return "\n".join(lines)
+
+
 def storage_command(home, args):
     if args.storage_cmd == "set":
         set_storage(home, args.slot, args.mount, args.export, args.afp_port, args.server)
@@ -526,6 +660,8 @@ def main(argv=None):
     ap.add_argument("--home", help="harness state directory (default $OS9_HARNESS_HOME)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("info", help="print emulator version, base checksums and slot identities")
+    p = sub.add_parser("status", help="list each slot's process, uptime and QMP state")
+    p.add_argument("--json", action="store_true", help="structured output")
     sub.add_parser("freeze", help="make the working image the immutable base and record it")
     for name, text in (("freeze-slot", "seal a stopped controller-configured slot image"),
                        ("init", "create the slot overlay"),
@@ -564,6 +700,13 @@ def main(argv=None):
                               for n in SLOTS}}
             json.dump(info, sys.stdout, indent=2, sort_keys=True)
             print()
+        elif args.cmd == "status":
+            report = status(home)
+            if args.json:
+                json.dump(report, sys.stdout, indent=2, sort_keys=True)
+                print()
+            else:
+                print(render_status(report))
         elif args.cmd == "freeze":
             promote_work(home)
         elif args.cmd == "freeze-slot":

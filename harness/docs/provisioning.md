@@ -68,6 +68,38 @@ reaches the AFP share host over its LAN address and holds its own AFP session
 (`info usernet` shows one established connection to port 548 per guest). Add
 `hostfwd` rules per slot if a service must be reachable from the host.
 
+## Which guests are running
+
+`provision.py status` reports the two slots' processes and QMP state without
+`pgrep`, a hand-run QMP client or a reservation:
+
+```bash
+python3 harness/provision.py status          # one line per slot, then a summary
+python3 harness/provision.py status --json   # the same fields, structured
+```
+
+Each slot carries `state`, `pid`, `uptime`, `overlay` and `qmp_state`:
+
+- `state=running`: the pid recorded in `run/<slot>.pid` is alive.
+- `state=stopped`: neither a pid file nor a QMP socket remains.
+- `state=stale`: a pid file or QMP socket remains but the recorded pid is not
+  alive (a crashed or killed QEMU). A stale slot is never reported as running.
+- `pid` is the recorded pid only when it is alive; `uptime` comes from
+  `ps -o etime=` (`-` when it cannot be read). Text output formats the uptime,
+  JSON keeps integer seconds.
+- `qmp_state` is the guest's own `query-status` answer (`running`, `paused`, or
+  another QEMU state) when the socket answers. It is `absent` when no socket
+  file exists and `unresponsive` when the socket cannot answer within the
+  two-second `STATUS_QMP_TIMEOUT`, for example because another client holds the
+  one-client socket or the emulator is wedged. A paused guest therefore reads
+  `state=running qmp_state=paused`.
+
+The last line counts the process states, so `provision.py status | tail -1`
+answers "how many guests are running". The command only observes: it never
+launches, stops or resets a guest and does not touch an overlay. It also has no
+lease view; [`manage.py status`](reservations.md) adds the owner, generation
+and expiry once a slot is reserved through the manager.
+
 ## Per-slot AFP storage
 
 A slot's guest mounts a volume that belongs to that slot alone. The guest-visible
