@@ -2,13 +2,16 @@
 import contextlib
 import hashlib
 import io
+import json
 import os
 import stat
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import fake_qmp  # noqa: E402
 import provision  # noqa: E402
 
 
@@ -483,3 +486,148 @@ class ControllerImageTest(unittest.TestCase):
             provision.freeze(home.base_path)
             with self.assertRaises(provision.ProvisionError):
                 provision.create_overlay(s)
+
+
+class Probe:
+    """Injectable host facts: which pids are alive and how long they have run."""
+
+    def __init__(self, alive=(), uptimes=None):
+        self.alive_pids = set(alive)
+        self.uptimes = dict(uptimes or {})
+
+    def alive(self, pid):
+        return pid in self.alive_pids
+
+    def uptime(self, pid):
+        return self.uptimes.get(pid)
+
+
+class EtimeTest(unittest.TestCase):
+    def test_parses_every_ps_etime_form(self):
+        self.assertEqual(provision.parse_etime("03:15"), 195)
+        self.assertEqual(provision.parse_etime("01:03:15"), 3795)
+        self.assertEqual(provision.parse_etime("2-01:03:15"), 176595)
+        self.assertEqual(provision.parse_etime("  64-20:03:54\n"),
+                         64 * 86400 + 20 * 3600 + 3 * 60 + 54)
+
+    def test_rejects_garbage(self):
+        for text in ("", "soon", "1:2:3:4", "1-"):
+            with self.assertRaises(ValueError):
+                provision.parse_etime(text)
+
+
+class UptimeFormatTest(unittest.TestCase):
+    def test_formats_the_largest_units_first(self):
+        self.assertEqual(provision.format_uptime(None), "-")
+        self.assertEqual(provision.format_uptime(6), "6s")
+        self.assertEqual(provision.format_uptime(195), "3m15s")
+        self.assertEqual(provision.format_uptime(3795), "1h03m15s")
+        self.assertEqual(provision.format_uptime(176595), "2d01h03m15s")
+
+
+class StatusTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = provision.Home(self.tmp.name)
+        os.makedirs(self.home.run_dir)
+
+    def slot(self, name):
+        return provision.slot(self.home, name)
+
+    def qmp_server(self, name):
+        server = fake_qmp.FakeQMP()
+        self.addCleanup(server.close)
+        os.symlink(server.path, self.slot(name).qmp)
+        return server
+
+    def record(self, name, pid):
+        with open(self.slot(name).pidfile, "w") as f:
+            f.write("%d\n" % pid)
+
+    def report(self, probe=None, timeout=1.0):
+        return provision.status(self.home, probe=probe or Probe(), qmp_timeout=timeout)
+
+    def run_cli(self, *argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = provision.main(["--home", self.home.path, *argv])
+        return rc, out.getvalue()
+
+    def test_running_slot_reports_pid_uptime_qmp_and_overlay(self):
+        server = self.qmp_server("slot1")
+        server.on("query-status", lambda c, a: {"status": "running", "running": True})
+        self.record("slot1", 4242)
+        report = self.report(Probe({4242}, {4242: 3723}))
+        running, stopped = report["slots"]
+        self.assertEqual(running, {
+            "slot": "slot1", "state": "running", "pid": 4242, "uptime": 3723,
+            "overlay": self.slot("slot1").overlay, "qmp_state": "running"})
+        self.assertEqual(stopped["state"], "stopped")
+        self.assertEqual(stopped["qmp_state"], "absent")
+        self.assertEqual(report["counts"], {"running": 1, "stopped": 1, "stale": 0})
+
+    def test_a_slot_with_no_leftovers_is_stopped(self):
+        for entry in self.report()["slots"]:
+            self.assertEqual(entry["state"], "stopped")
+            self.assertIsNone(entry["pid"])
+            self.assertIsNone(entry["uptime"])
+            self.assertEqual(entry["qmp_state"], "absent")
+
+    def test_a_dead_pid_with_a_leftover_socket_is_stale_not_running(self):
+        with open(self.slot("slot1").qmp, "w") as f:
+            f.write("leftover socket\n")
+        self.record("slot1", 5150)
+        stale = self.report()["slots"][0]
+        self.assertEqual(stale["state"], "stale")
+        self.assertIsNone(stale["pid"])
+        self.assertIsNone(stale["uptime"])
+        self.assertEqual(stale["qmp_state"], "unresponsive")
+
+    def test_a_leftover_pidfile_alone_is_also_stale(self):
+        self.record("slot2", 5150)
+        stale = self.report()["slots"][1]
+        self.assertEqual(stale["state"], "stale")
+        self.assertEqual(stale["qmp_state"], "absent")
+
+    def test_a_paused_guest_keeps_its_process_state_and_reports_pause(self):
+        server = self.qmp_server("slot1")
+        server.on("query-status", lambda c, a: {"status": "paused", "running": False})
+        self.record("slot1", 4242)
+        entry = self.report(Probe({4242}))["slots"][0]
+        self.assertEqual(entry["state"], "running")
+        self.assertEqual(entry["qmp_state"], "paused")
+
+    def test_a_hung_socket_is_unresponsive_within_the_deadline(self):
+        server = fake_qmp.FakeQMP()
+        self.addCleanup(server.close)
+        server.greeting = None  # accepts the connection, never answers
+        os.symlink(server.path, self.slot("slot1").qmp)
+        self.record("slot1", 4242)
+        started = time.monotonic()
+        entry = self.report(Probe({4242}), timeout=0.25)["slots"][0]
+        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertEqual(entry["state"], "running")
+        self.assertEqual(entry["qmp_state"], "unresponsive")
+
+    def test_json_and_text_show_the_same_slot_fields(self):
+        server = self.qmp_server("slot1")
+        server.on("query-status", lambda c, a: {"status": "running"})
+        self.record("slot1", os.getpid())
+        rc, text = self.run_cli("status")
+        self.assertEqual(rc, 0)
+        rc, raw = self.run_cli("status", "--json")
+        self.assertEqual(rc, 0)
+        report = json.loads(raw)
+        running, stopped = report["slots"]
+        self.assertEqual(running["state"], "running")
+        self.assertEqual(running["pid"], os.getpid())
+        self.assertEqual(running["qmp_state"], "running")
+        self.assertEqual(report["counts"], {"running": 1, "stopped": 1, "stale": 0})
+        lines = text.splitlines()
+        self.assertIn("slot1 state=running pid=%d uptime=%s qmp_state=running overlay=%s"
+                      % (os.getpid(), provision.format_uptime(running["uptime"]),
+                         running["overlay"]), lines)
+        self.assertIn("slot2 state=stopped pid=- uptime=- qmp_state=absent overlay=%s"
+                      % (stopped["overlay"],), lines)
+        self.assertEqual(lines[-1], "summary running=1 stopped=1 stale=0")
