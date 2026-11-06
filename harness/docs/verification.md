@@ -1,3 +1,25 @@
+# Full registered suite — November 5, 2026
+
+Verified epic #67 on `6885bb6` (ADR-0009). One reserved QEMU 10.1.2 `mac99`
+slot (`slot1`, generation 35, reset to 36) booted the sealed OS 9.2.2 image and
+ran the complete registry, [`tools/native-suite.json`](../../tools/native-suite.json),
+in one uninterrupted suite: `write`, `search`, `edit`, `inspect`, `project`,
+`scroll`, `handoff`, `selfbuild` and `selfbuild-stop` all passed, with 251 named
+assertions and no failures. The suite wall time was 520.5 s (boot 47.7 s,
+publication 29.7 s, diagnostics 394.9 s, one reset 44.5 s, release 0.2 s;
+about 62 checks per hour), and `selfbuild` used 274.8 s of its 600 s deadline.
+Both release records are clean; the slot is free and stopped. The summary
+records `"tier": "guest"`. No API key, Sherclawk agent session or MacRelix was
+used.
+
+Evidence: `$OS9_HARNESS_HOME/evidence/suites/20261106T023233Z-3467af9448e6f3b7/`
+(`suite.json` SHA-256 `8d50bf76fa220f53d80f71b5c03e327cd4e39058f37865b1ca786c716ffbaeaa`);
+per-run requests, results, assertions, screenshots, logs and hashes remain under
+the same tree. This is guest-tier QEMU evidence from one sealed slot on one
+host: it does not establish physical-hardware, other OS or emulator-build, or
+real-network behaviour, and a passing host or guest result never upgrades
+itself to hardware evidence.
+
 # Evidence tiers and suite scope — November 5, 2026
 
 Verified issue #265 on top of `3d63a74` (ADR-0009). This record is **host
