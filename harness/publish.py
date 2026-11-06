@@ -619,8 +619,9 @@ class Run:
             request_path = os.path.join(self.mailbox_share, "request")
             if os.path.exists(request_path):
                 raise PublicationError(
-                    "mailbox %s already holds an unconsumed request; recover the guest "
-                    "before a new run" % self.mailbox_guest)
+                    "mailbox %s already holds an unconsumed request; release this lease "
+                    "and re-reserve so recovery archives it before a new run"
+                    % self.mailbox_guest)
             with contextlib.suppress(OSError):
                 os.remove(request_path + ".tmp")  # a dead publish's staging, not evidence
             try:

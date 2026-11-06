@@ -13,7 +13,9 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import manage  # noqa: E402
+import contract  # noqa: E402
 import provision  # noqa: E402
+import publish  # noqa: E402
 import qmp  # noqa: E402
 import reservation  # noqa: E402
 
@@ -192,6 +194,169 @@ class Base(unittest.TestCase):
         kw.setdefault("clock", self.clock)
         kw.setdefault("effects", self.effects)
         return reservation.Manager(**kw)
+
+
+class MailboxRecoveryTest(Base):
+    def leave_request(self, lease, data=None):
+        request = contract.Request(lease.slot, "%032x" % lease.generation, lease.boot,
+                                   "a" * 32, "SherclawkWriteCheck",
+                                   "Retro68:check:SherclawkWriteCheck", "Retro68:check:", 120)
+        data = contract.write_request(request) if data is None else data
+        mailbox = self.effects.mailbox(lease.slot)
+        with open(os.path.join(mailbox, "request"), "wb") as f:
+            f.write(data)
+        return request, data
+
+    def archived(self, slot):
+        root = os.path.join(self.share, "Harness", "archive", slot)
+        return {os.path.relpath(os.path.join(path, name), root):
+                open_file_bytes(os.path.join(path, name))
+                for path, _dirs, files in os.walk(root) for name in files}
+
+    def publication(self, lease):
+        publisher = publish.Publisher(home=self.home, share=self.share,
+                                      manager=self.manager, clock=self.clock,
+                                      wait_ready=lambda *_: (lease.boot, 100))
+        artifact = publish.Artifact("SherclawkWriteCheck", self.tmp.name,
+                                    "data", "resource", "a" * 64, "b" * 64, 1, 1)
+        run = publish.Run(publisher, lease, artifact, "b" * 32)
+        os.makedirs(run.evidence_dir, exist_ok=True)
+        # Application transfer is outside this regression; drive the real
+        # request publisher after its application-verification boundary.
+        run.steps.append({"name": "application", "status": "ok"})
+        return run
+
+    def test_release_archives_request_and_stop_then_next_lease_can_publish(self):
+        lease = self.manager.reserve("alice")
+        request, data = self.leave_request(lease)
+        mailbox = self.effects.mailbox(lease.slot)
+        stop = contract.filename(request, "stop")
+        with open(os.path.join(mailbox, stop), "wb") as f:
+            f.write(data)
+        retained = ("ready", "claim-" + request.run[:20],
+                    "report-" + request.run[:20], "result-" + request.run[:20])
+        for name in retained:
+            with open(os.path.join(mailbox, name), "wb") as f:
+                f.write(b"retained evidence")
+        rename = os.rename
+
+        def move_after_stop(source, destination):
+            self.assertFalse(self.effects.process(lease.pid).alive)
+            self.assertEqual(self.manager.status()["slots"][0]["state"], "recovering")
+            rename(source, destination)
+
+        with mock.patch("reservation.os.rename", side_effect=move_after_stop):
+            summary = self.manager.release(lease.token, "alice")
+        self.assertFalse(summary["quarantined"])
+        self.assertEqual(len(summary["mailbox_archives"]), 1)
+        archived = self.archived(lease.slot)
+        self.assertEqual(sorted(archived.values()), [data, data])
+        self.assertEqual({os.path.basename(p) for p in archived}, {"request", stop})
+        for path in archived:
+            self.assertTrue(path.startswith("g%d/%s-" % (lease.generation, request.run[:20])))
+            self.assertTrue(all(len(part) <= 31 for part in path.split(os.sep)))
+        self.assertFalse(os.path.exists(os.path.join(mailbox, stop)))
+        for name in retained:
+            self.assertEqual(open_file_bytes(os.path.join(mailbox, name)), b"retained evidence")
+        next_lease = self.manager.reserve("bob")
+        self.assertEqual(next_lease.slot, lease.slot)
+        self.assertGreater(next_lease.generation, lease.generation)
+        run = self.publication(next_lease)
+        run.publish_request()
+        with open(os.path.join(mailbox, "request"), "rb") as f:
+            self.assertEqual(contract.read_request(f.read()), run.request)
+        self.assertEqual(self.archived(lease.slot), archived)
+
+    def test_partial_archive_failure_preserves_both_halves_and_retry_never_overwrites(self):
+        lease = self.manager.reserve("alice")
+        request, data = self.leave_request(lease)
+        mailbox = self.effects.mailbox(lease.slot)
+        stop = contract.filename(request, "stop")
+        with open(os.path.join(mailbox, stop), "wb") as f:
+            f.write(b"stop evidence")
+        rename = os.rename
+
+        def fail_stop(source, destination):
+            if os.path.basename(source) == stop:
+                raise PermissionError("stop record is busy")
+            rename(source, destination)
+
+        with mock.patch("reservation.os.rename", side_effect=fail_stop):
+            self.assertTrue(self.manager.release(lease.token, "alice")["quarantined"])
+        archived = self.archived(lease.slot)
+        self.assertEqual(list(archived.values()), [data])
+        self.assertEqual(open_file_bytes(os.path.join(mailbox, stop)), b"stop evidence")
+        self.assertFalse(self.manager.recover(lease.slot)["quarantined"])
+        recovered = self.archived(lease.slot)
+        self.assertEqual({path: recovered[path] for path in archived}, archived)
+        self.assertEqual(sorted(recovered.values()), sorted([data, b"stop evidence"]))
+        self.assertFalse(os.path.exists(os.path.join(mailbox, stop)))
+
+    def test_archive_directory_failure_quarantines_and_preserves_request(self):
+        lease = self.manager.reserve("alice")
+        _request, data = self.leave_request(lease)
+        with open(os.path.join(self.share, "Harness", "archive"), "wb") as f:
+            f.write(b"obstruction")
+        summary = self.manager.release(lease.token, "alice")
+        self.assertTrue(summary["quarantined"])
+        self.assertIn("archive", self.manager.status()["slots"][0]["quarantine"])
+        self.assertEqual(open_file_bytes(os.path.join(self.effects.mailbox(lease.slot), "request")), data)
+
+    def test_archive_move_failure_quarantines_and_explicit_recovery_retries(self):
+        lease = self.manager.reserve("alice")
+        _request, data = self.leave_request(lease)
+        with mock.patch("reservation.os.rename", side_effect=PermissionError("read-only share")):
+            summary = self.manager.release(lease.token, "alice")
+        self.assertTrue(summary["quarantined"])
+        slot = self.manager.status()["slots"][0]
+        self.assertEqual(slot["state"], "quarantined")
+        self.assertIn("archive", slot["quarantine"])
+        self.assertIn("read-only share", slot["quarantine"])
+        self.assertFalse(self.effects.process(lease.pid).alive)
+        self.assertEqual(open_file_bytes(os.path.join(self.effects.mailbox(lease.slot), "request")), data)
+        self.assertFalse(self.manager.recover(lease.slot)["quarantined"])
+        self.assertEqual(list(self.archived(lease.slot).values()), [data])
+
+    def test_live_lease_request_is_refused_and_left_in_place(self):
+        lease = self.manager.reserve("alice")
+        _request, data = self.leave_request(lease)
+        run = self.publication(lease)
+        with self.assertRaisesRegex(publish.PublicationError, "unconsumed request"):
+            run.publish_request()
+        self.assertEqual(open_file_bytes(os.path.join(run.mailbox_share, "request")), data)
+        self.assertEqual(self.archived(lease.slot), {})
+        self.assertTrue(self.effects.process(lease.pid).alive)
+
+    def test_failed_termination_keeps_request_in_mailbox(self):
+        lease = self.manager.reserve("alice")
+        _request, data = self.leave_request(lease)
+        self.effects.stubborn = True
+        summary = self.manager.release(lease.token, "alice")
+        self.assertTrue(summary["quarantined"])
+        self.assertEqual(open_file_bytes(os.path.join(self.effects.mailbox(lease.slot), "request")), data)
+        self.assertEqual(self.archived(lease.slot), {})
+
+    def test_malformed_request_is_retained_without_blocking_recovery(self):
+        lease = self.manager.reserve("alice")
+        self.leave_request(lease, b"truncated")
+        self.assertFalse(self.manager.release(lease.token, "alice")["quarantined"])
+        self.assertEqual(list(self.archived(lease.slot).values()), [b"truncated"])
+
+    def test_stop_without_request_is_archived_and_repeated_recovery_keeps_evidence(self):
+        lease = self.manager.reserve("alice")
+        path = os.path.join(self.effects.mailbox(lease.slot), "stop-" + "c" * 20)
+        with open(path, "wb") as f:
+            f.write(b"stop evidence")
+        self.assertFalse(self.manager.release(lease.token, "alice")["quarantined"])
+        archived = self.archived(lease.slot)
+        self.assertEqual(list(archived.values()), [b"stop evidence"])
+        self.assertFalse(self.manager.recover(lease.slot)["quarantined"])
+        self.assertEqual(self.archived(lease.slot), archived)
+
+
+def open_file_bytes(path):
+    with open(path, "rb") as f:
+        return f.read()
 
 
 class ClockTest(unittest.TestCase):

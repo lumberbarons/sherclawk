@@ -136,9 +136,20 @@ Release and expiry follow the same path, in this order:
    nothing answers on the slot's QMP socket and then resets the slot.
 4. Send `SIGTERM`, wait for the exact pid to disappear, and quarantine if it
    does not. There is no `SIGKILL` fallback for a guest.
-5. Delete the writable overlay and create a fresh one on the recorded base.
+5. Move any leftover `request` and `stop-*` records out of the mailbox into
+   `Harness/archive/<slot>/g<old-generation>/<run-prefix>-<random>/` on the
+   slot's own volume (`Retro68:Harness:archive:<slot>:g<old-generation>:...:`
+   in the guest). The run prefix is the first 20 hex digits of the run ID,
+   matching the mailbox filenames; a malformed request uses `unknown`.
+   Preserve the files byte for byte, never replay them, and leave readiness,
+   claims, reports, results and per-run workspaces in place. Each recovery
+   creates new archive directories, so a retry after a partial move retains
+   earlier evidence. A failed archive move quarantines the slot; `status`
+   records the reason. Successful release/recovery summaries list the archive
+   directories in `mailbox_archives`.
+6. Delete the writable overlay and create a fresh one on the recorded base.
    A failed reset quarantines the slot.
-6. Mark the slot free. The next reservation clears a stale controller
+7. Mark the slot free. The next reservation clears a stale controller
    `ready.tmp` left by the stopped boot, boots the slot and waits for a
    **different boot ID and an advancing heartbeat**; a stale `ready` file is
    not readiness. An unwritable staging file quarantines the slot instead of
@@ -150,6 +161,12 @@ serialised per slot with an OS lock; reserve itself is serialised across
 processes with the global manager lock and SQLite transactions.
 
 A quarantined slot is skipped by `reserve` and keeps its reason in `status`.
+An unconsumed request under a live lease still blocks publication: release
+the lease and reserve again so recovery can archive it after verified guest
+termination. Do not move a live guest's request by hand. For an archive
+failure, repair the slot volume's permissions or storage and explicitly
+recover the quarantined slot; recovery retains both previously moved files
+and any records still in the mailbox.
 A boot that fails (no fresh readiness, an early exit, an unwritable staging
 file) quarantines its slot even when cleanup succeeds, unless the lease was
 already revoked and recovered by someone else, in which case the slot belongs

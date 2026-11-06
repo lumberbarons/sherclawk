@@ -27,8 +27,10 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 
+import contract
 import mailbox as harness_mailbox
 import provision
 import qmp
@@ -255,6 +257,51 @@ class Effects:
             raise ConfigError("cannot clear stale readiness staging %s: %s"
                               % (path, exc))
         return True
+
+    def archive_stale_requests(self, slot, generation):
+        """Retain pending requests and Stop records after verified termination.
+
+        Each recovery gets fresh directories, so a failed/partial move can be
+        retried without overwriting earlier evidence. Claims, reports, results
+        and readiness remain in the mailbox. Never call this for a live guest.
+        """
+        self.verify_storage(slot)
+        mailbox = self.mailbox(slot)
+        try:
+            try:
+                names = os.listdir(mailbox)
+            except FileNotFoundError:
+                return []
+            groups = {}
+            for name in sorted(names):
+                if name == "request":
+                    with open(os.path.join(mailbox, name), "rb") as f:
+                        data = f.read(contract.REQUEST_CAP)
+                    try:
+                        run = contract.read_request(data).run[:20]
+                    except contract.ContractError:
+                        run = "unknown"
+                elif name.startswith("stop-"):
+                    run = name[5:]
+                    if len(run) != 20 or any(c not in "0123456789abcdef" for c in run):
+                        run = "unknown"
+                else:
+                    continue
+                groups.setdefault(run, []).append(name)
+            archives = []
+            for run, files in groups.items():
+                parent = os.path.join(os.path.dirname(mailbox), "archive", slot.name,
+                                      "g%d" % generation)
+                os.makedirs(parent, exist_ok=True)
+                # Twenty run digits + '-' + eight random characters fit HFS's
+                # 31-character component limit; the request retains the full ID.
+                archive = tempfile.mkdtemp(prefix=run + "-", dir=parent)
+                for name in files:
+                    os.rename(os.path.join(mailbox, name), os.path.join(archive, name))
+                archives.append(archive)
+            return archives
+        except OSError as exc:
+            raise RecoveryError("cannot archive mailbox %s: %s" % (mailbox, exc)) from exc
 
     def open_qmp(self, slot, timeout=None, capture_dir=None):
         # The capture directory is only scratch space (QEMU rejects whitespace
@@ -760,7 +807,7 @@ class Manager:
 
     def _recover_slot(self, slot_name, reason, lease, lock_held=False,
                       force_reset=False):
-        """Stop and verify the slot's own QEMU, then reset its overlay."""
+        """Stop and verify QEMU, archive pending requests, then reset the overlay."""
         if not lock_held:
             with self._slot_lock(slot_name):
                 return self._recover_slot(slot_name, reason, lease, True, force_reset)
@@ -814,6 +861,7 @@ class Manager:
                 summary["stopped"] = True
             if not force_reset and not pid and row and row["state"] == "free":
                 return None
+            summary["mailbox_archives"] = self.effects.archive_stale_requests(slot, generation)
             self.effects.reset(slot)
             summary["reset"] = True
             with self._txn() as conn:
