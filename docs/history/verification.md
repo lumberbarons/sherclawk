@@ -6,7 +6,10 @@ dates. Each dated entry names the strongest evidence tier it establishes —
 **host**, **guest** or **hardware** — as defined in
 [What a green suite proves](../../harness/docs/suite.md#what-a-green-suite-proves);
 host checks reported inside a guest entry are supporting evidence, and **no
-entry here establishes hardware behaviour**. Use the
+entry here establishes hardware behaviour**. Entries that name the UTM guest
+predate the reserved QEMU slots: they are guest-tier QEMU evidence from that
+virtual machine, not a sealed slot image, so do not quote them as suite
+evidence. Use the
 [current guides](../../README.md#documentation) for present behavior.
 
 Recorded October 21, 2026 (standalone guests, issue #68; **guest tier**): the base image built from
